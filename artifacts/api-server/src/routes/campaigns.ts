@@ -35,38 +35,22 @@ router.post("/campaigns", requireAccount, validateBody(CreateCampaignBody), asyn
     return;
   }
 
-  let resolvedSubId = subAccountId as string | undefined;
-  if (resolvedSubId) {
-    // Verify sub-account belongs to current account
-    const [own] = await db
-      .select({ id: subAccounts.id })
-      .from(subAccounts)
-      .where(
-        and(
-          eq(subAccounts.id, resolvedSubId),
-          eq(subAccounts.accountId, accountId),
-        ),
-      )
-      .limit(1);
-    if (!own) {
-      res.status(403).json({ error: "sub_account_not_owned" });
-      return;
-    }
-  } else {
-    const [sub] = await db
-      .select({ id: subAccounts.id })
-      .from(subAccounts)
-      .where(eq(subAccounts.accountId, accountId))
-      .limit(1);
-    if (!sub) {
-      const [created] = await db
-        .insert(subAccounts)
-        .values({ accountId, name: "Default", crmType: "ghl" })
-        .returning({ id: subAccounts.id });
-      resolvedSubId = created.id;
-    } else {
-      resolvedSubId = sub.id;
-    }
+  // CreateCampaignBody requires subAccountId; validateBody enforces presence.
+  // Verify the sub-account belongs to the caller's account (tenant isolation).
+  const resolvedSubId = subAccountId as string;
+  const [own] = await db
+    .select({ id: subAccounts.id })
+    .from(subAccounts)
+    .where(
+      and(
+        eq(subAccounts.id, resolvedSubId),
+        eq(subAccounts.accountId, accountId),
+      ),
+    )
+    .limit(1);
+  if (!own) {
+    res.status(403).json({ error: "sub_account_not_owned" });
+    return;
   }
 
   const [created] = await db

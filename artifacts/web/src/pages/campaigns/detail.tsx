@@ -26,7 +26,10 @@ export default function CampaignDetailPage() {
   const handleGenerateDrafts = () => {
     generateDrafts.mutate({ id }, {
       onSuccess: (res) => {
-        toast({ title: "Drafts generated", description: `Queued ${(res as { queued?: number }).queued ?? 0} drafts for generation.` });
+        toast({
+          title: "Drafts generated",
+          description: `Generated ${res.generated ?? 0} drafts (skipped ${res.skipped ?? 0}).`,
+        });
       },
       onError: (err) => {
         toast({ title: "Error", description: err.message, variant: "destructive" });
