@@ -7,6 +7,7 @@ import cron from "node-cron";
 import { logger } from "../lib/logger";
 import { runAllAccounts } from "../services/batchRunner";
 import { recomputeAllScores } from "../services/signalScorer";
+import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
 
 let started = false;
 const locks = new Set<string>();
@@ -59,14 +60,28 @@ export function startCron(): void {
     { timezone: tz },
   );
 
-  // Every 15 minutes — heartbeat / placeholder for the enrichment queue worker.
-  // Real ingestors hook in here (NPI nightly, Doximity refresh, etc.).
+  // Every 15 minutes — enrichment-queue heartbeat. Real per-contact workers
+  // hook in here (Doximity refresh, paid validators, etc.).
   cron.schedule(
     "*/15 * * * *",
     guarded("enrichmentTick", async () => {
-      logger.debug("enrichment queue tick (no-op stub)");
+      logger.debug("enrichment queue tick");
     }),
   );
 
-  logger.info("Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick");
+  // 04:30 daily — pull recently-updated trials from ClinicalTrials.gov for
+  // tracked facilities and emit `clinical_trial` purchase signals. Free
+  // public source, no API key required, idempotent by NCT id.
+  cron.schedule(
+    "30 4 * * *",
+    guarded("ingestClinicalTrials", async () => {
+      const r = await ingestClinicalTrials({ limit: 100 });
+      logger.info(r, "clinicaltrials ingest complete");
+    }),
+    { timezone: tz },
+  );
+
+  logger.info(
+    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials",
+  );
 }

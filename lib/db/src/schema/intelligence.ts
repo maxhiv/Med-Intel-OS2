@@ -431,6 +431,11 @@ export const contactValidationLog = pgTable(
     result: text("result").notNull(),
     confidenceDelta: smallint("confidence_delta").default(0),
     rawResponse: jsonb("raw_response"),
+    /** Cost of this single API call in millionths of a USD (micros).
+     *  e.g. ZeroBounce ~$0.008/call → 8000 micros. Free sources record 0. */
+    costMicros: bigint("cost_micros", { mode: "number" }).default(0),
+    /** Number of HTTP attempts made (1 + retries). */
+    attempts: smallint("attempts").default(1),
     checkedAt: timestamp("checked_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [index("idx_val_log_contact").on(t.contactId, t.checkedAt)],

@@ -1,15 +1,22 @@
 /**
- * Contact enrichment waterfall (stubbed adapters).
+ * Contact enrichment waterfall.
  *
  * Two-gate model for paid sources: a paid source is "active" only when
  * (a) PAID_ENRICHMENT_<UPPER_SOURCE>_ENABLED env var is "true",
  * (b) the corresponding API key env var is present, AND
  * (c) the database `enrichment_source_approvals.approved` row is true.
  *
- * Free sources are always available; paid adapters return a "skipped"
- * result if any gate is missing.
+ * Free sources are always available. Free adapters apply a small confidence
+ * boost without making external calls (the heavy ingestion lives in dedicated
+ * services like `npiSync` and `clinicalTrialsIngestor`).
+ *
+ * The ZeroBounce paid adapter is fully wired: when active it makes real HTTP
+ * calls with retries, records per-call cost in micros to
+ * `contact_validation_log.cost_micros`, and increments
+ * `enrichment_source_approvals.current_month_spend` so platform admins can see
+ * burn against any configured monthly budget.
  */
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   db,
   facilityContacts,
@@ -19,6 +26,11 @@ import {
   PAID_ENRICHMENT_SOURCES,
   type Contact,
 } from "@workspace/db";
+import { logger } from "../lib/logger";
+import {
+  validateEmail as zbValidateEmail,
+  ZEROBOUNCE_COST_MICROS,
+} from "./adapters/zerobounce";
 
 export type EnrichmentSourceKey =
   | (typeof FREE_ENRICHMENT_SOURCES)[number]
@@ -44,6 +56,10 @@ export interface SourceStatus {
   approved: boolean;
   approvedAt: Date | null;
   approvedBy: string | null;
+  /** Cents spent against this source so far this billing month. */
+  monthSpendCents: number;
+  /** Hard monthly budget cap in cents (null = no cap configured). */
+  monthBudgetCents: number | null;
 }
 
 function envEnabledFor(source: string): boolean {
@@ -76,6 +92,8 @@ export async function listAllSources(): Promise<SourceStatus[]> {
       source,
     );
     const a = approvalMap.get(source);
+    const spendMicros = a?.currentMonthSpend ?? 0;
+    const budgetMicros = a?.monthlyBudgetLimit ?? null;
     return {
       source,
       isFreeSource: isFree,
@@ -84,6 +102,9 @@ export async function listAllSources(): Promise<SourceStatus[]> {
       approved: isFree ? true : Boolean(a?.approved),
       approvedAt: a?.approvedAt ?? null,
       approvedBy: a?.approvedBy ?? null,
+      monthSpendCents: Math.round(spendMicros / 10_000),
+      monthBudgetCents:
+        budgetMicros == null ? null : Math.round(budgetMicros / 10_000),
     };
   });
 }
@@ -100,6 +121,82 @@ export interface EnrichResult {
   confidenceBefore: number;
   confidenceAfter: number;
   finalEmailStatus: string;
+  totalCostMicros: number;
+}
+
+interface AdapterRun {
+  ok: boolean;
+  delta: number;
+  costMicros: number;
+  attempts: number;
+  raw: unknown;
+  newEmailStatus?: Contact["emailStatus"];
+}
+
+async function runAdapter(
+  source: EnrichmentSourceKey,
+  contact: Contact,
+  isFree: boolean,
+): Promise<AdapterRun> {
+  // Real paid adapter: ZeroBounce email validation.
+  if (source === "zerobounce") {
+    if (!contact.email) {
+      return {
+        ok: false,
+        delta: 0,
+        costMicros: 0,
+        attempts: 0,
+        raw: { skipped: "no_email" },
+      };
+    }
+    const apiKey = process.env.ZEROBOUNCE_API_KEY!;
+    const r = await zbValidateEmail(contact.email, { apiKey });
+    let newStatus: Contact["emailStatus"] | undefined;
+    if (r.status === "valid") newStatus = "verified";
+    else if (r.status === "invalid") newStatus = "bounced";
+    return {
+      ok: r.ok,
+      delta: r.confidenceDelta,
+      // Only successful (non-error) calls are billed. ZeroBounce returns the
+      // error envelope without consuming credit when keys/quota are bad.
+      costMicros: r.status === "error" ? 0 : ZEROBOUNCE_COST_MICROS,
+      attempts: r.attempts,
+      raw: r.raw,
+      newEmailStatus: newStatus,
+    };
+  }
+
+  // All other sources currently apply a small confidence delta. Replacing
+  // these with real adapters follows the same pattern as ZeroBounce.
+  const delta = isFree ? 4 : 10;
+  return {
+    ok: true,
+    delta,
+    costMicros: 0,
+    attempts: 1,
+    raw: { stub: true, source },
+  };
+}
+
+async function recordSpend(
+  source: EnrichmentSourceKey,
+  costMicros: number,
+): Promise<void> {
+  if (costMicros <= 0) return;
+  await db
+    .insert(enrichmentSourceApprovals)
+    .values({
+      source,
+      approved: false,
+      currentMonthSpend: costMicros,
+    })
+    .onConflictDoUpdate({
+      target: enrichmentSourceApprovals.source,
+      set: {
+        currentMonthSpend: sql`COALESCE(${enrichmentSourceApprovals.currentMonthSpend}, 0) + ${costMicros}`,
+        updatedAt: new Date(),
+      },
+    });
 }
 
 export async function enrichContact(
@@ -118,6 +215,9 @@ export async function enrichContact(
   const sourcesSkipped: { source: string; reason: string }[] = [];
   const confidenceBefore = contact.confidenceScore ?? 0;
   let confidence = confidenceBefore;
+  let totalCostMicros = 0;
+  let finalEmailStatus: Contact["emailStatus"] =
+    contact.emailStatus ?? "unverified";
 
   for (const s of sources) {
     if (!isSourceActive(s)) {
@@ -129,30 +229,58 @@ export async function enrichContact(
       sourcesSkipped.push({ source: s.source, reason });
       continue;
     }
-    const delta = s.isFreeSource ? 4 : 10;
-    confidence = Math.min(100, confidence + delta);
+
+    let run: AdapterRun;
+    try {
+      run = await runAdapter(s.source, contact, s.isFreeSource);
+    } catch (err) {
+      logger.error(
+        { err, source: s.source, contactId },
+        "adapter threw unexpectedly",
+      );
+      sourcesSkipped.push({ source: s.source, reason: "adapter_error" });
+      continue;
+    }
+
+    if (run.attempts === 0) {
+      sourcesSkipped.push({ source: s.source, reason: "skipped_no_input" });
+      continue;
+    }
+
+    confidence = Math.max(0, Math.min(100, confidence + run.delta));
     sourcesRun.push(s.source);
+    totalCostMicros += run.costMicros;
+    if (run.newEmailStatus) finalEmailStatus = run.newEmailStatus;
 
     if (!opts.dryRun) {
       await db.insert(contactValidationLog).values({
         contactId,
         checkType: s.source,
-        result: "ok",
-        confidenceDelta: delta,
-        rawResponse: { stub: true, source: s.source },
+        result: run.ok ? "ok" : "fail",
+        confidenceDelta: run.delta,
+        rawResponse: run.raw as object,
+        costMicros: run.costMicros,
+        attempts: run.attempts,
       });
+      await recordSpend(s.source, run.costMicros);
     }
   }
 
-  const newStatus =
-    confidence >= 80 ? "verified" : "unverified";
+  // If no real validator ran, fall back to the threshold-based status.
+  if (
+    !sourcesRun.includes("zerobounce") &&
+    finalEmailStatus !== "bounced" &&
+    finalEmailStatus !== "do_not_contact"
+  ) {
+    finalEmailStatus = confidence >= 80 ? "verified" : "unverified";
+  }
 
   if (!opts.dryRun) {
     await db
       .update(facilityContacts)
       .set({
         confidenceScore: confidence,
-        emailStatus: newStatus as Contact["emailStatus"],
+        emailStatus: finalEmailStatus,
         emailConfidence: confidence,
         lastEnrichedAt: new Date(),
         updatedAt: new Date(),
@@ -166,6 +294,7 @@ export async function enrichContact(
     sourcesSkipped,
     confidenceBefore,
     confidenceAfter: confidence,
-    finalEmailStatus: newStatus,
+    finalEmailStatus,
+    totalCostMicros,
   };
 }
