@@ -1271,6 +1271,18 @@ components:
         openedAt: { type: string, format: date-time, nullable: true }
         repliedAt: { type: string, format: date-time, nullable: true }
         bouncedAt: { type: string, format: date-time, nullable: true }
+        aiClassification:
+          type: string
+          nullable: true
+          description: Latest AI classification of the most recent reply received for this draft.
+          enum:
+            - interested
+            - not_interested
+            - objection
+            - out_of_office
+            - unsubscribe
+            - wrong_person
+            - unknown
 
     DraftListResponse:
       type: object

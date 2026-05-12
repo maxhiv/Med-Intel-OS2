@@ -36,6 +36,7 @@ export * from "./crmTestResultDetails";
 export * from "./dashboardSummary";
 export * from "./dashboardSummarySignalsByTypeItem";
 export * from "./draft";
+export * from "./draftAiClassification";
 export * from "./draftEditInput";
 export * from "./draftListResponse";
 export * from "./draftPersonalizationApplied";

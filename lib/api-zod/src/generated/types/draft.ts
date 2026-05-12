@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { Contact } from "./contact";
+import type { DraftAiClassification } from "./draftAiClassification";
 import type { DraftPersonalizationApplied } from "./draftPersonalizationApplied";
 import type { Facility } from "./facility";
 
@@ -29,4 +30,6 @@ export interface Draft {
   openedAt?: Date | null;
   repliedAt?: Date | null;
   bouncedAt?: Date | null;
+  /** Latest AI classification of the most recent reply received for this draft. */
+  aiClassification?: DraftAiClassification;
 }

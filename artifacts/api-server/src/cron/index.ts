@@ -10,6 +10,7 @@ import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
 import { ingestConFilings } from "../services/conFilingsIngestor";
 import { rolloverSpendCounters } from "../services/monthRollover";
+import { classifyPendingReplies } from "../services/replyClassifier";
 
 let started = false;
 const locks = new Set<string>();
@@ -110,7 +111,18 @@ export function startCron(): void {
     { timezone: "UTC" },
   );
 
+  // Every 2 minutes — classify any new inbound CRM replies with Anthropic so
+  // the Drafts page can surface qualified replies and so unsubscribe /
+  // not-interested replies pause the contact's sequence enrollment quickly.
+  cron.schedule(
+    "*/2 * * * *",
+    guarded("classifyReplies", async () => {
+      const r = await classifyPendingReplies(25);
+      if (r.examined > 0) logger.info(r, "reply classification batch complete");
+    }),
+  );
+
   logger.info(
-    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings, rolloverSpendCounters",
+    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings, rolloverSpendCounters, classifyReplies",
   );
 }

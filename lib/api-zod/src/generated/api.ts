@@ -889,6 +889,20 @@ export const ListDraftsResponse = zod.object({
       openedAt: zod.coerce.date().nullish(),
       repliedAt: zod.coerce.date().nullish(),
       bouncedAt: zod.coerce.date().nullish(),
+      aiClassification: zod
+        .enum([
+          "interested",
+          "not_interested",
+          "objection",
+          "out_of_office",
+          "unsubscribe",
+          "wrong_person",
+          "unknown",
+        ])
+        .nullish()
+        .describe(
+          "Latest AI classification of the most recent reply received for this draft.",
+        ),
     }),
   ),
   total: zod.number(),
@@ -970,6 +984,20 @@ export const GetDraftResponse = zod.object({
   openedAt: zod.coerce.date().nullish(),
   repliedAt: zod.coerce.date().nullish(),
   bouncedAt: zod.coerce.date().nullish(),
+  aiClassification: zod
+    .enum([
+      "interested",
+      "not_interested",
+      "objection",
+      "out_of_office",
+      "unsubscribe",
+      "wrong_person",
+      "unknown",
+    ])
+    .nullish()
+    .describe(
+      "Latest AI classification of the most recent reply received for this draft.",
+    ),
 });
 
 export const UpdateDraftParams = zod.object({
@@ -1056,6 +1084,20 @@ export const UpdateDraftResponse = zod.object({
   openedAt: zod.coerce.date().nullish(),
   repliedAt: zod.coerce.date().nullish(),
   bouncedAt: zod.coerce.date().nullish(),
+  aiClassification: zod
+    .enum([
+      "interested",
+      "not_interested",
+      "objection",
+      "out_of_office",
+      "unsubscribe",
+      "wrong_person",
+      "unknown",
+    ])
+    .nullish()
+    .describe(
+      "Latest AI classification of the most recent reply received for this draft.",
+    ),
 });
 
 export const ApproveDraftParams = zod.object({
@@ -1134,6 +1176,20 @@ export const ApproveDraftResponse = zod.object({
   openedAt: zod.coerce.date().nullish(),
   repliedAt: zod.coerce.date().nullish(),
   bouncedAt: zod.coerce.date().nullish(),
+  aiClassification: zod
+    .enum([
+      "interested",
+      "not_interested",
+      "objection",
+      "out_of_office",
+      "unsubscribe",
+      "wrong_person",
+      "unknown",
+    ])
+    .nullish()
+    .describe(
+      "Latest AI classification of the most recent reply received for this draft.",
+    ),
 });
 
 export const RejectDraftParams = zod.object({
@@ -1216,6 +1272,20 @@ export const RejectDraftResponse = zod.object({
   openedAt: zod.coerce.date().nullish(),
   repliedAt: zod.coerce.date().nullish(),
   bouncedAt: zod.coerce.date().nullish(),
+  aiClassification: zod
+    .enum([
+      "interested",
+      "not_interested",
+      "objection",
+      "out_of_office",
+      "unsubscribe",
+      "wrong_person",
+      "unknown",
+    ])
+    .nullish()
+    .describe(
+      "Latest AI classification of the most recent reply received for this draft.",
+    ),
 });
 
 export const listBatchesQueryLimitDefault = 30;

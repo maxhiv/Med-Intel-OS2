@@ -420,6 +420,23 @@ export interface SequenceStepInput {
 
 export type DraftPersonalizationApplied = { [key: string]: unknown };
 
+/**
+ * Latest AI classification of the most recent reply received for this draft.
+ */
+export type DraftAiClassification =
+  | (typeof DraftAiClassification)[keyof typeof DraftAiClassification]
+  | null;
+
+export const DraftAiClassification = {
+  interested: "interested",
+  not_interested: "not_interested",
+  objection: "objection",
+  out_of_office: "out_of_office",
+  unsubscribe: "unsubscribe",
+  wrong_person: "wrong_person",
+  unknown: "unknown",
+} as const;
+
 export interface Draft {
   id: string;
   accountId: string;
@@ -440,6 +457,8 @@ export interface Draft {
   openedAt?: string | null;
   repliedAt?: string | null;
   bouncedAt?: string | null;
+  /** Latest AI classification of the most recent reply received for this draft. */
+  aiClassification?: DraftAiClassification;
 }
 
 export interface DraftListResponse {

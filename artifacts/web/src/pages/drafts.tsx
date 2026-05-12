@@ -3,7 +3,7 @@ import { useListDrafts, useApproveDraft, useRejectDraft } from "@workspace/api-c
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { FileText, Check, X, RefreshCw, Eye, Reply, AlertOctagon } from "lucide-react";
+import { FileText, Check, X, RefreshCw, Eye, Reply, AlertOctagon, Sparkles } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 
@@ -18,6 +18,30 @@ const DRAFT_STATUSES: readonly DraftStatus[] = [
 
 function isDraftStatus(v: string): v is DraftStatus {
   return (DRAFT_STATUSES as readonly string[]).includes(v);
+}
+
+function classificationLabel(c: string): string {
+  switch (c) {
+    case "interested": return "Interested";
+    case "not_interested": return "Not interested";
+    case "objection": return "Objection";
+    case "out_of_office": return "Out of office";
+    case "unsubscribe": return "Unsubscribed";
+    case "wrong_person": return "Wrong person";
+    default: return "Unclassified";
+  }
+}
+
+function classificationStyles(c: string): string {
+  switch (c) {
+    case "interested": return "bg-emerald-500/15 text-emerald-700";
+    case "not_interested": return "bg-rose-500/15 text-rose-700";
+    case "objection": return "bg-amber-500/15 text-amber-700";
+    case "out_of_office": return "bg-slate-500/15 text-slate-700";
+    case "unsubscribe": return "bg-red-500/15 text-red-700";
+    case "wrong_person": return "bg-violet-500/15 text-violet-700";
+    default: return "bg-muted text-muted-foreground";
+  }
 }
 
 export default function DraftsPage() {
@@ -105,7 +129,7 @@ export default function DraftsPage() {
                       <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Body</div>
                       <div className="text-sm whitespace-pre-wrap border rounded px-3 py-2 bg-background font-mono leading-relaxed">{draft.body}</div>
                     </div>
-                    {(draft.openedAt || draft.repliedAt || draft.bouncedAt) && (
+                    {(draft.openedAt || draft.repliedAt || draft.bouncedAt || draft.aiClassification) && (
                       <div className="flex flex-wrap gap-3 text-xs pt-2 border-t">
                         {draft.openedAt && (
                           <span className="inline-flex items-center px-2 py-1 rounded bg-blue-500/10 text-blue-600">
@@ -117,6 +141,15 @@ export default function DraftsPage() {
                           <span className="inline-flex items-center px-2 py-1 rounded bg-green-500/10 text-green-600">
                             <Reply className="h-3 w-3 mr-1" />
                             Replied {new Date(draft.repliedAt).toLocaleString()}
+                          </span>
+                        )}
+                        {draft.aiClassification && (
+                          <span
+                            className={`inline-flex items-center px-2 py-1 rounded ${classificationStyles(draft.aiClassification)}`}
+                            title="AI classification of the most recent reply"
+                          >
+                            <Sparkles className="h-3 w-3 mr-1" />
+                            {classificationLabel(draft.aiClassification)}
                           </span>
                         )}
                         {draft.bouncedAt && (

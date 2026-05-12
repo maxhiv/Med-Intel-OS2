@@ -6,6 +6,7 @@ import { validateBody } from "../middlewares/validate";
 import { pushApprovedDraftToCrm } from "../services/crmPush";
 import { logger } from "../lib/logger";
 import { RejectDraftBody } from "@workspace/api-zod";
+import { latestClassificationsForDrafts } from "../services/replyClassifier";
 
 const router: IRouter = Router();
 
@@ -35,7 +36,20 @@ router.get("/drafts", requireAccount, async (req, res) => {
     .select({ c: sql<number>`count(*)::int` })
     .from(outreachDrafts)
     .where(where);
-  res.json({ data: items, total: c, limit, offset });
+
+  // Pull the most recent reply classification per draft so the UI can show
+  // an "Interested / Not interested / OOO / ..." badge alongside the
+  // existing Replied indicator.
+  const classifications = await latestClassificationsForDrafts(
+    accountId,
+    items.map((d) => d.id),
+  );
+  const enriched = items.map((d) => ({
+    ...d,
+    aiClassification: classifications[d.id] ?? null,
+  }));
+
+  res.json({ data: enriched, total: c, limit, offset });
 });
 
 router.get("/drafts/:id", requireAccount, async (req, res) => {
