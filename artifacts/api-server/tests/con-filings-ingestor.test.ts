@@ -185,6 +185,26 @@ describe("looksApproved", () => {
     expect(looksApproved(null)).toBe(false);
     expect(looksApproved(undefined)).toBe(false);
   });
+
+  it("does NOT treat denials as approvals (regression for task #47)", () => {
+    // The previous regex matched any substring containing 'approv', so
+    // 'Disapproved' lit up as approved and emitted a high-confidence
+    // con_approved signal for filings the state had actually denied.
+    expect(looksApproved("Disapproved")).toBe(false);
+    expect(looksApproved("Disapproval")).toBe(false);
+    expect(looksApproved("disapproval issued")).toBe(false);
+    expect(looksApproved("Denied")).toBe(false);
+    expect(looksApproved("Denial")).toBe(false);
+    expect(looksApproved("Withdrawn")).toBe(false);
+    expect(looksApproved("Withdrawal")).toBe(false);
+    expect(looksApproved("Not approved")).toBe(false);
+
+    // Sanity: the positive cases above must still pass.
+    expect(looksApproved("Approved")).toBe(true);
+    expect(looksApproved("Approval issued")).toBe(true);
+    expect(looksApproved("Granted")).toBe(true);
+    expect(looksApproved("Permit issued")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -109,7 +109,13 @@ export function inferModality(text: string | undefined | null): string | undefin
 
 export function looksApproved(status: string | undefined | null): boolean {
   if (!status) return false;
-  return /approv|grant(ed)?|issued/i.test(status);
+  // Reject explicit negatives first so 'Disapproved', 'Disapproval', 'Denied',
+  // 'Withdrawn', 'Not approved', etc. never count as approvals — even if the
+  // text also happens to contain a positive keyword elsewhere.
+  if (/\b(disapprov\w*|denied|denial|withdrawn|withdrawal|rejected|not\s+approv\w*)\b/i.test(status)) {
+    return false;
+  }
+  return /\bapprov\w*|\bgrant(ed)?\b|\bissued\b/i.test(status);
 }
 
 function safeDate(s: string | undefined | null): Date | undefined {
@@ -419,7 +425,7 @@ function ncDhsrAdapter(): StateAdapter {
           if (!parsed.applicant) continue;
 
           const isDecisions = /\/decisions\//i.test(absolute);
-          const approved = /approv/i.test(parsed.status ?? "");
+          const approved = looksApproved(parsed.status);
           out.push({
             state: "NC",
             filingUrl: absolute,
