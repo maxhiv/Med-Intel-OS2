@@ -356,6 +356,8 @@ export interface RejectDraftInput {
   reason?: string;
 }
 
+export type SyncBatchErrorLogItem = { [key: string]: unknown };
+
 export interface SyncBatch {
   id: string;
   accountId: string;
@@ -368,6 +370,35 @@ export interface SyncBatch {
   failedCount?: number;
   startedAt?: string | null;
   completedAt?: string | null;
+  errorLog?: SyncBatchErrorLogItem[] | null;
+}
+
+export type SyncItemCrmResponse = { [key: string]: unknown } | null;
+
+export interface SyncItem {
+  id: string;
+  batchId: string;
+  accountId?: string;
+  entityType?: string | null;
+  localId: string;
+  crmId?: string | null;
+  crmType?: string | null;
+  status: string;
+  errorMessage?: string | null;
+  crmResponse?: SyncItemCrmResponse;
+  pushedAt?: string | null;
+  retryCount?: number | null;
+}
+
+export interface SyncBatchDetail {
+  batch: SyncBatch;
+  items: SyncItem[];
+}
+
+export interface BatchRetryResult {
+  retried?: number;
+  pushed?: number;
+  failed?: number;
 }
 
 export interface BatchRunResult {

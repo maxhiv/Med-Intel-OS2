@@ -1,26 +1,123 @@
 /**
- * Daily batch runner — for each active sub-account, creates a sync_batch
- * row (stubbed CRM push). Real CRM adapters (HubSpot, Salesforce, GHL,
- * Pipedrive, etc.) live behind this; here we just record the intent.
+ * Daily batch runner — for each active sub-account, opens a sync_batches
+ * envelope, pushes each approved draft through the configured CRM adapter,
+ * retries transient failures, and records aggregate counts + per-item
+ * outcomes (sync_items) so the Batches page can surface failures.
  */
 import { and, eq, sql, isNull, asc } from "drizzle-orm";
 import {
   db,
   subAccounts,
   syncBatches,
+  syncItems,
   outreachDrafts,
   contactEnrollments,
   campaignContacts,
   campaigns,
+  type SubAccount,
 } from "@workspace/db";
+import { pushDraftWithinBatch } from "./crmPush";
+import { logger } from "../lib/logger";
+
+const MAX_RETRIES = 2;
+const RETRY_BASE_MS = 500;
 
 function todayDateString(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((res) => setTimeout(res, ms));
+}
+
+async function runBatchForSub(
+  accountId: string,
+  sub: SubAccount,
+): Promise<{ pushed: number; failed: number; batchId: string | null }> {
+  const toPush = await db
+    .select({ draft: outreachDrafts })
+    .from(outreachDrafts)
+    .innerJoin(
+      contactEnrollments,
+      eq(contactEnrollments.id, outreachDrafts.enrollmentId),
+    )
+    .innerJoin(
+      campaignContacts,
+      eq(campaignContacts.id, contactEnrollments.campaignContactId),
+    )
+    .innerJoin(campaigns, eq(campaigns.id, campaignContacts.campaignId))
+    .where(
+      and(
+        eq(outreachDrafts.accountId, accountId),
+        eq(outreachDrafts.status, "approved"),
+        isNull(outreachDrafts.crmSyncedAt),
+        eq(campaigns.subAccountId, sub.id),
+      ),
+    )
+    .orderBy(asc(outreachDrafts.generatedAt))
+    .limit(sub.batchSizeDaily ?? 10);
+
+  if (toPush.length === 0) {
+    return { pushed: 0, failed: 0, batchId: null };
+  }
+
+  const startedAt = new Date();
+  const [batch] = await db
+    .insert(syncBatches)
+    .values({
+      accountId,
+      subAccountId: sub.id,
+      crmType: sub.crmType ?? "other",
+      batchDate: todayDateString(),
+      targetCount: toPush.length,
+      pushedCount: 0,
+      failedCount: 0,
+      status: "running",
+      startedAt,
+    })
+    .returning();
+
+  let pushed = 0;
+  let failed = 0;
+  const errorLog: unknown[] = [];
+
+  for (const { draft } of toPush) {
+    let attempt = 0;
+    while (true) {
+      const res = await pushDraftWithinBatch(draft, sub, batch.id, attempt);
+      if (res.ok) {
+        pushed += 1;
+        break;
+      }
+      if (!res.retryable || attempt >= MAX_RETRIES) {
+        failed += 1;
+        errorLog.push({ draftId: draft.id, attempts: attempt + 1, ...res.error });
+        break;
+      }
+      attempt += 1;
+      await sleep(RETRY_BASE_MS * Math.pow(2, attempt - 1));
+    }
+  }
+
+  const completedAt = new Date();
+  const status = failed === 0 ? "complete" : pushed === 0 ? "failed" : "partial";
+  await db
+    .update(syncBatches)
+    .set({
+      pushedCount: pushed,
+      failedCount: failed,
+      status,
+      completedAt,
+      errorLog,
+    })
+    .where(eq(syncBatches.id, batch.id));
+
+  return { pushed, failed, batchId: batch.id };
+}
+
 export async function runDailyBatchesForAccount(
   accountId: string,
-): Promise<{ batches: number; pushed: number }> {
+): Promise<{ batches: number; pushed: number; failed: number }> {
   const subs = await db
     .select()
     .from(subAccounts)
@@ -30,75 +127,21 @@ export async function runDailyBatchesForAccount(
 
   let batches = 0;
   let pushed = 0;
-  const date = todayDateString();
-
+  let failed = 0;
   for (const sub of subs) {
-    // Scope unsynced drafts to THIS sub-account by joining through the
-    // enrollment -> campaign_contact -> campaign chain. Without this join the
-    // loop would arbitrarily consume drafts that belong to other sub-accounts
-    // and record syncBatches against the wrong destination.
-    const toPush = await db
-      .select({ id: outreachDrafts.id })
-      .from(outreachDrafts)
-      .innerJoin(
-        contactEnrollments,
-        eq(contactEnrollments.id, outreachDrafts.enrollmentId),
-      )
-      .innerJoin(
-        campaignContacts,
-        eq(campaignContacts.id, contactEnrollments.campaignContactId),
-      )
-      .innerJoin(campaigns, eq(campaigns.id, campaignContacts.campaignId))
-      .where(
-        and(
-          eq(outreachDrafts.accountId, accountId),
-          eq(outreachDrafts.status, "approved"),
-          isNull(outreachDrafts.crmSyncedAt),
-          eq(campaigns.subAccountId, sub.id),
-        ),
-      )
-      .orderBy(asc(outreachDrafts.generatedAt))
-      .limit(sub.batchSizeDaily ?? 10);
-
-    const target = toPush.length;
-    if (target === 0) continue;
-
-    await db
-      .insert(syncBatches)
-      .values({
-        accountId,
-        subAccountId: sub.id,
-        crmType: sub.crmType ?? "ghl",
-        batchDate: date,
-        targetCount: target,
-        pushedCount: target,
-        failedCount: 0,
-        status: "complete",
-        startedAt: new Date(),
-        completedAt: new Date(),
-      });
-    batches += 1;
-    pushed += target;
-
-    // Stubbed CRM push: record that the draft was delivered to the CRM as a
-    // pending artifact (e.g. a draft email/task on the rep's timeline).
-    // Status remains "approved" — only an actual rep send transitions to "sent".
-    const now = new Date();
-    for (const d of toPush) {
-      await db
-        .update(outreachDrafts)
-        .set({ crmSyncedAt: now, crmDraftId: `stub_${d.id.slice(0, 8)}` })
-        .where(eq(outreachDrafts.id, d.id));
-    }
+    const r = await runBatchForSub(accountId, sub);
+    if (r.batchId) batches += 1;
+    pushed += r.pushed;
+    failed += r.failed;
   }
-
-  return { batches, pushed };
+  return { batches, pushed, failed };
 }
 
 export async function runAllAccounts(): Promise<{
   accounts: number;
   batches: number;
   pushed: number;
+  failed: number;
 }> {
   const accountIds = await db
     .select({ accountId: subAccounts.accountId })
@@ -108,12 +151,118 @@ export async function runAllAccounts(): Promise<{
 
   let total = 0;
   let totalPushed = 0;
+  let totalFailed = 0;
   for (const { accountId } of accountIds) {
     const r = await runDailyBatchesForAccount(accountId);
     total += r.batches;
     totalPushed += r.pushed;
+    totalFailed += r.failed;
   }
-  return { accounts: accountIds.length, batches: total, pushed: totalPushed };
+  return { accounts: accountIds.length, batches: total, pushed: totalPushed, failed: totalFailed };
+}
+
+/**
+ * Retry only the failed sync_items inside an existing batch. Used by the
+ * Batches page "Retry failures" button. Replays the failed drafts through the
+ * adapter and updates pushed/failed counts in place.
+ */
+export async function retryFailedItemsInBatch(
+  accountId: string,
+  batchId: string,
+): Promise<{ retried: number; pushed: number; failed: number }> {
+  const [batch] = await db
+    .select()
+    .from(syncBatches)
+    .where(and(eq(syncBatches.id, batchId), eq(syncBatches.accountId, accountId)));
+  if (!batch) {
+    throw new Error("batch_not_found");
+  }
+  const [sub] = await db
+    .select()
+    .from(subAccounts)
+    .where(eq(subAccounts.id, batch.subAccountId));
+  if (!sub) {
+    throw new Error("sub_account_not_found");
+  }
+
+  const failedItems = await db
+    .select()
+    .from(syncItems)
+    .where(and(eq(syncItems.batchId, batchId), eq(syncItems.status, "failed")));
+
+  if (failedItems.length === 0) {
+    return { retried: 0, pushed: 0, failed: 0 };
+  }
+
+  await db
+    .update(syncBatches)
+    .set({ status: "running" })
+    .where(eq(syncBatches.id, batchId));
+
+  let pushedDelta = 0;
+  let stillFailed = 0;
+  const newErrors: unknown[] = [];
+
+  for (const item of failedItems) {
+    const [draft] = await db
+      .select()
+      .from(outreachDrafts)
+      .where(eq(outreachDrafts.id, item.localId));
+    if (!draft) {
+      stillFailed += 1;
+      newErrors.push({ draftId: item.localId, code: "draft_not_found" });
+      continue;
+    }
+    // Mark the previous failed item as superseded so each retry stays as its
+    // own audit row (sync_items append-only).
+    await db
+      .update(syncItems)
+      .set({ status: "superseded" })
+      .where(eq(syncItems.id, item.id));
+
+    const attempt = (item.retryCount ?? 0) + 1;
+    let lastResult: Awaited<ReturnType<typeof pushDraftWithinBatch>> | null = null;
+    let local = attempt;
+    while (true) {
+      lastResult = await pushDraftWithinBatch(draft, sub, batchId, local);
+      if (lastResult.ok || !lastResult.retryable || local >= attempt + MAX_RETRIES) {
+        break;
+      }
+      local += 1;
+      await sleep(RETRY_BASE_MS * Math.pow(2, local - attempt - 1));
+    }
+    if (lastResult?.ok) {
+      pushedDelta += 1;
+    } else if (lastResult) {
+      stillFailed += 1;
+      newErrors.push({ draftId: draft.id, attempts: local + 1, ...lastResult.error });
+    }
+  }
+
+  const newPushed = (batch.pushedCount ?? 0) + pushedDelta;
+  const newFailed = stillFailed;
+  const status =
+    newFailed === 0 ? "complete" : newPushed === 0 ? "failed" : "partial";
+  const mergedErrors = [
+    ...(Array.isArray(batch.errorLog) ? (batch.errorLog as unknown[]) : []),
+    ...newErrors,
+  ];
+  await db
+    .update(syncBatches)
+    .set({
+      pushedCount: newPushed,
+      failedCount: newFailed,
+      status,
+      completedAt: new Date(),
+      errorLog: mergedErrors,
+    })
+    .where(eq(syncBatches.id, batchId));
+
+  logger.info(
+    { batchId, retried: failedItems.length, pushedDelta, stillFailed },
+    "batch retry complete",
+  );
+  return { retried: failedItems.length, pushed: pushedDelta, failed: stillFailed };
 }
 
 export { sql };

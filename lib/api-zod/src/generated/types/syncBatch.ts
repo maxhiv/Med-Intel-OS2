@@ -5,6 +5,7 @@
  * MedIntel OS API — multi-tenant medical equipment sales intelligence
  * OpenAPI spec version: 0.1.0
  */
+import type { SyncBatchErrorLogItem } from "./syncBatchErrorLogItem";
 
 export interface SyncBatch {
   id: string;
@@ -18,4 +19,5 @@ export interface SyncBatch {
   failedCount?: number;
   startedAt?: Date | null;
   completedAt?: Date | null;
+  errorLog?: SyncBatchErrorLogItem[] | null;
 }

@@ -1,13 +1,13 @@
 /**
- * CRM push adapter (stubbed). Pushes a single approved draft to the
- * sub-account's configured CRM as a pending draft artifact (e.g. a Gmail
- * draft, a HubSpot task, a Salesforce activity). Real adapters live behind
- * this; this implementation just records the push intent so the trust-critical
- * approval -> CRM flow is observable end-to-end.
+ * CRM push service. Sends a single approved draft to its sub-account's
+ * configured CRM via a real adapter (GoHighLevel, HubSpot, Salesforce).
  *
- * IMPORTANT: This does NOT send the email. The rep reviews the artifact in
- * their CRM timeline and clicks send there. The draft's status remains
- * "approved" until the rep actually sends it.
+ * Each push records a `sync_items` row inside a `sync_batches` audit envelope
+ * so the Batches page can surface success/failure per draft and offer retry.
+ *
+ * IMPORTANT: This does NOT send the email. The rep reviews the artifact (a
+ * task in the CRM, with the draft body) and clicks send there. The draft
+ * status remains "approved" until the rep actually sends it.
  */
 import { and, eq } from "drizzle-orm";
 import {
@@ -17,43 +17,22 @@ import {
   campaignContacts,
   campaigns,
   syncBatches,
+  syncItems,
   subAccounts,
+  facilities,
+  facilityContacts,
+  crmContactsMap,
   type OutreachDraft,
+  type SubAccount,
+  type Contact,
+  type Facility,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
-
-/**
- * Resolve the sub-account that owns a given draft via:
- *   draft.enrollmentId -> contactEnrollments.campaignContactId
- *   -> campaignContacts.campaignId -> campaigns.subAccountId
- *
- * Returns null when the draft has no enrollment lineage (legacy/manual draft).
- */
-export async function resolveSubAccountForDraft(
-  draft: Pick<OutreachDraft, "id" | "accountId" | "enrollmentId">,
-): Promise<{ id: string; crmType: string | null } | null> {
-  if (!draft.enrollmentId) return null;
-  const [row] = await db
-    .select({ id: subAccounts.id, crmType: subAccounts.crmType })
-    .from(contactEnrollments)
-    .innerJoin(
-      campaignContacts,
-      eq(campaignContacts.id, contactEnrollments.campaignContactId),
-    )
-    .innerJoin(campaigns, eq(campaigns.id, campaignContacts.campaignId))
-    .innerJoin(subAccounts, eq(subAccounts.id, campaigns.subAccountId))
-    .where(
-      and(
-        eq(contactEnrollments.id, draft.enrollmentId),
-        eq(subAccounts.accountId, draft.accountId),
-      ),
-    )
-    .limit(1);
-  return row ?? null;
-}
+import { getCrmAdapter, CrmAdapterError, type CrmType } from "./crmAdapters";
 
 export interface CrmPushResult {
   crmDraftId: string;
+  crmContactId: string;
   crmType: string;
   syncedAt: Date;
 }
@@ -63,8 +42,203 @@ function todayDateString(): string {
 }
 
 /**
- * Push an approved draft to its sub-account's CRM as a pending artifact.
- * Idempotent: re-running on an already-synced draft returns the existing record.
+ * Resolve the sub-account that owns a given draft via:
+ *   draft.enrollmentId -> contactEnrollments.campaignContactId
+ *   -> campaignContacts.campaignId -> campaigns.subAccountId
+ */
+export async function resolveSubAccountForDraft(
+  draft: Pick<OutreachDraft, "id" | "accountId" | "enrollmentId">,
+): Promise<SubAccount | null> {
+  if (draft.enrollmentId) {
+    const [row] = await db
+      .select({ sub: subAccounts })
+      .from(contactEnrollments)
+      .innerJoin(
+        campaignContacts,
+        eq(campaignContacts.id, contactEnrollments.campaignContactId),
+      )
+      .innerJoin(campaigns, eq(campaigns.id, campaignContacts.campaignId))
+      .innerJoin(subAccounts, eq(subAccounts.id, campaigns.subAccountId))
+      .where(
+        and(
+          eq(contactEnrollments.id, draft.enrollmentId),
+          eq(subAccounts.accountId, draft.accountId),
+        ),
+      )
+      .limit(1);
+    if (row) return row.sub;
+  }
+  // Legacy/manual draft: fall back to the tenant's first active sub-account
+  // so the audit trail still lands somewhere observable.
+  const [sub] = await db
+    .select()
+    .from(subAccounts)
+    .where(
+      and(
+        eq(subAccounts.accountId, draft.accountId),
+        eq(subAccounts.isActive, true),
+      ),
+    )
+    .limit(1);
+  return sub ?? null;
+}
+
+async function loadContactAndFacility(
+  draft: OutreachDraft,
+): Promise<{ contact: Contact; facility: Facility }> {
+  const [contact] = await db
+    .select()
+    .from(facilityContacts)
+    .where(eq(facilityContacts.id, draft.contactId));
+  const [facility] = await db
+    .select()
+    .from(facilities)
+    .where(eq(facilities.id, draft.facilityId));
+  if (!contact || !facility) {
+    throw new CrmAdapterError({
+      code: "draft_missing_contact_or_facility",
+      message: "Draft references a contact or facility that no longer exists",
+      retryable: false,
+    });
+  }
+  return { contact, facility };
+}
+
+function serializeError(err: unknown): Record<string, unknown> {
+  if (err instanceof CrmAdapterError) {
+    return {
+      code: err.code,
+      message: err.message,
+      retryable: err.retryable,
+      status: err.status ?? null,
+      details:
+        err.details === undefined
+          ? null
+          : safeStringifyForJson(err.details),
+    };
+  }
+  if (err instanceof Error) {
+    return { code: "unknown_error", message: err.message, retryable: true };
+  }
+  return { code: "unknown_error", message: String(err), retryable: true };
+}
+
+function safeStringifyForJson(v: unknown): unknown {
+  try {
+    // Round-trip through JSON to drop circular refs / functions.
+    return JSON.parse(JSON.stringify(v));
+  } catch {
+    return String(v);
+  }
+}
+
+/**
+ * Push a single approved draft inside an existing sync_batch envelope.
+ * Inserts a sync_items row with success/failure detail and updates the draft
+ * + crm_contacts_map on success. Returns whether the push succeeded.
+ */
+export async function pushDraftWithinBatch(
+  draft: OutreachDraft,
+  subAccount: SubAccount,
+  batchId: string,
+  attempt = 0,
+): Promise<{ ok: true; result: CrmPushResult } | { ok: false; retryable: boolean; error: ReturnType<typeof serializeError> }> {
+  const crmType = (subAccount.crmType ?? "other") as CrmType | "other";
+  const adapter = getCrmAdapter(crmType);
+  if (!adapter) {
+    const err = serializeError(
+      new CrmAdapterError({
+        code: "unsupported_crm_type",
+        message: `No adapter registered for CRM type "${crmType}"`,
+        retryable: false,
+      }),
+    );
+    await db.insert(syncItems).values({
+      batchId,
+      accountId: draft.accountId,
+      entityType: "outreach_draft",
+      localId: draft.id,
+      crmType: subAccount.crmType ?? null,
+      status: "failed",
+      errorMessage: err.message as string,
+      crmResponse: err,
+      retryCount: attempt,
+    });
+    return { ok: false, retryable: false, error: err };
+  }
+
+  try {
+    const { contact, facility } = await loadContactAndFacility(draft);
+    const outcome = await adapter.push({ draft, contact, facility, subAccount });
+    const now = new Date();
+
+    await db
+      .update(outreachDrafts)
+      .set({ crmSyncedAt: now, crmDraftId: outcome.crmDraftId })
+      .where(eq(outreachDrafts.id, draft.id));
+
+    // Maintain the contact-id mapping so future syncs reuse the same record.
+    await db
+      .insert(crmContactsMap)
+      .values({
+        accountId: draft.accountId,
+        localContactId: draft.contactId,
+        crmType: adapter.type,
+        crmContactId: outcome.crmContactId,
+        crmCompanyId: outcome.crmCompanyId ?? null,
+      })
+      .onConflictDoUpdate({
+        target: [crmContactsMap.accountId, crmContactsMap.localContactId, crmContactsMap.crmType],
+        set: { crmContactId: outcome.crmContactId, lastSyncedAt: now },
+      });
+
+    await db.insert(syncItems).values({
+      batchId,
+      accountId: draft.accountId,
+      entityType: "outreach_draft",
+      localId: draft.id,
+      crmType: adapter.type,
+      crmId: outcome.crmDraftId,
+      status: "complete",
+      crmResponse: { crmContactId: outcome.crmContactId, crmDraftId: outcome.crmDraftId },
+      pushedAt: now,
+      retryCount: attempt,
+    });
+
+    return {
+      ok: true,
+      result: {
+        crmDraftId: outcome.crmDraftId,
+        crmContactId: outcome.crmContactId,
+        crmType: adapter.type,
+        syncedAt: now,
+      },
+    };
+  } catch (err) {
+    const serialized = serializeError(err);
+    await db.insert(syncItems).values({
+      batchId,
+      accountId: draft.accountId,
+      entityType: "outreach_draft",
+      localId: draft.id,
+      crmType: adapter.type,
+      status: "failed",
+      errorMessage: serialized.message as string,
+      crmResponse: serialized,
+      retryCount: attempt,
+    });
+    logger.warn(
+      { draftId: draft.id, crmType: adapter.type, err: serialized },
+      "CRM push failed",
+    );
+    return { ok: false, retryable: Boolean(serialized.retryable), error: serialized };
+  }
+}
+
+/**
+ * One-shot push for the approval path. Wraps a single draft in its own
+ * sync_batches envelope, runs the adapter, and returns the push result.
+ * Idempotent: a draft already synced returns its existing record.
  */
 export async function pushApprovedDraftToCrm(
   draft: OutreachDraft,
@@ -75,69 +249,72 @@ export async function pushApprovedDraftToCrm(
   if (draft.crmSyncedAt && draft.crmDraftId) {
     return {
       crmDraftId: draft.crmDraftId,
+      crmContactId: "",
       crmType: "other",
       syncedAt: draft.crmSyncedAt,
     };
   }
 
-  // Resolve the sub-account from the draft's campaign lineage so the artifact
-  // lands in the correct CRM destination for multi-sub-account tenants.
-  type CrmType = NonNullable<(typeof subAccounts.crmType)["_"]["data"]>;
-  let crmType: CrmType = "other";
-  let subAccountId: string | null = null;
-  const lineage = await resolveSubAccountForDraft(draft);
-  if (lineage) {
-    crmType = (lineage.crmType ?? "other") as CrmType;
-    subAccountId = lineage.id;
-  } else {
-    // Legacy/manual draft with no enrollment lineage: fall back to the
-    // tenant's first active sub-account so the audit trail is still recorded.
-    const [sub] = await db
-      .select({ id: subAccounts.id, crmType: subAccounts.crmType })
-      .from(subAccounts)
-      .where(
-        and(
-          eq(subAccounts.accountId, draft.accountId),
-          eq(subAccounts.isActive, true),
-        ),
-      )
-      .limit(1);
-    if (sub) {
-      crmType = (sub.crmType ?? "other") as CrmType;
-      subAccountId = sub.id;
-    }
-  }
-
-  const now = new Date();
-  const crmDraftId = `${crmType}_${draft.id.slice(0, 8)}_${now.getTime()}`;
-
-  await db
-    .update(outreachDrafts)
-    .set({ crmSyncedAt: now, crmDraftId })
-    .where(eq(outreachDrafts.id, draft.id));
-
-  // Audit row in syncBatches so admin observability picks it up.
-  if (subAccountId) {
-    await db.insert(syncBatches).values({
-      accountId: draft.accountId,
-      subAccountId,
-      crmType,
-      batchDate: todayDateString(),
-      targetCount: 1,
-      pushedCount: 1,
-      failedCount: 0,
-      status: "complete",
-      startedAt: now,
-      completedAt: now,
+  const sub = await resolveSubAccountForDraft(draft);
+  if (!sub) {
+    throw new CrmAdapterError({
+      code: "no_sub_account",
+      message: "No sub-account configured for this draft's tenant",
+      retryable: false,
     });
   }
 
-  logger.info(
-    { draftId: draft.id, crmDraftId, crmType, accountId: draft.accountId },
-    "draft pushed to CRM (stub)",
-  );
+  const startedAt = new Date();
+  const [batch] = await db
+    .insert(syncBatches)
+    .values({
+      accountId: draft.accountId,
+      subAccountId: sub.id,
+      crmType: (sub.crmType ?? "other"),
+      batchDate: todayDateString(),
+      targetCount: 1,
+      pushedCount: 0,
+      failedCount: 0,
+      status: "running",
+      startedAt,
+    })
+    .returning();
 
-  return { crmDraftId, crmType, syncedAt: now };
+  const res = await pushDraftWithinBatch(draft, sub, batch.id, 0);
+  const completedAt = new Date();
+
+  if (res.ok) {
+    await db
+      .update(syncBatches)
+      .set({
+        pushedCount: 1,
+        failedCount: 0,
+        status: "complete",
+        completedAt,
+      })
+      .where(eq(syncBatches.id, batch.id));
+    return res.result;
+  }
+
+  await db
+    .update(syncBatches)
+    .set({
+      pushedCount: 0,
+      failedCount: 1,
+      status: "failed",
+      completedAt,
+      errorLog: [res.error],
+    })
+    .where(eq(syncBatches.id, batch.id));
+
+  // Surface the failure to the approval handler so it can decide whether to
+  // log a warning (retryable) or bubble the error up.
+  throw new CrmAdapterError({
+    code: (res.error.code as string) ?? "crm_push_failed",
+    message: (res.error.message as string) ?? "CRM push failed",
+    retryable: Boolean(res.error.retryable),
+    details: res.error.details,
+  });
 }
 
 export async function findApprovedDraftsForAccount(

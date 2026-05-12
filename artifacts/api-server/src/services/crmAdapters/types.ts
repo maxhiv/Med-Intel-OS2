@@ -1,0 +1,59 @@
+/**
+ * Common interface implemented by every CRM adapter (GoHighLevel, HubSpot,
+ * Salesforce, …). The batch runner and per-draft push path call adapters
+ * through this surface so the rest of the app stays CRM-agnostic.
+ *
+ * Adapters MUST:
+ *   - Throw a `CrmAdapterError` with a `code` on failure (transport, auth,
+ *     validation). The runner inspects `retryable` to decide whether to retry.
+ *   - Be idempotent on contact upsert: re-running with the same email should
+ *     return the existing CRM contact id, not create a duplicate.
+ */
+import type { Contact, Facility, OutreachDraft, SubAccount } from "@workspace/db";
+
+export type CrmType = "ghl" | "hubspot" | "salesforce";
+
+export interface CrmPushInput {
+  draft: OutreachDraft;
+  contact: Contact;
+  facility: Facility;
+  subAccount: SubAccount;
+}
+
+export interface CrmPushOutcome {
+  crmContactId: string;
+  crmDraftId: string;
+  crmCompanyId?: string | null;
+  raw?: unknown;
+}
+
+export interface CrmAdapter {
+  readonly type: CrmType;
+  push(input: CrmPushInput): Promise<CrmPushOutcome>;
+}
+
+export class CrmAdapterError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly status?: number;
+  readonly details?: unknown;
+  constructor(opts: {
+    code: string;
+    message: string;
+    retryable?: boolean;
+    status?: number;
+    details?: unknown;
+  }) {
+    super(opts.message);
+    this.name = "CrmAdapterError";
+    this.code = opts.code;
+    this.retryable = opts.retryable ?? false;
+    this.status = opts.status;
+    this.details = opts.details;
+  }
+}
+
+export function isRetryableHttpStatus(status: number): boolean {
+  // 408 timeout, 425 too early, 429 rate limit, 5xx server errors.
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}

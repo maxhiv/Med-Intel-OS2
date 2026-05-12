@@ -1032,8 +1032,59 @@ export const ListBatchesResponseItem = zod.object({
   failedCount: zod.number().optional(),
   startedAt: zod.coerce.date().nullish(),
   completedAt: zod.coerce.date().nullish(),
+  errorLog: zod.array(zod.record(zod.string(), zod.unknown())).nullish(),
 });
 export const ListBatchesResponse = zod.array(ListBatchesResponseItem);
+
+export const GetBatchParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const GetBatchResponse = zod.object({
+  batch: zod.object({
+    id: zod.string().uuid(),
+    accountId: zod.string().uuid(),
+    subAccountId: zod.string().uuid().optional(),
+    crmType: zod.string().optional(),
+    batchDate: zod.string(),
+    status: zod.string(),
+    targetCount: zod.number().optional(),
+    pushedCount: zod.number().optional(),
+    failedCount: zod.number().optional(),
+    startedAt: zod.coerce.date().nullish(),
+    completedAt: zod.coerce.date().nullish(),
+    errorLog: zod.array(zod.record(zod.string(), zod.unknown())).nullish(),
+  }),
+  items: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      batchId: zod.string().uuid(),
+      accountId: zod.string().uuid().optional(),
+      entityType: zod.string().nullish(),
+      localId: zod.string().uuid(),
+      crmId: zod.string().nullish(),
+      crmType: zod.string().nullish(),
+      status: zod.string(),
+      errorMessage: zod.string().nullish(),
+      crmResponse: zod.record(zod.string(), zod.unknown()).nullish(),
+      pushedAt: zod.coerce.date().nullish(),
+      retryCount: zod.number().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Retry only the failed sync items inside a batch
+ */
+export const RetryBatchParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const RetryBatchResponse = zod.object({
+  retried: zod.number().optional(),
+  pushed: zod.number().optional(),
+  failed: zod.number().optional(),
+});
 
 /**
  * @summary Manually trigger the daily batch run for all sub-accounts
@@ -1055,6 +1106,7 @@ export const RunBatchesResponse = zod.object({
         failedCount: zod.number().optional(),
         startedAt: zod.coerce.date().nullish(),
         completedAt: zod.coerce.date().nullish(),
+        errorLog: zod.array(zod.record(zod.string(), zod.unknown())).nullish(),
       }),
     )
     .optional(),

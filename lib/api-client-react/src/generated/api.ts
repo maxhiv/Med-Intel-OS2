@@ -23,6 +23,7 @@ import type {
   AddContactsResult,
   AdminListSubAccountsParams,
   ApproveSourceInput,
+  BatchRetryResult,
   BatchRunResult,
   Campaign,
   CampaignContact,
@@ -71,6 +72,7 @@ import type {
   SubAccount,
   SubAccountInput,
   SyncBatch,
+  SyncBatchDetail,
   UnauthorizedResponse,
   User,
 } from "./api.schemas";
@@ -2682,6 +2684,168 @@ export function useListBatches<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+export const getGetBatchUrl = (id: string) => {
+  return `/api/batches/${id}`;
+};
+
+export const getBatch = async (
+  id: string,
+  options?: RequestInit,
+): Promise<SyncBatchDetail> => {
+  return customFetch<SyncBatchDetail>(getGetBatchUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetBatchQueryKey = (id: string) => {
+  return [`/api/batches/${id}`] as const;
+};
+
+export const getGetBatchQueryOptions = <
+  TData = Awaited<ReturnType<typeof getBatch>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getBatch>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetBatchQueryKey(id);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getBatch>>> = ({
+    signal,
+  }) => getBatch(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<Awaited<ReturnType<typeof getBatch>>, TError, TData> & {
+    queryKey: QueryKey;
+  };
+};
+
+export type GetBatchQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getBatch>>
+>;
+export type GetBatchQueryError = ErrorType<void>;
+
+export function useGetBatch<
+  TData = Awaited<ReturnType<typeof getBatch>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getBatch>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetBatchQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Retry only the failed sync items inside a batch
+ */
+export const getRetryBatchUrl = (id: string) => {
+  return `/api/batches/${id}/retry`;
+};
+
+export const retryBatch = async (
+  id: string,
+  options?: RequestInit,
+): Promise<BatchRetryResult> => {
+  return customFetch<BatchRetryResult>(getRetryBatchUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRetryBatchMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryBatch>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof retryBatch>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["retryBatch"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof retryBatch>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return retryBatch(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RetryBatchMutationResult = NonNullable<
+  Awaited<ReturnType<typeof retryBatch>>
+>;
+
+export type RetryBatchMutationError = ErrorType<void>;
+
+/**
+ * @summary Retry only the failed sync items inside a batch
+ */
+export const useRetryBatch = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof retryBatch>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof retryBatch>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getRetryBatchMutationOptions(options));
+};
 
 /**
  * @summary Manually trigger the daily batch run for all sub-accounts

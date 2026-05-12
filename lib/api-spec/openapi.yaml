@@ -401,6 +401,35 @@ paths:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/SyncBatch" } }
 
+  /batches/{id}:
+    get:
+      operationId: getBatch
+      tags: [batches]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncBatchDetail" }
+        "404": { description: Not found }
+
+  /batches/{id}/retry:
+    post:
+      operationId: retryBatch
+      tags: [batches]
+      summary: Retry only the failed sync items inside a batch
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BatchRetryResult" }
+        "404": { description: Not found }
+
   /batches/run:
     post:
       operationId: runBatches
@@ -999,6 +1028,41 @@ components:
         failedCount: { type: integer }
         startedAt: { type: string, format: date-time, nullable: true }
         completedAt: { type: string, format: date-time, nullable: true }
+        errorLog:
+          type: array
+          nullable: true
+          items: { type: object, additionalProperties: true }
+
+    SyncItem:
+      type: object
+      required: [id, batchId, localId, status]
+      properties:
+        id: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        entityType: { type: string, nullable: true }
+        localId: { type: string, format: uuid }
+        crmId: { type: string, nullable: true }
+        crmType: { type: string, nullable: true }
+        status: { type: string }
+        errorMessage: { type: string, nullable: true }
+        crmResponse: { type: object, nullable: true, additionalProperties: true }
+        pushedAt: { type: string, format: date-time, nullable: true }
+        retryCount: { type: integer, nullable: true }
+
+    SyncBatchDetail:
+      type: object
+      required: [batch, items]
+      properties:
+        batch: { $ref: "#/components/schemas/SyncBatch" }
+        items: { type: array, items: { $ref: "#/components/schemas/SyncItem" } }
+
+    BatchRetryResult:
+      type: object
+      properties:
+        retried: { type: integer }
+        pushed: { type: integer }
+        failed: { type: integer }
 
     BatchRunResult:
       type: object
