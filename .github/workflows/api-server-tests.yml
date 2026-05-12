@@ -1,0 +1,56 @@
+name: api-server tests
+
+on:
+  push:
+    paths:
+      - "artifacts/api-server/**"
+      - "lib/db/**"
+      - "lib/api-zod/**"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/api-server-tests.yml"
+  pull_request:
+    paths:
+      - "artifacts/api-server/**"
+      - "lib/db/**"
+      - "lib/api-zod/**"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/api-server-tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: medintel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/medintel_test
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Push schema
+        run: pnpm --filter @workspace/db push-force
+      - name: Seed (extensions + RLS + system templates)
+        run: pnpm --filter @workspace/db seed
+      - name: Typecheck
+        run: pnpm --filter @workspace/api-server typecheck
+      - name: Run tests
+        run: pnpm --filter @workspace/api-server test
