@@ -16,6 +16,7 @@ import {
 import { Redirect } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ConReviewQueue } from "./ConReviewQueue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -450,6 +451,7 @@ export default function AdminPage() {
           <TabsTrigger value="sub-accounts">Sub-Account CRM Credentials</TabsTrigger>
           <TabsTrigger value="webhooks" data-testid="tab-webhooks">CRM Webhooks</TabsTrigger>
           <TabsTrigger value="encryption-key">Encryption Key</TabsTrigger>
+          <TabsTrigger value="con-review" data-testid="tab-con-review">CON Review</TabsTrigger>
         </TabsList>
 
         <TabsContent value="sources" className="mt-4">
@@ -693,6 +695,10 @@ export default function AdminPage() {
                </div>
              </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="con-review" className="mt-4">
+          <ConReviewQueue />
         </TabsContent>
 
         <TabsContent value="sub-accounts" className="mt-4">

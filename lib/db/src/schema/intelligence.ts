@@ -211,12 +211,31 @@ export const conFilings = pgTable(
     applicantName: text("applicant_name"),
     filingUrl: text("filing_url"),
     notes: text("notes"),
+    /** Confidence in [0,1] from the fuzzy facility matcher; 1 for exact NPI matches, null when unmatched. */
+    matchScore: numeric("match_score", { precision: 4, scale: 3 }),
+    /** Which facility column carried the match: name | dba | system | npi. Null when unmatched. */
+    matchField: text("match_field"),
+    /**
+     * Human-review state for the auto-emitted facility match:
+     *   auto_approved — high-confidence (NPI or score >= review threshold), no review needed
+     *   needs_review  — borderline match in the configurable review band
+     *   confirmed     — reviewer approved the match
+     *   rejected      — reviewer rejected the match (auto-emitted signal is deactivated)
+     *   reassigned    — reviewer swapped to a different facility (old signal deactivated, new emitted)
+     * Null when the filing has no matched facility.
+     */
+    reviewStatus: text("review_status"),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewedBy: uuid("reviewed_by"),
+    reviewNotes: text("review_notes"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [
     // Hard idempotency guarantee for the CON ingestor under concurrent runs.
     uniqueIndex("uniq_con_filings_state_url").on(t.state, t.filingUrl),
     index("idx_con_filings_facility").on(t.facilityId),
+    // Lets the admin review queue scan only borderline rows cheaply.
+    index("idx_con_filings_review_status").on(t.reviewStatus),
   ],
 );
 

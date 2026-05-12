@@ -47,7 +47,7 @@ export async function resolveConApplicantToFacility(
   applicant: string,
   state: string,
   npi?: string,
-): Promise<{ id: string } | null> {
+): Promise<{ id: string; score: number; matchedField: "name" | "dba" | "system" | "npi" } | null> {
   // 1. Exact NPI match — strongest signal, no state filter needed.
   if (npi && /^\d{10}$/.test(npi)) {
     const [byNpi] = await db
@@ -55,7 +55,7 @@ export async function resolveConApplicantToFacility(
       .from(facilities)
       .where(eq(facilities.npi, npi))
       .limit(1);
-    if (byNpi) return byNpi;
+    if (byNpi) return { id: byNpi.id, score: 1, matchedField: "npi" };
   }
 
   // 2. Build a small candidate pool keyed on shared meaningful tokens across
@@ -107,7 +107,7 @@ export async function resolveConApplicantToFacility(
     },
     "con applicant matched to facility",
   );
-  return { id: best.facility.id };
+  return { id: best.facility.id, score: best.score, matchedField: best.matchedField };
 }
 
 export interface BackfillResult {

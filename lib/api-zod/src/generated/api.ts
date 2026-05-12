@@ -526,6 +526,28 @@ export const ListConFilingsResponse = zod.object({
       applicantName: zod.string().nullish(),
       filingUrl: zod.string().nullish(),
       notes: zod.string().nullish(),
+      matchScore: zod
+        .number()
+        .nullish()
+        .describe(
+          "Confidence in [0,1] from the fuzzy facility matcher. 1 for exact NPI hits, null when unmatched.",
+        ),
+      matchField: zod
+        .enum(["name", "dba", "system", "npi"])
+        .nullish()
+        .describe(
+          "Facility column that carried the auto-match. Null when unmatched.",
+        ),
+      reviewStatus: zod
+        .enum([
+          "auto_approved",
+          "needs_review",
+          "confirmed",
+          "rejected",
+          "reassigned",
+        ])
+        .nullish()
+        .describe("Human-review state of the auto-emitted match."),
       createdAt: zod.coerce.date().nullish(),
     }),
   ),
@@ -1721,6 +1743,118 @@ export const AdminRotateSubAccountWebhookSecretResponse = zod.object({
   webhookSecret: zod.string(),
   rotatedAt: zod.coerce.date().optional(),
 });
+
+/**
+ * @summary List CON filings whose facility match landed in the borderline confidence band
+ */
+export const adminListConFilingReviewQueueQueryLimitDefault = 50;
+export const adminListConFilingReviewQueueQueryLimitMax = 200;
+
+export const adminListConFilingReviewQueueQueryOffsetDefault = 0;
+
+export const AdminListConFilingReviewQueueQueryParams = zod.object({
+  limit: zod.coerce
+    .number()
+    .max(adminListConFilingReviewQueueQueryLimitMax)
+    .default(adminListConFilingReviewQueueQueryLimitDefault),
+  offset: zod.coerce
+    .number()
+    .default(adminListConFilingReviewQueueQueryOffsetDefault),
+});
+
+export const AdminListConFilingReviewQueueResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      facilityId: zod.string().uuid().nullish(),
+      facilityName: zod.string().nullish(),
+      facilitySystem: zod.string().nullish(),
+      facilityCity: zod.string().nullish(),
+      facilityState: zod.string().nullish(),
+      state: zod.string(),
+      applicantName: zod.string().nullable(),
+      filingDate: zod.coerce.date().nullish(),
+      filingUrl: zod.string().nullish(),
+      modality: zod.string().nullish(),
+      equipmentType: zod.string().nullish(),
+      status: zod.string().nullish(),
+      matchScore: zod.number().nullable(),
+      matchField: zod.string().nullable(),
+      reviewStatus: zod.string().nullable(),
+      createdAt: zod.coerce.date().nullish(),
+    }),
+  ),
+  total: zod.number(),
+  limit: zod.number().optional(),
+  offset: zod.number().optional(),
+  reviewThreshold: zod
+    .number()
+    .describe("Score below which auto-matches are flagged for human review."),
+});
+
+/**
+ * @summary Confirm, reject, or reassign the auto-emitted facility match for a CON filing
+ */
+export const AdminReviewConFilingParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const AdminReviewConFilingBody = zod.object({
+  action: zod.enum(["confirm", "reject", "reassign"]),
+  facilityId: zod
+    .string()
+    .uuid()
+    .optional()
+    .describe(
+      "Required when action is `reassign`; the facility to swap the match to.",
+    ),
+  notes: zod
+    .string()
+    .optional()
+    .describe("Optional reviewer note (<= 1000 chars)."),
+});
+
+export const AdminReviewConFilingResponse = zod.record(
+  zod.string(),
+  zod.unknown(),
+);
+
+/**
+ * @summary Cross-account facility search for reassigning CON-filing matches
+ */
+export const adminSearchFacilitiesQueryQMin = 2;
+
+export const adminSearchFacilitiesQueryStateMin = 2;
+export const adminSearchFacilitiesQueryStateMax = 2;
+
+export const adminSearchFacilitiesQueryLimitDefault = 20;
+export const adminSearchFacilitiesQueryLimitMax = 50;
+
+export const AdminSearchFacilitiesQueryParams = zod.object({
+  q: zod.coerce.string().min(adminSearchFacilitiesQueryQMin),
+  state: zod.coerce
+    .string()
+    .min(adminSearchFacilitiesQueryStateMin)
+    .max(adminSearchFacilitiesQueryStateMax)
+    .optional(),
+  limit: zod.coerce
+    .number()
+    .max(adminSearchFacilitiesQueryLimitMax)
+    .default(adminSearchFacilitiesQueryLimitDefault),
+});
+
+export const AdminSearchFacilitiesResponseItem = zod.object({
+  id: zod.string().uuid(),
+  name: zod.string(),
+  doingBusinessAs: zod.string().nullish(),
+  systemName: zod.string().nullish(),
+  city: zod.string().nullish(),
+  state: zod.string().nullish(),
+  npi: zod.string().nullish(),
+});
+export const AdminSearchFacilitiesResponse = zod.array(
+  AdminSearchFacilitiesResponseItem,
+);
 
 /**
  * @summary Whether a sub-account has CRM credentials connected (rep-accessible)

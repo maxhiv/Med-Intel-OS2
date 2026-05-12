@@ -259,6 +259,35 @@ export const ConFilingStatusNormalized = {
   filed: "filed",
 } as const;
 
+/**
+ * Facility column that carried the auto-match. Null when unmatched.
+ */
+export type ConFilingMatchField =
+  | (typeof ConFilingMatchField)[keyof typeof ConFilingMatchField]
+  | null;
+
+export const ConFilingMatchField = {
+  name: "name",
+  dba: "dba",
+  system: "system",
+  npi: "npi",
+} as const;
+
+/**
+ * Human-review state of the auto-emitted match.
+ */
+export type ConFilingReviewStatus =
+  | (typeof ConFilingReviewStatus)[keyof typeof ConFilingReviewStatus]
+  | null;
+
+export const ConFilingReviewStatus = {
+  auto_approved: "auto_approved",
+  needs_review: "needs_review",
+  confirmed: "confirmed",
+  rejected: "rejected",
+  reassigned: "reassigned",
+} as const;
+
 export interface ConFiling {
   id: string;
   facilityId?: string | null;
@@ -279,7 +308,69 @@ export interface ConFiling {
   applicantName?: string | null;
   filingUrl?: string | null;
   notes?: string | null;
+  /** Confidence in [0,1] from the fuzzy facility matcher. 1 for exact NPI hits, null when unmatched. */
+  matchScore?: number | null;
+  /** Facility column that carried the auto-match. Null when unmatched. */
+  matchField?: ConFilingMatchField;
+  /** Human-review state of the auto-emitted match. */
+  reviewStatus?: ConFilingReviewStatus;
   createdAt?: string | null;
+}
+
+export interface ConFilingReviewItem {
+  id: string;
+  facilityId?: string | null;
+  facilityName?: string | null;
+  facilitySystem?: string | null;
+  facilityCity?: string | null;
+  facilityState?: string | null;
+  state: string;
+  applicantName: string | null;
+  filingDate?: string | null;
+  filingUrl?: string | null;
+  modality?: string | null;
+  equipmentType?: string | null;
+  status?: string | null;
+  matchScore: number | null;
+  matchField: string | null;
+  reviewStatus: string | null;
+  createdAt?: string | null;
+}
+
+export interface ConFilingReviewQueueResponse {
+  data: ConFilingReviewItem[];
+  total: number;
+  limit?: number;
+  offset?: number;
+  /** Score below which auto-matches are flagged for human review. */
+  reviewThreshold: number;
+}
+
+export type ConFilingReviewInputAction =
+  (typeof ConFilingReviewInputAction)[keyof typeof ConFilingReviewInputAction];
+
+export const ConFilingReviewInputAction = {
+  confirm: "confirm",
+  reject: "reject",
+  reassign: "reassign",
+} as const;
+
+export interface ConFilingReviewInput {
+  action: ConFilingReviewInputAction;
+  /** Required when action is `reassign`; the facility to swap the match to. */
+  facilityId?: string;
+  /** Optional reviewer note (<= 1000 chars). */
+  notes?: string;
+}
+
+export interface AdminFacilitySearchResult {
+  id: string;
+  name: string;
+  doingBusinessAs?: string | null;
+  systemName?: string | null;
+  city?: string | null;
+  state?: string | null;
+  npi?: string | null;
 }
 
 export interface ConFilingListResponse {
@@ -877,6 +968,32 @@ export type AdminListSubAccountsParams = {
 export type AdminClearSubAccountCredentials200 = {
   subAccountId: string;
   cleared: boolean;
+};
+
+export type AdminListConFilingReviewQueueParams = {
+  /**
+   * @maximum 200
+   */
+  limit?: number;
+  offset?: number;
+};
+
+export type AdminReviewConFiling200 = { [key: string]: unknown };
+
+export type AdminSearchFacilitiesParams = {
+  /**
+   * @minLength 2
+   */
+  q: string;
+  /**
+   * @minLength 2
+   * @maxLength 2
+   */
+  state?: string;
+  /**
+   * @maximum 50
+   */
+  limit?: number;
 };
 
 export type StartSubAccountCrmOauth200 = {

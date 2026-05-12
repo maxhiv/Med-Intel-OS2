@@ -23,7 +23,11 @@ import type {
   AddContactsResult,
   AdminClearSubAccountCredentials200,
   AdminEncryptionKeyRotationLogParams,
+  AdminFacilitySearchResult,
+  AdminListConFilingReviewQueueParams,
   AdminListSubAccountsParams,
+  AdminReviewConFiling200,
+  AdminSearchFacilitiesParams,
   ApproveSourceInput,
   BatchRetryResult,
   BatchRunResult,
@@ -33,6 +37,8 @@ import type {
   CampaignInput,
   CampaignPatchInput,
   ConFilingListResponse,
+  ConFilingReviewInput,
+  ConFilingReviewQueueResponse,
   ConflictResponse,
   Contact,
   CrmCredentialSchema,
@@ -4489,6 +4495,307 @@ export const useAdminRotateSubAccountWebhookSecret = <
     getAdminRotateSubAccountWebhookSecretMutationOptions(options),
   );
 };
+
+/**
+ * @summary List CON filings whose facility match landed in the borderline confidence band
+ */
+export const getAdminListConFilingReviewQueueUrl = (
+  params?: AdminListConFilingReviewQueueParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/con-filings/review-queue?${stringifiedParams}`
+    : `/api/admin/con-filings/review-queue`;
+};
+
+export const adminListConFilingReviewQueue = async (
+  params?: AdminListConFilingReviewQueueParams,
+  options?: RequestInit,
+): Promise<ConFilingReviewQueueResponse> => {
+  return customFetch<ConFilingReviewQueueResponse>(
+    getAdminListConFilingReviewQueueUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getAdminListConFilingReviewQueueQueryKey = (
+  params?: AdminListConFilingReviewQueueParams,
+) => {
+  return [
+    `/api/admin/con-filings/review-queue`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getAdminListConFilingReviewQueueQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminListConFilingReviewQueue>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: AdminListConFilingReviewQueueParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminListConFilingReviewQueue>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAdminListConFilingReviewQueueQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminListConFilingReviewQueue>>
+  > = ({ signal }) =>
+    adminListConFilingReviewQueue(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminListConFilingReviewQueue>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminListConFilingReviewQueueQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminListConFilingReviewQueue>>
+>;
+export type AdminListConFilingReviewQueueQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List CON filings whose facility match landed in the borderline confidence band
+ */
+
+export function useAdminListConFilingReviewQueue<
+  TData = Awaited<ReturnType<typeof adminListConFilingReviewQueue>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: AdminListConFilingReviewQueueParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminListConFilingReviewQueue>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminListConFilingReviewQueueQueryOptions(
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Confirm, reject, or reassign the auto-emitted facility match for a CON filing
+ */
+export const getAdminReviewConFilingUrl = (id: string) => {
+  return `/api/admin/con-filings/${id}/review`;
+};
+
+export const adminReviewConFiling = async (
+  id: string,
+  conFilingReviewInput: ConFilingReviewInput,
+  options?: RequestInit,
+): Promise<AdminReviewConFiling200> => {
+  return customFetch<AdminReviewConFiling200>(getAdminReviewConFilingUrl(id), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(conFilingReviewInput),
+  });
+};
+
+export const getAdminReviewConFilingMutationOptions = <
+  TError = ErrorType<Error | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminReviewConFiling>>,
+    TError,
+    { id: string; data: BodyType<ConFilingReviewInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminReviewConFiling>>,
+  TError,
+  { id: string; data: BodyType<ConFilingReviewInput> },
+  TContext
+> => {
+  const mutationKey = ["adminReviewConFiling"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminReviewConFiling>>,
+    { id: string; data: BodyType<ConFilingReviewInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return adminReviewConFiling(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminReviewConFilingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminReviewConFiling>>
+>;
+export type AdminReviewConFilingMutationBody = BodyType<ConFilingReviewInput>;
+export type AdminReviewConFilingMutationError = ErrorType<
+  Error | NotFoundResponse
+>;
+
+/**
+ * @summary Confirm, reject, or reassign the auto-emitted facility match for a CON filing
+ */
+export const useAdminReviewConFiling = <
+  TError = ErrorType<Error | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminReviewConFiling>>,
+    TError,
+    { id: string; data: BodyType<ConFilingReviewInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminReviewConFiling>>,
+  TError,
+  { id: string; data: BodyType<ConFilingReviewInput> },
+  TContext
+> => {
+  return useMutation(getAdminReviewConFilingMutationOptions(options));
+};
+
+/**
+ * @summary Cross-account facility search for reassigning CON-filing matches
+ */
+export const getAdminSearchFacilitiesUrl = (
+  params: AdminSearchFacilitiesParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/facilities/search?${stringifiedParams}`
+    : `/api/admin/facilities/search`;
+};
+
+export const adminSearchFacilities = async (
+  params: AdminSearchFacilitiesParams,
+  options?: RequestInit,
+): Promise<AdminFacilitySearchResult[]> => {
+  return customFetch<AdminFacilitySearchResult[]>(
+    getAdminSearchFacilitiesUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getAdminSearchFacilitiesQueryKey = (
+  params?: AdminSearchFacilitiesParams,
+) => {
+  return [`/api/admin/facilities/search`, ...(params ? [params] : [])] as const;
+};
+
+export const getAdminSearchFacilitiesQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminSearchFacilities>>,
+  TError = ErrorType<unknown>,
+>(
+  params: AdminSearchFacilitiesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminSearchFacilities>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAdminSearchFacilitiesQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminSearchFacilities>>
+  > = ({ signal }) =>
+    adminSearchFacilities(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminSearchFacilities>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminSearchFacilitiesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminSearchFacilities>>
+>;
+export type AdminSearchFacilitiesQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Cross-account facility search for reassigning CON-filing matches
+ */
+
+export function useAdminSearchFacilities<
+  TData = Awaited<ReturnType<typeof adminSearchFacilities>>,
+  TError = ErrorType<unknown>,
+>(
+  params: AdminSearchFacilitiesParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminSearchFacilities>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminSearchFacilitiesQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Whether a sub-account has CRM credentials connected (rep-accessible)

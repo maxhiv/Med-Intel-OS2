@@ -70,6 +70,9 @@ router.get("/signals/con-filings", requireAccount, async (req, res) => {
       applicantName: conFilings.applicantName,
       filingUrl: conFilings.filingUrl,
       notes: conFilings.notes,
+      matchScore: conFilings.matchScore,
+      matchField: conFilings.matchField,
+      reviewStatus: conFilings.reviewStatus,
       createdAt: conFilings.createdAt,
     })
     .from(conFilings)
@@ -83,6 +86,7 @@ router.get("/signals/con-filings", requireAccount, async (req, res) => {
 
   const data = rows.map((r) => ({
     ...r,
+    matchScore: r.matchScore == null ? null : Number(r.matchScore),
     facilityAccessible: r.facilityId ? ownedSet.has(r.facilityId) : false,
   }));
 

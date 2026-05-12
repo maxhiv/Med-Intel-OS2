@@ -5,6 +5,8 @@
  * MedIntel OS API — multi-tenant medical equipment sales intelligence
  * OpenAPI spec version: 0.1.0
  */
+import type { ConFilingMatchField } from "./conFilingMatchField";
+import type { ConFilingReviewStatus } from "./conFilingReviewStatus";
 import type { ConFilingStatusNormalized } from "./conFilingStatusNormalized";
 
 export interface ConFiling {
@@ -27,5 +29,11 @@ export interface ConFiling {
   applicantName?: string | null;
   filingUrl?: string | null;
   notes?: string | null;
+  /** Confidence in [0,1] from the fuzzy facility matcher. 1 for exact NPI hits, null when unmatched. */
+  matchScore?: number | null;
+  /** Facility column that carried the auto-match. Null when unmatched. */
+  matchField?: ConFilingMatchField;
+  /** Human-review state of the auto-emitted match. */
+  reviewStatus?: ConFilingReviewStatus;
   createdAt?: Date | null;
 }

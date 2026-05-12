@@ -1,6 +1,6 @@
 import crypto, { randomUUID } from "node:crypto";
 import { Router, type IRouter, type Request } from "express";
-import { eq, sql, desc, and } from "drizzle-orm";
+import { eq, sql, desc, and, ilike, or } from "drizzle-orm";
 import {
   db,
   accounts,
@@ -15,9 +15,11 @@ import {
   contactValidationLog,
   replyEvents,
   crmKeyRotationEvents,
+  conFilings,
   FREE_ENRICHMENT_SOURCES,
   PAID_ENRICHMENT_SOURCES,
 } from "@workspace/db";
+import { getReviewThreshold } from "../services/conFilingsIngestor";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { listAllSources } from "../services/enrichment";
 import { backfillConFilingFacilities } from "../services/conFacilityMatcher";
@@ -925,6 +927,52 @@ router.get(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Cross-account facility search (for reassignment UI)
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/admin/facilities/search",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (q.length < 2) {
+      res.status(400).json({ error: "q_min_length_2" });
+      return;
+    }
+    const stateRaw =
+      typeof req.query.state === "string" ? req.query.state.trim().toUpperCase() : "";
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+    const pattern = `%${q}%`;
+
+    const conds = [
+      or(
+        ilike(facilities.name, pattern),
+        ilike(facilities.doingBusinessAs, pattern),
+        ilike(facilities.systemName, pattern),
+        ilike(facilities.npi, pattern),
+      )!,
+    ];
+    if (stateRaw.length === 2) conds.push(eq(facilities.state, stateRaw));
+
+    const rows = await db
+      .select({
+        id: facilities.id,
+        name: facilities.name,
+        doingBusinessAs: facilities.doingBusinessAs,
+        systemName: facilities.systemName,
+        city: facilities.city,
+        state: facilities.state,
+        npi: facilities.npi,
+      })
+      .from(facilities)
+      .where(and(...conds))
+      .orderBy(facilities.name)
+      .limit(limit);
+    res.json(rows);
+  },
+);
+
 router.post(
   "/admin/con-filings/backfill-facilities",
   requirePlatformAdmin,
@@ -935,6 +983,217 @@ router.post(
     const emitSignals = rawEmit === false ? false : true;
     const result = await backfillConFilingFacilities({ limit, emitSignals });
     res.json(result);
+  },
+);
+
+
+// ---------------------------------------------------------------------------
+// CON-filing match review queue
+// ---------------------------------------------------------------------------
+
+/**
+ * List CON filings whose auto-emitted facility match landed in the borderline
+ * confidence band and is awaiting human review. Newest filings first so the
+ * freshest signals get triaged before they pollute outreach.
+ */
+router.get(
+  "/admin/con-filings/review-queue",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+    const rows = await db
+      .select({
+        id: conFilings.id,
+        facilityId: conFilings.facilityId,
+        facilityName: facilities.name,
+        facilitySystem: facilities.systemName,
+        facilityCity: facilities.city,
+        facilityState: facilities.state,
+        state: conFilings.state,
+        applicantName: conFilings.applicantName,
+        filingDate: conFilings.filingDate,
+        filingUrl: conFilings.filingUrl,
+        modality: conFilings.modality,
+        equipmentType: conFilings.equipmentType,
+        status: conFilings.status,
+        matchScore: conFilings.matchScore,
+        matchField: conFilings.matchField,
+        reviewStatus: conFilings.reviewStatus,
+        createdAt: conFilings.createdAt,
+      })
+      .from(conFilings)
+      .leftJoin(facilities, eq(facilities.id, conFilings.facilityId))
+      .where(eq(conFilings.reviewStatus, "needs_review"))
+      .orderBy(
+        desc(sql`COALESCE(${conFilings.filingDate}, ${conFilings.createdAt}::date)`),
+      )
+      .limit(limit)
+      .offset(offset);
+
+    const [{ c: total }] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(conFilings)
+      .where(eq(conFilings.reviewStatus, "needs_review"));
+
+    res.json({
+      data: rows.map((r) => ({
+        ...r,
+        matchScore: r.matchScore == null ? null : Number(r.matchScore),
+      })),
+      total,
+      limit,
+      offset,
+      reviewThreshold: getReviewThreshold(),
+    });
+  },
+);
+
+/**
+ * Take action on a borderline CON-filing match.
+ *
+ * Body: `{ action: "confirm" | "reject" | "reassign", facilityId?, notes? }`
+ *
+ *   confirm   — accept the auto-match as-is. Filing's signal stays active.
+ *   reject    — strike the match. We null out facilityId and deactivate the
+ *               auto-emitted purchase signal so it stops polluting outreach.
+ *   reassign  — swap to a different facility. Old signal is deactivated and a
+ *               fresh one is emitted against the new facility (if not already).
+ */
+router.post(
+  "/admin/con-filings/:id/review",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const id = String(req.params.id);
+    const action = String(req.body?.action ?? "");
+    const notes =
+      typeof req.body?.notes === "string" ? req.body.notes.slice(0, 1000) : null;
+    const reviewerId = req.currentUser?.id ?? null;
+
+    if (!["confirm", "reject", "reassign"].includes(action)) {
+      res.status(400).json({ error: "invalid_action" });
+      return;
+    }
+
+    const [filing] = await db
+      .select()
+      .from(conFilings)
+      .where(eq(conFilings.id, id))
+      .limit(1);
+    if (!filing) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+
+    const now = new Date();
+
+    if (action === "confirm") {
+      const [updated] = await db
+        .update(conFilings)
+        .set({
+          reviewStatus: "confirmed",
+          reviewedAt: now,
+          reviewedBy: reviewerId,
+          reviewNotes: notes,
+        })
+        .where(eq(conFilings.id, id))
+        .returning();
+      res.json(updated);
+      return;
+    }
+
+    if (action === "reject") {
+      // Deactivate the auto-emitted signal that was tied to this filing.
+      if (filing.facilityId) {
+        await db
+          .update(purchaseSignals)
+          .set({ isActive: false })
+          .where(eq(purchaseSignals.sourceId, filing.id));
+      }
+      const [updated] = await db
+        .update(conFilings)
+        .set({
+          facilityId: null,
+          reviewStatus: "rejected",
+          reviewedAt: now,
+          reviewedBy: reviewerId,
+          reviewNotes: notes,
+        })
+        .where(eq(conFilings.id, id))
+        .returning();
+      res.json(updated);
+      return;
+    }
+
+    // reassign
+    const newFacilityId =
+      typeof req.body?.facilityId === "string" ? req.body.facilityId : null;
+    if (!newFacilityId) {
+      res.status(400).json({ error: "facilityId_required_for_reassign" });
+      return;
+    }
+    const [target] = await db
+      .select({ id: facilities.id })
+      .from(facilities)
+      .where(eq(facilities.id, newFacilityId))
+      .limit(1);
+    if (!target) {
+      res.status(400).json({ error: "facility_not_found" });
+      return;
+    }
+
+    // Deactivate any existing auto-emitted signal for this filing — its
+    // facilityId is about to change, so the old signal is now wrong.
+    await db
+      .update(purchaseSignals)
+      .set({ isActive: false })
+      .where(eq(purchaseSignals.sourceId, filing.id));
+
+    // Emit a fresh signal against the new facility, mirroring the ingestor's
+    // logic. Re-derive the type from raw status text so an "approved" filing
+    // still surfaces as `con_approved` after reassignment.
+    const isApproved = !!filing.status && /approv|grant(ed)?|issued/i.test(filing.status);
+    const signalType = isApproved ? "con_approved" : "con_filed";
+    const [sigExists] = await db
+      .select({ id: purchaseSignals.id })
+      .from(purchaseSignals)
+      .where(
+        sql`${purchaseSignals.facilityId} = ${target.id}
+            AND ${purchaseSignals.signalType} = ${signalType}
+            AND ${purchaseSignals.signalValue} = ${filing.filingUrl}`,
+      )
+      .limit(1);
+    if (!sigExists) {
+      await db.insert(purchaseSignals).values({
+        facilityId: target.id,
+        signalType,
+        signalValue: filing.filingUrl,
+        confidence: isApproved ? 90 : 75,
+        source: "con_filing",
+        sourceId: filing.id,
+        isActive: true,
+      });
+    } else {
+      // Re-activate in case it was previously deactivated by an earlier review.
+      await db
+        .update(purchaseSignals)
+        .set({ isActive: true })
+        .where(eq(purchaseSignals.id, sigExists.id));
+    }
+
+    const [updated] = await db
+      .update(conFilings)
+      .set({
+        facilityId: target.id,
+        reviewStatus: "reassigned",
+        reviewedAt: now,
+        reviewedBy: reviewerId,
+        reviewNotes: notes,
+      })
+      .where(eq(conFilings.id, id))
+      .returning();
+    res.json(updated);
   },
 );
 

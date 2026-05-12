@@ -476,6 +476,34 @@ function parseNcFilename(name: string): {
 // Persistence
 // ---------------------------------------------------------------------------
 
+/**
+ * Match score below this band still resolves to a facility (so the signal is
+ * surfaced) but is flagged for human review rather than trusted blindly.
+ *
+ * Defaults to 0.75 — borderline matches in [DEFAULT_MATCH_THRESHOLD, 0.75)
+ * land in the admin review queue; everything at or above 0.75 (and any
+ * exact-NPI hit) is treated as auto-approved.
+ */
+export const DEFAULT_REVIEW_THRESHOLD = 0.75;
+
+export function getReviewThreshold(): number {
+  const raw = process.env.CON_REVIEW_THRESHOLD;
+  if (!raw) return DEFAULT_REVIEW_THRESHOLD;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0 || n > 1) return DEFAULT_REVIEW_THRESHOLD;
+  return n;
+}
+
+export type ConMatchField = "name" | "dba" | "system" | "npi";
+
+export interface ConFacilityMatch {
+  id: string;
+  /** Score in [0, 1]. Always 1 for an NPI hit. */
+  score: number;
+  matchedField: ConMatchField;
+}
+
+
 function toDateOnly(d: Date | undefined): string | undefined {
   if (!d) return undefined;
   return d.toISOString().slice(0, 10);
@@ -544,6 +572,16 @@ export async function ingestConFilings(opts: {
       );
       if (facility) result.facilitiesLinked += 1;
 
+      // Borderline matches (below the configurable review threshold) are
+      // surfaced for human review rather than blindly trusted. NPI hits and
+      // strong fuzzy hits skip review entirely.
+      const reviewThreshold = getReviewThreshold();
+      const reviewStatus = facility
+        ? facility.score >= reviewThreshold
+          ? "auto_approved"
+          : "needs_review"
+        : null;
+
       const [inserted] = await db
         .insert(conFilings)
         .values({
@@ -559,6 +597,9 @@ export async function ingestConFilings(opts: {
           applicantName: raw.applicantName,
           filingUrl: raw.filingUrl,
           notes: raw.notes,
+          matchScore: facility ? facility.score.toFixed(3) : null,
+          matchField: facility?.matchedField ?? null,
+          reviewStatus,
         })
         .returning({ id: conFilings.id });
       stateBucket.inserted += 1;

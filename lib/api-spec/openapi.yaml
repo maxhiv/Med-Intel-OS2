@@ -676,6 +676,56 @@ paths:
               schema: { $ref: "#/components/schemas/RotateWebhookSecretResult" }
         "404": { description: Not found }
 
+  /admin/con-filings/review-queue:
+    get:
+      operationId: adminListConFilingReviewQueue
+      tags: [admin, signals]
+      summary: List CON filings whose facility match landed in the borderline confidence band
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConFilingReviewQueueResponse" }
+
+  /admin/con-filings/{id}/review:
+    post:
+      operationId: adminReviewConFiling
+      tags: [admin, signals]
+      summary: Confirm, reject, or reassign the auto-emitted facility match for a CON filing
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConFilingReviewInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, additionalProperties: true } } } }
+        "400": { description: Bad request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /admin/facilities/search:
+    get:
+      operationId: adminSearchFacilities
+      tags: [admin]
+      summary: Cross-account facility search for reassigning CON-filing matches
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2 } }
+        - { name: state, in: query, schema: { type: string, minLength: 2, maxLength: 2 } }
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 50 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AdminFacilitySearchResult" }
+
   /sub-accounts/{id}/crm/connection:
     get:
       operationId: getSubAccountCrmConnection
@@ -1137,7 +1187,71 @@ components:
         applicantName: { type: string, nullable: true }
         filingUrl: { type: string, nullable: true }
         notes: { type: string, nullable: true }
+        matchScore: { type: number, nullable: true, description: "Confidence in [0,1] from the fuzzy facility matcher. 1 for exact NPI hits, null when unmatched." }
+        matchField: { type: string, nullable: true, enum: [name, dba, system, npi], description: "Facility column that carried the auto-match. Null when unmatched." }
+        reviewStatus: { type: string, nullable: true, enum: [auto_approved, needs_review, confirmed, rejected, reassigned], description: "Human-review state of the auto-emitted match." }
         createdAt: { type: string, format: date-time, nullable: true }
+
+    ConFilingReviewItem:
+      type: object
+      required: [id, state, applicantName, matchScore, matchField, reviewStatus]
+      properties:
+        id: { type: string, format: uuid }
+        facilityId: { type: string, format: uuid, nullable: true }
+        facilityName: { type: string, nullable: true }
+        facilitySystem: { type: string, nullable: true }
+        facilityCity: { type: string, nullable: true }
+        facilityState: { type: string, nullable: true }
+        state: { type: string }
+        applicantName: { type: string, nullable: true }
+        filingDate: { type: string, format: date, nullable: true }
+        filingUrl: { type: string, nullable: true }
+        modality: { type: string, nullable: true }
+        equipmentType: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        matchScore: { type: number, nullable: true }
+        matchField: { type: string, nullable: true }
+        reviewStatus: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true }
+
+    ConFilingReviewQueueResponse:
+      type: object
+      required: [data, total, reviewThreshold]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ConFilingReviewItem" }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+        reviewThreshold: { type: number, description: "Score below which auto-matches are flagged for human review." }
+
+    ConFilingReviewInput:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [confirm, reject, reassign]
+        facilityId:
+          type: string
+          format: uuid
+          description: Required when action is `reassign`; the facility to swap the match to.
+        notes:
+          type: string
+          description: Optional reviewer note (<= 1000 chars).
+
+    AdminFacilitySearchResult:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        doingBusinessAs: { type: string, nullable: true }
+        systemName: { type: string, nullable: true }
+        city: { type: string, nullable: true }
+        state: { type: string, nullable: true }
+        npi: { type: string, nullable: true }
 
     ConFilingListResponse:
       type: object
