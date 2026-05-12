@@ -13,11 +13,44 @@ import { and, eq } from "drizzle-orm";
 import {
   db,
   outreachDrafts,
+  contactEnrollments,
+  campaignContacts,
+  campaigns,
   syncBatches,
   subAccounts,
   type OutreachDraft,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+
+/**
+ * Resolve the sub-account that owns a given draft via:
+ *   draft.enrollmentId -> contactEnrollments.campaignContactId
+ *   -> campaignContacts.campaignId -> campaigns.subAccountId
+ *
+ * Returns null when the draft has no enrollment lineage (legacy/manual draft).
+ */
+export async function resolveSubAccountForDraft(
+  draft: Pick<OutreachDraft, "id" | "accountId" | "enrollmentId">,
+): Promise<{ id: string; crmType: string | null } | null> {
+  if (!draft.enrollmentId) return null;
+  const [row] = await db
+    .select({ id: subAccounts.id, crmType: subAccounts.crmType })
+    .from(contactEnrollments)
+    .innerJoin(
+      campaignContacts,
+      eq(campaignContacts.id, contactEnrollments.campaignContactId),
+    )
+    .innerJoin(campaigns, eq(campaigns.id, campaignContacts.campaignId))
+    .innerJoin(subAccounts, eq(subAccounts.id, campaigns.subAccountId))
+    .where(
+      and(
+        eq(contactEnrollments.id, draft.enrollmentId),
+        eq(subAccounts.accountId, draft.accountId),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
 
 export interface CrmPushResult {
   crmDraftId: string;
@@ -47,19 +80,32 @@ export async function pushApprovedDraftToCrm(
     };
   }
 
-  // Resolve the sub-account's CRM type. For now we pick the first sub-account
-  // for this tenant; richer routing (per-enrollment) is a follow-up.
+  // Resolve the sub-account from the draft's campaign lineage so the artifact
+  // lands in the correct CRM destination for multi-sub-account tenants.
   type CrmType = NonNullable<(typeof subAccounts.crmType)["_"]["data"]>;
   let crmType: CrmType = "other";
   let subAccountId: string | null = null;
-  const [sub] = await db
-    .select({ id: subAccounts.id, crmType: subAccounts.crmType })
-    .from(subAccounts)
-    .where(eq(subAccounts.accountId, draft.accountId))
-    .limit(1);
-  if (sub) {
-    crmType = (sub.crmType ?? "other") as CrmType;
-    subAccountId = sub.id;
+  const lineage = await resolveSubAccountForDraft(draft);
+  if (lineage) {
+    crmType = (lineage.crmType ?? "other") as CrmType;
+    subAccountId = lineage.id;
+  } else {
+    // Legacy/manual draft with no enrollment lineage: fall back to the
+    // tenant's first active sub-account so the audit trail is still recorded.
+    const [sub] = await db
+      .select({ id: subAccounts.id, crmType: subAccounts.crmType })
+      .from(subAccounts)
+      .where(
+        and(
+          eq(subAccounts.accountId, draft.accountId),
+          eq(subAccounts.isActive, true),
+        ),
+      )
+      .limit(1);
+    if (sub) {
+      crmType = (sub.crmType ?? "other") as CrmType;
+      subAccountId = sub.id;
+    }
   }
 
   const now = new Date();

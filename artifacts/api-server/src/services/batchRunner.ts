@@ -9,6 +9,9 @@ import {
   subAccounts,
   syncBatches,
   outreachDrafts,
+  contactEnrollments,
+  campaignContacts,
+  campaigns,
 } from "@workspace/db";
 
 function todayDateString(): string {
@@ -30,16 +33,28 @@ export async function runDailyBatchesForAccount(
   const date = todayDateString();
 
   for (const sub of subs) {
-    // Filter unsynced drafts in SQL before LIMIT so we don't starve unsynced
-    // rows when older approved drafts have already been pushed.
+    // Scope unsynced drafts to THIS sub-account by joining through the
+    // enrollment -> campaign_contact -> campaign chain. Without this join the
+    // loop would arbitrarily consume drafts that belong to other sub-accounts
+    // and record syncBatches against the wrong destination.
     const toPush = await db
       .select({ id: outreachDrafts.id })
       .from(outreachDrafts)
+      .innerJoin(
+        contactEnrollments,
+        eq(contactEnrollments.id, outreachDrafts.enrollmentId),
+      )
+      .innerJoin(
+        campaignContacts,
+        eq(campaignContacts.id, contactEnrollments.campaignContactId),
+      )
+      .innerJoin(campaigns, eq(campaigns.id, campaignContacts.campaignId))
       .where(
         and(
           eq(outreachDrafts.accountId, accountId),
           eq(outreachDrafts.status, "approved"),
           isNull(outreachDrafts.crmSyncedAt),
+          eq(campaigns.subAccountId, sub.id),
         ),
       )
       .orderBy(asc(outreachDrafts.generatedAt))
