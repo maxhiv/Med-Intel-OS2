@@ -25,6 +25,7 @@ import { runAllAccounts } from "../services/batchRunner";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
 import { ingestConFilings } from "../services/conFilingsIngestor";
+import { notifyConAlerts } from "../services/conAlertNotifier";
 import { rolloverSpendCounters } from "../services/monthRollover";
 import { classifyPendingReplies } from "../services/replyClassifier";
 
@@ -109,8 +110,28 @@ export function startCron(): void {
     guarded("ingestConFilings", async () => {
       const r = await ingestConFilings();
       logger.info(r, "con filings ingest complete");
+      // Fan out alerts as soon as the ingestor finishes so high-intent
+      // filings reach reps' inboxes the same morning. Runs serially behind
+      // the ingest under the same lock window so we never tick again until
+      // both the fetch and the notifier have completed.
+      const n = await notifyConAlerts();
+      logger.info(n, "con alert notifier complete");
     }),
     { timezone: tz },
+  );
+
+  // Every 10 minutes — best-effort follow-up notifier tick. Catches filings
+  // inserted manually (admin "Run ingestor now"), or by the daily ingestor
+  // when a new subscription is created mid-day. Idempotent — already-sent
+  // alerts are filtered by the unique (subscription, filing) index.
+  cron.schedule(
+    "*/10 * * * *",
+    guarded("notifyConAlerts", async () => {
+      const r = await notifyConAlerts();
+      if (r.notificationsCreated > 0 || r.errors > 0) {
+        logger.info(r, "con alert notifier tick");
+      }
+    }),
   );
 
   // 00:05 UTC daily — proactively roll over the per-source month-to-date

@@ -36,6 +36,8 @@ const RLS_TABLES = [
   "report_templates",
   "report_runs",
   "report_schedules",
+  "con_alert_subscriptions",
+  "con_alert_notifications",
 ];
 
 async function main() {

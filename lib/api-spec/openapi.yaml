@@ -194,6 +194,77 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RecomputeResult" } } } }
 
+  /me/con-alert-subscription:
+    get:
+      operationId: getConAlertSubscription
+      tags: [auth, signals]
+      summary: Get the current user's CON-filing alert preferences
+      responses:
+        "200":
+          description: OK (null when no subscription has been saved yet)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ConAlertSubscription"
+                  - type: "null"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    put:
+      operationId: upsertConAlertSubscription
+      tags: [auth, signals]
+      summary: Create or update the current user's CON alert preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConAlertSubscriptionInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ConAlertSubscription" } } } }
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ConAlertSubscription" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/con-alert-notifications:
+    get:
+      operationId: listConAlertNotifications
+      tags: [auth, signals]
+      summary: List in-app CON alert notifications for the current user
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: unread, in: query, schema: { type: boolean } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConAlertNotificationListResponse" }
+
+  /me/con-alert-notifications/read-all:
+    post:
+      operationId: markAllConAlertNotificationsRead
+      tags: [auth, signals]
+      summary: Mark every unread CON alert notification as read
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [marked]
+                properties:
+                  marked: { type: integer }
+
+  /me/con-alert-notifications/{id}/read:
+    post:
+      operationId: markConAlertNotificationRead
+      tags: [auth, signals]
+      summary: Mark a single CON alert notification as read
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ConAlertNotification" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /signals/con-filings:
     get:
       operationId: listConFilings
@@ -1267,6 +1338,69 @@ components:
           type: array
           description: Distinct state codes present in the con_filings table, for populating the state filter UI.
           items: { type: string }
+
+    ConAlertSubscription:
+      type: object
+      required: [id, accountId, userId, states, modalities, statusFilter, isActive]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        states:
+          type: array
+          description: Two-letter state codes the user wants alerts for. Empty array means "all states".
+          items: { type: string }
+        modalities:
+          type: array
+          description: Modality codes (MRI, CT, PET, …). Empty array means "any modality".
+          items: { type: string }
+        statusFilter:
+          type: string
+          enum: [any, approved, filed]
+          description: "any: both filed + approved; approved: only approved/granted/issued; filed: only newly-filed."
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time, nullable: true }
+        updatedAt: { type: string, format: date-time, nullable: true }
+
+    ConAlertSubscriptionInput:
+      type: object
+      properties:
+        states:
+          type: array
+          items: { type: string }
+        modalities:
+          type: array
+          items: { type: string }
+        statusFilter:
+          type: string
+          enum: [any, approved, filed]
+        isActive: { type: boolean }
+
+    ConAlertNotification:
+      type: object
+      required: [id, accountId, userId, subscriptionId, conFilingId, state]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        subscriptionId: { type: string, format: uuid }
+        conFilingId: { type: string, format: uuid }
+        state: { type: string }
+        modality: { type: string, nullable: true }
+        statusNormalized: { type: string, nullable: true, enum: [approved, filed] }
+        applicantName: { type: string, nullable: true }
+        facilityId: { type: string, format: uuid, nullable: true }
+        readAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true }
+
+    ConAlertNotificationListResponse:
+      type: object
+      required: [data, unread]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ConAlertNotification" }
+        unread: { type: integer, description: "Total unread alerts for the user across all pages." }
 
     Contact:
       type: object

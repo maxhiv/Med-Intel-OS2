@@ -9,6 +9,7 @@ import {
   boolean,
   timestamp,
   jsonb,
+  char,
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
@@ -300,3 +301,95 @@ export const insertCampaignContactSchema = createInsertSchema(campaignContacts).
 });
 export type CampaignContact = typeof campaignContacts.$inferSelect;
 export type InsertCampaignContact = z.infer<typeof insertCampaignContactSchema>;
+
+/**
+ * Per-user subscription preferences for high-intent CON-filing alerts. The CON
+ * Filings page is pull-based; this table powers a push notification whenever a
+ * new filing matches the user's coverage area (states + modalities) and the
+ * approved-vs-filed gate they care about.
+ *
+ * Scoped to (account_id, user_id): account_id is carried for tenant isolation
+ * via RLS, and the unique index guarantees one subscription row per user.
+ */
+export const conAlertSubscriptions = pgTable(
+  "con_alert_subscriptions",
+  {
+    id: uuid("id").primaryKey().default(sql`uuid_generate_v4()`),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Two-letter state codes; empty array means "all states". */
+    states: text("states").array().notNull().default(sql`'{}'`),
+    /** Modality codes (MRI, CT, …); empty array means "any modality". */
+    modalities: text("modalities").array().notNull().default(sql`'{}'`),
+    /**
+     * Filter on normalized status:
+     *   - "any" — both filed and approved
+     *   - "approved" — only approved/granted/issued filings
+     *   - "filed"    — only newly-filed (not yet approved)
+     */
+    statusFilter: text("status_filter").notNull().default("any"),
+    isActive: boolean("is_active").notNull().default(true),
+    /**
+     * Cursor over `con_filings.(created_at, id)` of the last filing the
+     * notifier has *processed* for this subscription — regardless of whether
+     * it produced a match. Advances even on no-match runs so we never
+     * re-scan the same backlog and never get stuck behind a sparse window.
+     */
+    lastProcessedAt: timestamp("last_processed_at", { withTimezone: true }),
+    lastProcessedId: uuid("last_processed_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uniq_con_alert_sub_user").on(t.userId),
+    index("idx_con_alert_sub_account").on(t.accountId, t.isActive),
+  ],
+);
+
+export type ConAlertSubscription = typeof conAlertSubscriptions.$inferSelect;
+
+/**
+ * In-app notification record emitted by the CON-alert notifier when a new
+ * `con_filings` row matches a subscription. Persisted so users can see them
+ * on next sign-in and so we never double-emit the same (subscription, filing)
+ * pair across notifier ticks.
+ */
+export const conAlertNotifications = pgTable(
+  "con_alert_notifications",
+  {
+    id: uuid("id").primaryKey().default(sql`uuid_generate_v4()`),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    subscriptionId: uuid("subscription_id")
+      .notNull()
+      .references(() => conAlertSubscriptions.id, { onDelete: "cascade" }),
+    /** FK is nominal — we don't cascade because we want to keep the alert log
+     *  even if a CON filing is later purged. */
+    conFilingId: uuid("con_filing_id").notNull(),
+    state: char("state", { length: 2 }).notNull(),
+    modality: text("modality"),
+    statusNormalized: text("status_normalized"),
+    applicantName: text("applicant_name"),
+    facilityId: uuid("facility_id"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uniq_con_alert_notif_sub_filing").on(
+      t.subscriptionId,
+      t.conFilingId,
+    ),
+    index("idx_con_alert_notif_user_unread").on(t.userId, t.readAt),
+    index("idx_con_alert_notif_account").on(t.accountId, t.createdAt),
+  ],
+);
+
+export type ConAlertNotification = typeof conAlertNotifications.$inferSelect;

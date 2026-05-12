@@ -382,6 +382,79 @@ export interface ConFilingListResponse {
   states: string[];
 }
 
+/**
+ * any: both filed + approved; approved: only approved/granted/issued; filed: only newly-filed.
+ */
+export type ConAlertSubscriptionStatusFilter =
+  (typeof ConAlertSubscriptionStatusFilter)[keyof typeof ConAlertSubscriptionStatusFilter];
+
+export const ConAlertSubscriptionStatusFilter = {
+  any: "any",
+  approved: "approved",
+  filed: "filed",
+} as const;
+
+export interface ConAlertSubscription {
+  id: string;
+  accountId: string;
+  userId: string;
+  /** Two-letter state codes the user wants alerts for. Empty array means "all states". */
+  states: string[];
+  /** Modality codes (MRI, CT, PET, …). Empty array means "any modality". */
+  modalities: string[];
+  /** any: both filed + approved; approved: only approved/granted/issued; filed: only newly-filed. */
+  statusFilter: ConAlertSubscriptionStatusFilter;
+  isActive: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export type ConAlertSubscriptionInputStatusFilter =
+  (typeof ConAlertSubscriptionInputStatusFilter)[keyof typeof ConAlertSubscriptionInputStatusFilter];
+
+export const ConAlertSubscriptionInputStatusFilter = {
+  any: "any",
+  approved: "approved",
+  filed: "filed",
+} as const;
+
+export interface ConAlertSubscriptionInput {
+  states?: string[];
+  modalities?: string[];
+  statusFilter?: ConAlertSubscriptionInputStatusFilter;
+  isActive?: boolean;
+}
+
+export type ConAlertNotificationStatusNormalized =
+  | (typeof ConAlertNotificationStatusNormalized)[keyof typeof ConAlertNotificationStatusNormalized]
+  | null;
+
+export const ConAlertNotificationStatusNormalized = {
+  approved: "approved",
+  filed: "filed",
+} as const;
+
+export interface ConAlertNotification {
+  id: string;
+  accountId: string;
+  userId: string;
+  subscriptionId: string;
+  conFilingId: string;
+  state: string;
+  modality?: string | null;
+  statusNormalized?: ConAlertNotificationStatusNormalized;
+  applicantName?: string | null;
+  facilityId?: string | null;
+  readAt?: string | null;
+  createdAt?: string | null;
+}
+
+export interface ConAlertNotificationListResponse {
+  data: ConAlertNotification[];
+  /** Total unread alerts for the user across all pages. */
+  unread: number;
+}
+
 export type DashboardSummarySignalsByTypeItem = {
   signalType?: string;
   count?: number;
@@ -901,6 +974,18 @@ export type ListFacilitiesParams = {
    */
   limit?: number;
   offset?: number;
+};
+
+export type ListConAlertNotificationsParams = {
+  /**
+   * @maximum 200
+   */
+  limit?: number;
+  unread?: boolean;
+};
+
+export type MarkAllConAlertNotificationsRead200 = {
+  marked: number;
 };
 
 export type ListConFilingsParams = {

@@ -471,6 +471,135 @@ export const RecomputeSignalScoresResponse = zod.object({
 });
 
 /**
+ * @summary Get the current user's CON-filing alert preferences
+ */
+export const GetConAlertSubscriptionResponse = zod.union([
+  zod.object({
+    id: zod.string().uuid(),
+    accountId: zod.string().uuid(),
+    userId: zod.string().uuid(),
+    states: zod
+      .array(zod.string())
+      .describe(
+        'Two-letter state codes the user wants alerts for. Empty array means \"all states\".',
+      ),
+    modalities: zod
+      .array(zod.string())
+      .describe(
+        'Modality codes (MRI, CT, PET, …). Empty array means \"any modality\".',
+      ),
+    statusFilter: zod
+      .enum(["any", "approved", "filed"])
+      .describe(
+        "any: both filed + approved; approved: only approved\/granted\/issued; filed: only newly-filed.",
+      ),
+    isActive: zod.boolean(),
+    createdAt: zod.coerce.date().nullish(),
+    updatedAt: zod.coerce.date().nullish(),
+  }),
+  zod.null(),
+]);
+
+/**
+ * @summary Create or update the current user's CON alert preferences
+ */
+export const UpsertConAlertSubscriptionBody = zod.object({
+  states: zod.array(zod.string()).optional(),
+  modalities: zod.array(zod.string()).optional(),
+  statusFilter: zod.enum(["any", "approved", "filed"]).optional(),
+  isActive: zod.boolean().optional(),
+});
+
+export const UpsertConAlertSubscriptionResponse = zod.object({
+  id: zod.string().uuid(),
+  accountId: zod.string().uuid(),
+  userId: zod.string().uuid(),
+  states: zod
+    .array(zod.string())
+    .describe(
+      'Two-letter state codes the user wants alerts for. Empty array means \"all states\".',
+    ),
+  modalities: zod
+    .array(zod.string())
+    .describe(
+      'Modality codes (MRI, CT, PET, …). Empty array means \"any modality\".',
+    ),
+  statusFilter: zod
+    .enum(["any", "approved", "filed"])
+    .describe(
+      "any: both filed + approved; approved: only approved\/granted\/issued; filed: only newly-filed.",
+    ),
+  isActive: zod.boolean(),
+  createdAt: zod.coerce.date().nullish(),
+  updatedAt: zod.coerce.date().nullish(),
+});
+
+/**
+ * @summary List in-app CON alert notifications for the current user
+ */
+export const listConAlertNotificationsQueryLimitDefault = 50;
+export const listConAlertNotificationsQueryLimitMax = 200;
+
+export const ListConAlertNotificationsQueryParams = zod.object({
+  limit: zod.coerce
+    .number()
+    .max(listConAlertNotificationsQueryLimitMax)
+    .default(listConAlertNotificationsQueryLimitDefault),
+  unread: zod.coerce.boolean().optional(),
+});
+
+export const ListConAlertNotificationsResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      accountId: zod.string().uuid(),
+      userId: zod.string().uuid(),
+      subscriptionId: zod.string().uuid(),
+      conFilingId: zod.string().uuid(),
+      state: zod.string(),
+      modality: zod.string().nullish(),
+      statusNormalized: zod.enum(["approved", "filed"]).nullish(),
+      applicantName: zod.string().nullish(),
+      facilityId: zod.string().uuid().nullish(),
+      readAt: zod.coerce.date().nullish(),
+      createdAt: zod.coerce.date().nullish(),
+    }),
+  ),
+  unread: zod
+    .number()
+    .describe("Total unread alerts for the user across all pages."),
+});
+
+/**
+ * @summary Mark every unread CON alert notification as read
+ */
+export const MarkAllConAlertNotificationsReadResponse = zod.object({
+  marked: zod.number(),
+});
+
+/**
+ * @summary Mark a single CON alert notification as read
+ */
+export const MarkConAlertNotificationReadParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const MarkConAlertNotificationReadResponse = zod.object({
+  id: zod.string().uuid(),
+  accountId: zod.string().uuid(),
+  userId: zod.string().uuid(),
+  subscriptionId: zod.string().uuid(),
+  conFilingId: zod.string().uuid(),
+  state: zod.string(),
+  modality: zod.string().nullish(),
+  statusNormalized: zod.enum(["approved", "filed"]).nullish(),
+  applicantName: zod.string().nullish(),
+  facilityId: zod.string().uuid().nullish(),
+  readAt: zod.coerce.date().nullish(),
+  createdAt: zod.coerce.date().nullish(),
+});
+
+/**
  * @summary List recent Certificate-of-Need filings detected by the CON ingestor
  */
 export const listConFilingsQueryStateMin = 2;

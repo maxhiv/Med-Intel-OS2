@@ -1,9 +1,17 @@
 import { useState } from "react";
-import { useListConFilings } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  useListConFilings,
+  useListConAlertNotifications,
+  useMarkAllConAlertNotificationsRead,
+  useMarkConAlertNotificationRead,
+  getListConAlertNotificationsQueryKey,
+} from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FileSignature, ExternalLink, Building2, AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Bell, FileSignature, ExternalLink, Building2, AlertTriangle, Check, Settings as SettingsIcon } from "lucide-react";
 import { Link } from "wouter";
 
 function formatDate(value: string | Date | null | undefined): string {
@@ -52,6 +60,108 @@ function StatusBadge({
   );
 }
 
+function AlertsBanner() {
+  const queryClient = useQueryClient();
+  const { data } = useListConAlertNotifications({ unread: true, limit: 25 });
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({
+      queryKey: getListConAlertNotificationsQueryKey(),
+    });
+
+  const { mutate: markOne } = useMarkConAlertNotificationRead({
+    mutation: { onSuccess: invalidate },
+  });
+  const { mutate: markAll, isPending: markingAll } =
+    useMarkAllConAlertNotificationsRead({
+      mutation: { onSuccess: invalidate },
+    });
+
+  const unread = data?.unread ?? 0;
+  const items = data?.data ?? [];
+  if (unread === 0) return null;
+
+  return (
+    <Card className="bg-primary/5 border-primary/40">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Bell className="h-5 w-5 text-primary" />
+              {unread} new CON {unread === 1 ? "alert" : "alerts"} for your coverage area
+            </CardTitle>
+            <CardDescription>
+              Filings that match your states, modalities, and approval-stage preferences.
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/settings"
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              data-testid="link-alert-prefs"
+            >
+              <SettingsIcon className="h-3.5 w-3.5" /> Preferences
+            </Link>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => markAll()}
+              disabled={markingAll}
+              data-testid="button-mark-all-read"
+            >
+              <Check className="h-3.5 w-3.5 mr-1" />
+              Mark all read
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <ul className="divide-y divide-border rounded-md border border-border bg-background">
+          {items.slice(0, 8).map((n) => (
+            <li
+              key={n.id}
+              className="flex items-center justify-between gap-4 px-4 py-2 text-sm"
+              data-testid={`alert-row-${n.id}`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="font-mono text-xs text-muted-foreground">
+                  {n.state}
+                </span>
+                <span className="font-medium truncate">
+                  {n.applicantName || "Unknown applicant"}
+                </span>
+                {n.modality && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">
+                    {n.modality}
+                  </span>
+                )}
+                {n.statusNormalized === "approved" && (
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-primary/20 text-primary">
+                    Approved
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => markOne({ id: n.id })}
+                className="text-xs text-muted-foreground hover:text-foreground"
+                data-testid={`button-dismiss-${n.id}`}
+              >
+                Dismiss
+              </button>
+            </li>
+          ))}
+          {items.length > 8 && (
+            <li className="px-4 py-2 text-xs text-muted-foreground">
+              + {items.length - 8} more
+            </li>
+          )}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ConFilingsPage() {
   const [stateFilter, setStateFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -73,6 +183,8 @@ export default function ConFilingsPage() {
           Certificate-of-Need applications detected from state regulators — the highest-intent purchase signal we track.
         </p>
       </div>
+
+      <AlertsBanner />
 
       <Card className="bg-card">
         <CardHeader className="pb-4">

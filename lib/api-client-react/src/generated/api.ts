@@ -36,6 +36,10 @@ import type {
   CampaignDetail,
   CampaignInput,
   CampaignPatchInput,
+  ConAlertNotification,
+  ConAlertNotificationListResponse,
+  ConAlertSubscription,
+  ConAlertSubscriptionInput,
   ConFilingListResponse,
   ConFilingReviewInput,
   ConFilingReviewQueueResponse,
@@ -68,11 +72,13 @@ import type {
   GetTopFacilitiesParams,
   HealthStatus,
   ListBatchesParams,
+  ListConAlertNotificationsParams,
   ListConFilingsParams,
   ListDraftsParams,
   ListFacilitiesParams,
   ListReportRunsParams,
   ListWebhookEventsParams,
+  MarkAllConAlertNotificationsRead200,
   Me,
   NotFoundResponse,
   PlatformStats,
@@ -1269,6 +1275,456 @@ export const useRecomputeSignalScores = <
   TContext
 > => {
   return useMutation(getRecomputeSignalScoresMutationOptions(options));
+};
+
+/**
+ * @summary Get the current user's CON-filing alert preferences
+ */
+export const getGetConAlertSubscriptionUrl = () => {
+  return `/api/me/con-alert-subscription`;
+};
+
+export const getConAlertSubscription = async (
+  options?: RequestInit,
+): Promise<ConAlertSubscription | null> => {
+  return customFetch<ConAlertSubscription | null>(
+    getGetConAlertSubscriptionUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetConAlertSubscriptionQueryKey = () => {
+  return [`/api/me/con-alert-subscription`] as const;
+};
+
+export const getGetConAlertSubscriptionQueryOptions = <
+  TData = Awaited<ReturnType<typeof getConAlertSubscription>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getConAlertSubscription>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetConAlertSubscriptionQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getConAlertSubscription>>
+  > = ({ signal }) => getConAlertSubscription({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getConAlertSubscription>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetConAlertSubscriptionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getConAlertSubscription>>
+>;
+export type GetConAlertSubscriptionQueryError = ErrorType<UnauthorizedResponse>;
+
+/**
+ * @summary Get the current user's CON-filing alert preferences
+ */
+
+export function useGetConAlertSubscription<
+  TData = Awaited<ReturnType<typeof getConAlertSubscription>>,
+  TError = ErrorType<UnauthorizedResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getConAlertSubscription>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetConAlertSubscriptionQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create or update the current user's CON alert preferences
+ */
+export const getUpsertConAlertSubscriptionUrl = () => {
+  return `/api/me/con-alert-subscription`;
+};
+
+export const upsertConAlertSubscription = async (
+  conAlertSubscriptionInput: ConAlertSubscriptionInput,
+  options?: RequestInit,
+): Promise<ConAlertSubscription> => {
+  return customFetch<ConAlertSubscription>(getUpsertConAlertSubscriptionUrl(), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(conAlertSubscriptionInput),
+  });
+};
+
+export const getUpsertConAlertSubscriptionMutationOptions = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof upsertConAlertSubscription>>,
+    TError,
+    { data: BodyType<ConAlertSubscriptionInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof upsertConAlertSubscription>>,
+  TError,
+  { data: BodyType<ConAlertSubscriptionInput> },
+  TContext
+> => {
+  const mutationKey = ["upsertConAlertSubscription"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof upsertConAlertSubscription>>,
+    { data: BodyType<ConAlertSubscriptionInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return upsertConAlertSubscription(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UpsertConAlertSubscriptionMutationResult = NonNullable<
+  Awaited<ReturnType<typeof upsertConAlertSubscription>>
+>;
+export type UpsertConAlertSubscriptionMutationBody =
+  BodyType<ConAlertSubscriptionInput>;
+export type UpsertConAlertSubscriptionMutationError =
+  ErrorType<UnauthorizedResponse>;
+
+/**
+ * @summary Create or update the current user's CON alert preferences
+ */
+export const useUpsertConAlertSubscription = <
+  TError = ErrorType<UnauthorizedResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof upsertConAlertSubscription>>,
+    TError,
+    { data: BodyType<ConAlertSubscriptionInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof upsertConAlertSubscription>>,
+  TError,
+  { data: BodyType<ConAlertSubscriptionInput> },
+  TContext
+> => {
+  return useMutation(getUpsertConAlertSubscriptionMutationOptions(options));
+};
+
+/**
+ * @summary List in-app CON alert notifications for the current user
+ */
+export const getListConAlertNotificationsUrl = (
+  params?: ListConAlertNotificationsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/me/con-alert-notifications?${stringifiedParams}`
+    : `/api/me/con-alert-notifications`;
+};
+
+export const listConAlertNotifications = async (
+  params?: ListConAlertNotificationsParams,
+  options?: RequestInit,
+): Promise<ConAlertNotificationListResponse> => {
+  return customFetch<ConAlertNotificationListResponse>(
+    getListConAlertNotificationsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListConAlertNotificationsQueryKey = (
+  params?: ListConAlertNotificationsParams,
+) => {
+  return [
+    `/api/me/con-alert-notifications`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListConAlertNotificationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listConAlertNotifications>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListConAlertNotificationsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listConAlertNotifications>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListConAlertNotificationsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listConAlertNotifications>>
+  > = ({ signal }) =>
+    listConAlertNotifications(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listConAlertNotifications>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListConAlertNotificationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listConAlertNotifications>>
+>;
+export type ListConAlertNotificationsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List in-app CON alert notifications for the current user
+ */
+
+export function useListConAlertNotifications<
+  TData = Awaited<ReturnType<typeof listConAlertNotifications>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListConAlertNotificationsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listConAlertNotifications>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListConAlertNotificationsQueryOptions(
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Mark every unread CON alert notification as read
+ */
+export const getMarkAllConAlertNotificationsReadUrl = () => {
+  return `/api/me/con-alert-notifications/read-all`;
+};
+
+export const markAllConAlertNotificationsRead = async (
+  options?: RequestInit,
+): Promise<MarkAllConAlertNotificationsRead200> => {
+  return customFetch<MarkAllConAlertNotificationsRead200>(
+    getMarkAllConAlertNotificationsReadUrl(),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getMarkAllConAlertNotificationsReadMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof markAllConAlertNotificationsRead>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof markAllConAlertNotificationsRead>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["markAllConAlertNotificationsRead"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof markAllConAlertNotificationsRead>>,
+    void
+  > = () => {
+    return markAllConAlertNotificationsRead(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type MarkAllConAlertNotificationsReadMutationResult = NonNullable<
+  Awaited<ReturnType<typeof markAllConAlertNotificationsRead>>
+>;
+
+export type MarkAllConAlertNotificationsReadMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Mark every unread CON alert notification as read
+ */
+export const useMarkAllConAlertNotificationsRead = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof markAllConAlertNotificationsRead>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof markAllConAlertNotificationsRead>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(
+    getMarkAllConAlertNotificationsReadMutationOptions(options),
+  );
+};
+
+/**
+ * @summary Mark a single CON alert notification as read
+ */
+export const getMarkConAlertNotificationReadUrl = (id: string) => {
+  return `/api/me/con-alert-notifications/${id}/read`;
+};
+
+export const markConAlertNotificationRead = async (
+  id: string,
+  options?: RequestInit,
+): Promise<ConAlertNotification> => {
+  return customFetch<ConAlertNotification>(
+    getMarkConAlertNotificationReadUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getMarkConAlertNotificationReadMutationOptions = <
+  TError = ErrorType<NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof markConAlertNotificationRead>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof markConAlertNotificationRead>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["markConAlertNotificationRead"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof markConAlertNotificationRead>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return markConAlertNotificationRead(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type MarkConAlertNotificationReadMutationResult = NonNullable<
+  Awaited<ReturnType<typeof markConAlertNotificationRead>>
+>;
+
+export type MarkConAlertNotificationReadMutationError =
+  ErrorType<NotFoundResponse>;
+
+/**
+ * @summary Mark a single CON alert notification as read
+ */
+export const useMarkConAlertNotificationRead = <
+  TError = ErrorType<NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof markConAlertNotificationRead>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof markConAlertNotificationRead>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getMarkConAlertNotificationReadMutationOptions(options));
 };
 
 /**
