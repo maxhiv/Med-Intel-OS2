@@ -11,8 +11,10 @@
  * `RawFiling[]`. A failure in one state does not block the others.
  *
  * Endpoints can be overridden per-state via env vars
- * (`CON_FEED_URL_IL`, `CON_FEED_URL_NY`, `CON_FEED_URL_FL`) so ops can swap
- * portals without a code change when state IT teams move things around.
+ * (`CON_FEED_URL_IL`, `CON_FEED_URL_NY`, `CON_FEED_URL_FL`,
+ * `CON_FEED_URL_NC`, `CON_FEED_URL_NC_DECISIONS`, `CON_FEED_URL_GA`,
+ * `CON_FEED_URL_MI`, `CON_FEED_URL_OH`) so ops can swap portals without
+ * a code change when state IT teams move things around.
  */
 import { and, eq, ilike, or } from "drizzle-orm";
 import {
@@ -316,7 +318,141 @@ export function buildAdapters(): StateAdapter[] {
       "https://ahca.myflorida.com/MCHQ/CON_FA/feed.xml",
       "CON_FEED_URL_FL",
     ),
+    // North Carolina — the DHSR CON Section publishes individual project
+    // PDFs under stable index pages. The HTML index adapter scrapes those
+    // links (filename = applicant + status) and returns a RawFiling per PDF.
+    ncDhsrAdapter(),
+    // Georgia — DCH publishes a department-wide announcements RSS feed
+    // that includes CON-related notices. The downstream pipeline filters by
+    // facility-name match so non-CON items are simply ignored.
+    rssAdapter(
+      "GA",
+      "https://dch.georgia.gov/rss.xml",
+      "CON_FEED_URL_GA",
+    ),
+    // Michigan — LARA / Bureau of Community and Health Systems. No stable
+    // public feed exists today; the env override is the primary path. The
+    // default points at LARA's news index so the adapter still issues a
+    // request (returns 0 items until ops sets CON_FEED_URL_MI).
+    rssAdapter(
+      "MI",
+      "https://www.michigan.gov/lara/news-releases/rss",
+      "CON_FEED_URL_MI",
+    ),
+    // Ohio — ODH CON program. As with MI, no stable public feed; included
+    // so ops can drop in a URL via CON_FEED_URL_OH without a code change.
+    rssAdapter(
+      "OH",
+      "https://odh.ohio.gov/news/rss",
+      "CON_FEED_URL_OH",
+    ),
   ];
+}
+
+// ---------------------------------------------------------------------------
+// NC DHSR adapter
+// ---------------------------------------------------------------------------
+
+/**
+ * North Carolina DHSR Certificate-of-Need section publishes each filing as a
+ * PDF under stable monthly index pages, e.g.
+ *   /dhsr/coneed/reviews/2026/jan/5014 Guilford Clearview Surgical Center No Review.pdf
+ *   /dhsr/coneed/decisions/2025/aug/decisions/Wake J-12649-25 ... Approval.pdf
+ *
+ * The filename is structured "<projectId> <county> <applicant> [<oldId>] <status>".
+ * We scrape the two index pages and emit one RawFiling per linked PDF.
+ */
+function ncDhsrAdapter(): StateAdapter {
+  return {
+    state: "NC",
+    async fetch() {
+      const reviewsUrl =
+        process.env.CON_FEED_URL_NC ??
+        "https://info.ncdhhs.gov/dhsr/coneed/reviews/index.html";
+      const decisionsUrl =
+        process.env.CON_FEED_URL_NC_DECISIONS ??
+        "https://info.ncdhhs.gov/dhsr/coneed/decisions/index.html";
+
+      const out: RawFiling[] = [];
+      const seen = new Set<string>();
+      for (const url of [reviewsUrl, decisionsUrl]) {
+        const html = await fetchText(url);
+        if (!html) continue;
+        const base = new URL(url);
+        const hrefRe = /href=["']([^"']+\.pdf)["']/gi;
+        let m: RegExpExecArray | null;
+        while ((m = hrefRe.exec(html)) !== null) {
+          const raw = m[1];
+          // Skip "findings" PDFs — they pair with a sibling decision PDF that
+          // already covers the same applicant + project, so deduping by URL
+          // alone would still create two filings per project.
+          if (/\/findings\//i.test(raw)) continue;
+          let absolute: string;
+          try {
+            absolute = new URL(raw, base).toString();
+          } catch {
+            continue;
+          }
+          if (seen.has(absolute)) continue;
+          seen.add(absolute);
+
+          const filename = decodeURIComponent(
+            absolute.split("/").pop() ?? "",
+          ).replace(/\.pdf$/i, "");
+          const parsed = parseNcFilename(filename);
+          if (!parsed.applicant) continue;
+
+          const isDecisions = /\/decisions\//i.test(absolute);
+          const approved = /approv/i.test(parsed.status ?? "");
+          out.push({
+            state: "NC",
+            filingUrl: absolute,
+            applicantName: parsed.applicant,
+            rawStatus: parsed.status ?? (isDecisions ? "decision" : "review"),
+            approved: isDecisions ? approved : false,
+            modality: inferModality(parsed.applicant + " " + (parsed.status ?? "")),
+            notes: filename.slice(0, 1000),
+          });
+        }
+      }
+      return out;
+    },
+  };
+}
+
+/**
+ * Parse a NC DHSR CON filename into applicant + status. Filenames look like:
+ *   "5014 Guilford Clearview Surgical Center No Review-CORRECTED"
+ *   "Wake J-12649-25 Wake County Rehabilitation Hospital 210730 Approval"
+ *   "Forsyth G-12640-25 Novant Health Kernersville Medical Center 060620 Approval"
+ *
+ * Strategy: pull the trailing status keyword (Approval/Disapproval/Exemption/
+ * No Review/Withdrawal/etc), strip the leading project-id and county tokens,
+ * and treat what remains as the applicant.
+ */
+function parseNcFilename(name: string): {
+  applicant?: string;
+  status?: string;
+} {
+  const cleaned = name.replace(/\s+/g, " ").trim();
+  const statusRe =
+    /\b(Approval|Disapproval|Exemption|No Review|Withdrawal|Findings|CORRECTED)\b.*$/i;
+  const statusMatch = statusRe.exec(cleaned);
+  const status = statusMatch?.[0]?.replace(/-CORRECTED$/i, "").trim();
+  let head = statusMatch ? cleaned.slice(0, statusMatch.index) : cleaned;
+  // Strip project-id prefixes like "5014 ", "J-12649-25 ", "O-12613-25 ".
+  head = head
+    .replace(/^[A-Z]?-?\d{3,5}(-\d{2})?\s+/i, "")
+    .replace(/^\d{3,5}\s+/, "");
+  // Strip leading NC county name (single capitalised word followed by space).
+  head = head.replace(
+    /^(Alamance|Alexander|Alleghany|Anson|Ashe|Avery|Beaufort|Bertie|Bladen|Brunswick|Buncombe|Burke|Cabarrus|Caldwell|Camden|Carteret|Caswell|Catawba|Chatham|Cherokee|Chowan|Clay|Cleveland|Columbus|Craven|Cumberland|Currituck|Dare|Davidson|Davie|Duplin|Durham|Edgecombe|Forsyth|Franklin|Gaston|Gates|Graham|Granville|Greene|Guilford|Halifax|Harnett|Haywood|Henderson|Hertford|Hoke|Hyde|Iredell|Jackson|Johnston|Jones|Lee|Lenoir|Lincoln|Macon|Madison|Martin|McDowell|Mecklenburg|Mitchell|Montgomery|Moore|Nash|New Hanover|Northampton|Onslow|Orange|Pamlico|Pasquotank|Pender|Perquimans|Person|Pitt|Polk|Randolph|Richmond|Robeson|Rockingham|Rowan|Rutherford|Sampson|Scotland|Stanly|Stokes|Surry|Swain|Transylvania|Tyrrell|Union|Vance|Wake|Warren|Washington|Watauga|Wayne|Wilkes|Wilson|Yadkin|Yancey)\s+/i,
+    "",
+  );
+  // Strip a trailing legacy facility id (run of 5–7 digits at end of head).
+  head = head.replace(/\s+\d{5,7}\s*$/, "").trim();
+  if (head.length < 4) return { status };
+  return { applicant: head.slice(0, 250), status };
 }
 
 // ---------------------------------------------------------------------------
