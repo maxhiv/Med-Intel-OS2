@@ -207,37 +207,63 @@ describe("tenant isolation: account A cannot read account B's data", () => {
   });
 
   // ---- Database-layer (RLS) regression coverage ----
-  // The probe routes deliberately run `SELECT * FROM campaigns` and
-  // `SELECT * FROM outreach_drafts` with NO `WHERE account_id` filter.
-  // If RLS is engaged for the request, the result can only contain rows
-  // owned by the calling account; if a future route forgets its filter,
-  // the database — not the route code — keeps tenants apart.
+  // Each probe route deliberately runs `SELECT *` with NO `WHERE account_id`
+  // filter against an RLS-protected table. If RLS is engaged for the request
+  // the result can only contain rows owned by the calling account; if a
+  // future route forgets its filter, the database — not the route code —
+  // keeps tenants apart. We must keep one assertion per RLS-enabled table
+  // so that disabling a single policy fails loudly here instead of silently
+  // crossing tenants in production.
 
-  it("RLS: unfiltered campaigns query inside a request only returns caller's rows", async () => {
-    const resA = await request(app)
-      .get("/__rls-probe/campaigns")
-      .set(asUser(world.tenantA.userId))
-      .expect(200);
-    const idsA = resA.body.map((c: { id: string }) => c.id);
-    expect(idsA).toContain(world.tenantA.campaignId);
-    expect(idsA).not.toContain(world.tenantB.campaignId);
+  // Every entry corresponds to a table in `RLS_TABLES` in lib/db/src/seed.ts.
+  // `tenantIdKey` selects which seeded id we expect to see (and not see) for
+  // the calling tenant.
+  const probes: Array<{
+    name: string;
+    path: string;
+    tenantIdKey: keyof typeof world.tenantA;
+  }> = [
+    { name: "account_facilities", path: "/__rls-probe/account-facilities", tenantIdKey: "accountFacilityId" },
+    { name: "campaigns", path: "/__rls-probe/campaigns", tenantIdKey: "campaignId" },
+    { name: "campaign_contacts", path: "/__rls-probe/campaign-contacts", tenantIdKey: "campaignContactId" },
+    { name: "sequences", path: "/__rls-probe/sequences", tenantIdKey: "sequenceId" },
+    { name: "contact_enrollments", path: "/__rls-probe/contact-enrollments", tenantIdKey: "enrollmentId" },
+    { name: "outreach_drafts", path: "/__rls-probe/drafts", tenantIdKey: "draftId" },
+    { name: "sync_batches", path: "/__rls-probe/sync-batches", tenantIdKey: "syncBatchId" },
+    { name: "reply_events", path: "/__rls-probe/reply-events", tenantIdKey: "replyEventId" },
+    { name: "report_templates", path: "/__rls-probe/report-templates", tenantIdKey: "templateId" },
+    { name: "report_runs", path: "/__rls-probe/report-runs", tenantIdKey: "reportRunId" },
+    { name: "report_schedules", path: "/__rls-probe/report-schedules", tenantIdKey: "reportScheduleId" },
+  ];
 
-    const resB = await request(app)
-      .get("/__rls-probe/campaigns")
-      .set(asUser(world.tenantB.userId))
-      .expect(200);
-    const idsB = resB.body.map((c: { id: string }) => c.id);
-    expect(idsB).toContain(world.tenantB.campaignId);
-    expect(idsB).not.toContain(world.tenantA.campaignId);
-  });
+  for (const probe of probes) {
+    it(`RLS: unfiltered ${probe.name} query inside a request only returns caller's rows`, async () => {
+      const resA = await request(app)
+        .get(probe.path)
+        .set(asUser(world.tenantA.userId))
+        .expect(200);
+      const idsA = resA.body.map((r: { id: string }) => r.id);
+      expect(idsA).toContain(world.tenantA[probe.tenantIdKey]);
+      expect(idsA).not.toContain(world.tenantB[probe.tenantIdKey]);
 
-  it("RLS: unfiltered outreach_drafts query inside a request only returns caller's rows", async () => {
+      const resB = await request(app)
+        .get(probe.path)
+        .set(asUser(world.tenantB.userId))
+        .expect(200);
+      const idsB = resB.body.map((r: { id: string }) => r.id);
+      expect(idsB).toContain(world.tenantB[probe.tenantIdKey]);
+      expect(idsB).not.toContain(world.tenantA[probe.tenantIdKey]);
+    });
+  }
+
+  it("RLS: report_templates probe still surfaces system templates to every tenant", async () => {
+    // The report_templates policy intentionally allows is_system_template = TRUE
+    // rows through for everyone; lock that in so it isn't accidentally tightened.
     const res = await request(app)
-      .get("/__rls-probe/drafts")
+      .get("/__rls-probe/report-templates")
       .set(asUser(world.tenantA.userId))
       .expect(200);
-    const ids = res.body.map((d: { id: string }) => d.id);
-    expect(ids).toContain(world.tenantA.draftId);
-    expect(ids).not.toContain(world.tenantB.draftId);
+    const ids = res.body.map((r: { id: string }) => r.id);
+    expect(ids).toContain(world.systemTemplateId);
   });
 });

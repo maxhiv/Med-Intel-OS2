@@ -66,26 +66,19 @@ function asUser(userId: string) {
 beforeAll(async () => {
   world = await seedWorld();
 
-  // Build the enrollment chain that the batch runner joins through:
-  //   draft.enrollmentId -> contactEnrollments.campaignContactId
-  //   -> campaignContacts.campaignId -> campaigns.subAccountId
-  const [seq] = await db
-    .insert(sequences)
-    .values({
-      accountId: world.tenantA.accountId,
-      campaignId: world.tenantA.campaignId,
-      name: `seq-${world.tag}`,
-      channel: "email",
-      totalSteps: 1,
-      isActive: true,
-    })
-    .returning();
-  sequenceId = seq.id;
+  // The seeded world already contains a sequence + campaign_contact +
+  // contact_enrollment for tenant A (so every RLS-protected table has at
+  // least one row for the isolation probes). Reuse those instead of
+  // re-inserting — the unique (campaign_id, contact_id) constraint on
+  // campaign_contacts would reject a duplicate insert.
+  sequenceId = world.tenantA.sequenceId;
+  campaignContactId = world.tenantA.campaignContactId;
+  enrollmentId = world.tenantA.enrollmentId;
 
   const [step] = await db
     .insert(sequenceSteps)
     .values({
-      sequenceId: seq.id,
+      sequenceId,
       stepNum: 1,
       channel: "email",
       delayDays: 0,
@@ -95,33 +88,10 @@ beforeAll(async () => {
     .returning();
   stepId = step.id;
 
-  const [cc] = await db
-    .insert(campaignContacts)
-    .values({
-      campaignId: world.tenantA.campaignId,
-      accountId: world.tenantA.accountId,
-      contactId: world.tenantA.contactId,
-      status: "queued",
-    })
-    .returning();
-  campaignContactId = cc.id;
-
-  const [enr] = await db
-    .insert(contactEnrollments)
-    .values({
-      campaignContactId: cc.id,
-      sequenceId: seq.id,
-      accountId: world.tenantA.accountId,
-      currentStep: 0,
-      status: "active",
-    })
-    .returning();
-  enrollmentId = enr.id;
-
   const [draft] = await db
     .insert(outreachDrafts)
     .values({
-      enrollmentId: enr.id,
+      enrollmentId,
       stepId: step.id,
       accountId: world.tenantA.accountId,
       contactId: world.tenantA.contactId,

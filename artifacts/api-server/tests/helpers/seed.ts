@@ -13,11 +13,13 @@ import {
   outreachDrafts,
   reportTemplates,
   reportRuns,
+  reportSchedules,
   draftEdits,
   syncBatches,
   contactEnrollments,
   sequences,
   sequenceSteps,
+  replyEvents,
 } from "@workspace/db";
 
 export type SeededTenant = {
@@ -29,6 +31,16 @@ export type SeededTenant = {
   campaignId: string;
   draftId: string;
   templateId: string;
+  // Extra rows seeded so every RLS-protected table has at least one row
+  // per tenant for the database-layer isolation probes to assert against.
+  accountFacilityId: string;
+  campaignContactId: string;
+  sequenceId: string;
+  enrollmentId: string;
+  syncBatchId: string;
+  replyEventId: string;
+  reportRunId: string;
+  reportScheduleId: string;
 };
 
 export type SeededWorld = {
@@ -88,11 +100,14 @@ async function seedTenant(tag: string, slug: string): Promise<SeededTenant> {
     })
     .returning();
 
-  await db.insert(accountFacilities).values({
-    accountId: account.id,
-    facilityId: facility.id,
-    status: "identified",
-  });
+  const [acctFac] = await db
+    .insert(accountFacilities)
+    .values({
+      accountId: account.id,
+      facilityId: facility.id,
+      status: "identified",
+    })
+    .returning();
 
   const [contact] = await db
     .insert(facilityContacts)
@@ -140,6 +155,83 @@ async function seedTenant(tag: string, slug: string): Promise<SeededTenant> {
     })
     .returning();
 
+  const [seq] = await db
+    .insert(sequences)
+    .values({
+      accountId: account.id,
+      campaignId: campaign.id,
+      name: `${slug} seq`,
+      channel: "email",
+      totalSteps: 0,
+      isActive: true,
+    })
+    .returning();
+
+  const [cc] = await db
+    .insert(campaignContacts)
+    .values({
+      campaignId: campaign.id,
+      accountId: account.id,
+      contactId: contact.id,
+      status: "queued",
+    })
+    .returning();
+
+  const [enr] = await db
+    .insert(contactEnrollments)
+    .values({
+      campaignContactId: cc.id,
+      sequenceId: seq.id,
+      accountId: account.id,
+      currentStep: 0,
+      status: "active",
+    })
+    .returning();
+
+  const [batch] = await db
+    .insert(syncBatches)
+    .values({
+      accountId: account.id,
+      subAccountId: sub.id,
+      campaignId: campaign.id,
+      crmType: "ghl",
+      batchDate: new Date().toISOString().slice(0, 10),
+      status: "pending",
+    })
+    .returning();
+
+  const [reply] = await db
+    .insert(replyEvents)
+    .values({
+      accountId: account.id,
+      draftId: draft.id,
+      crmType: "ghl",
+      eventType: "reply_received",
+      rawPayload: { tag },
+    })
+    .returning();
+
+  const [run] = await db
+    .insert(reportRuns)
+    .values({
+      templateId: template.id,
+      accountId: account.id,
+      triggeredBy: "manual",
+      status: "queued",
+    })
+    .returning();
+
+  const [schedule] = await db
+    .insert(reportSchedules)
+    .values({
+      templateId: template.id,
+      accountId: account.id,
+      cronExpr: "0 9 * * 1",
+      timezone: "America/Chicago",
+      isActive: true,
+    })
+    .returning();
+
   return {
     accountId: account.id,
     userId: user.id,
@@ -149,6 +241,14 @@ async function seedTenant(tag: string, slug: string): Promise<SeededTenant> {
     campaignId: campaign.id,
     draftId: draft.id,
     templateId: template.id,
+    accountFacilityId: acctFac.id,
+    campaignContactId: cc.id,
+    sequenceId: seq.id,
+    enrollmentId: enr.id,
+    syncBatchId: batch.id,
+    replyEventId: reply.id,
+    reportRunId: run.id,
+    reportScheduleId: schedule.id,
   };
 }
 
@@ -204,6 +304,11 @@ export async function teardownWorld(world: SeededWorld): Promise<void> {
     .where(inArray(sequences.accountId, acctIds));
   const seqIds = seqRows.map((r) => r.id);
 
+  // report_schedules.last_run_id -> report_runs, schedules also reference
+  // templates, so drop schedules before runs/templates.
+  await db
+    .delete(reportSchedules)
+    .where(inArray(reportSchedules.accountId, acctIds));
   await db.delete(reportRuns).where(inArray(reportRuns.accountId, acctIds));
   await db
     .delete(reportTemplates)
@@ -212,6 +317,8 @@ export async function teardownWorld(world: SeededWorld): Promise<void> {
     .delete(reportTemplates)
     .where(inArray(reportTemplates.accountId, acctIds));
   await db.delete(syncBatches).where(inArray(syncBatches.accountId, acctIds));
+  // reply_events.draft_id -> outreach_drafts, so drop replies first.
+  await db.delete(replyEvents).where(inArray(replyEvents.accountId, acctIds));
   await db.delete(draftEdits).where(inArray(draftEdits.draftId, draftIds));
   await db
     .delete(outreachDrafts)

@@ -1,6 +1,21 @@
 import express, { type Express, type RequestHandler, Router } from "express";
 import { eq } from "drizzle-orm";
-import { db, users, accounts, campaigns, outreachDrafts } from "@workspace/db";
+import {
+  db,
+  users,
+  accounts,
+  campaigns,
+  outreachDrafts,
+  accountFacilities,
+  campaignContacts,
+  sequences,
+  contactEnrollments,
+  syncBatches,
+  replyEvents,
+  reportTemplates,
+  reportRuns,
+  reportSchedules,
+} from "@workspace/db";
 import { rlsTransactionMiddleware } from "../../src/middlewares/rlsTransaction";
 import { requireAccount } from "../../src/middlewares/auth";
 import healthRouter from "../../src/routes/health";
@@ -59,22 +74,36 @@ const testUserContext: RequestHandler = async (req, _res, next) => {
  * isolation, not just the route code.
  */
 const rlsProbeRouter = Router();
-rlsProbeRouter.get(
-  "/__rls-probe/campaigns",
-  requireAccount,
-  async (_req, res) => {
-    const rows = await db.select().from(campaigns);
-    res.json(rows);
-  },
-);
-rlsProbeRouter.get(
-  "/__rls-probe/drafts",
-  requireAccount,
-  async (_req, res) => {
-    const rows = await db.select().from(outreachDrafts);
-    res.json(rows);
-  },
-);
+
+// Each entry is `[url-segment, drizzle table]`. The handler runs a SELECT *
+// with NO `WHERE account_id` filter — the database (via RLS) is the only
+// thing keeping tenants apart. The list must stay in sync with seed.ts's
+// RLS_TABLES; if a future migration adds another tenant table, add it
+// here too so the regression suite covers it.
+const RLS_PROBE_TABLES = [
+  ["account-facilities", accountFacilities],
+  ["campaigns", campaigns],
+  ["campaign-contacts", campaignContacts],
+  ["sequences", sequences],
+  ["contact-enrollments", contactEnrollments],
+  ["drafts", outreachDrafts],
+  ["sync-batches", syncBatches],
+  ["reply-events", replyEvents],
+  ["report-templates", reportTemplates],
+  ["report-runs", reportRuns],
+  ["report-schedules", reportSchedules],
+] as const;
+
+for (const [segment, table] of RLS_PROBE_TABLES) {
+  rlsProbeRouter.get(
+    `/__rls-probe/${segment}`,
+    requireAccount,
+    async (_req, res) => {
+      const rows = await db.select().from(table);
+      res.json(rows);
+    },
+  );
+}
 
 export function createTestApp(): Express {
   const app = express();
