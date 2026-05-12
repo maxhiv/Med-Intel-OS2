@@ -160,12 +160,16 @@ describe("tenant isolation: account A cannot read account B's data", () => {
     expect(ids).not.toContain(world.tenantB.templateId);
   });
 
-  it("POST /reports/run on B's template as A → 403", async () => {
+  it("POST /reports/run on B's template as A → 404 (RLS hides existence)", async () => {
+    // Pre-RLS this returned 403 (the route SELECT found B's row, then a JS
+    // check rejected it). With database-layer RLS engaged, the SELECT can no
+    // longer see B's row at all, so the route correctly returns 404 — a
+    // strictly stronger result that does not leak the row's existence.
     await request(app)
       .post("/reports/run")
       .set(asUser(world.tenantA.userId))
       .send({ templateId: world.tenantB.templateId })
-      .expect(403);
+      .expect(404);
   });
 
   it("POST /reports/run on system template as A → 200", async () => {
@@ -200,5 +204,40 @@ describe("tenant isolation: account A cannot read account B's data", () => {
       .get("/admin/accounts")
       .set(asUser(world.tenantA.userId))
       .expect(403);
+  });
+
+  // ---- Database-layer (RLS) regression coverage ----
+  // The probe routes deliberately run `SELECT * FROM campaigns` and
+  // `SELECT * FROM outreach_drafts` with NO `WHERE account_id` filter.
+  // If RLS is engaged for the request, the result can only contain rows
+  // owned by the calling account; if a future route forgets its filter,
+  // the database — not the route code — keeps tenants apart.
+
+  it("RLS: unfiltered campaigns query inside a request only returns caller's rows", async () => {
+    const resA = await request(app)
+      .get("/__rls-probe/campaigns")
+      .set(asUser(world.tenantA.userId))
+      .expect(200);
+    const idsA = resA.body.map((c: { id: string }) => c.id);
+    expect(idsA).toContain(world.tenantA.campaignId);
+    expect(idsA).not.toContain(world.tenantB.campaignId);
+
+    const resB = await request(app)
+      .get("/__rls-probe/campaigns")
+      .set(asUser(world.tenantB.userId))
+      .expect(200);
+    const idsB = resB.body.map((c: { id: string }) => c.id);
+    expect(idsB).toContain(world.tenantB.campaignId);
+    expect(idsB).not.toContain(world.tenantA.campaignId);
+  });
+
+  it("RLS: unfiltered outreach_drafts query inside a request only returns caller's rows", async () => {
+    const res = await request(app)
+      .get("/__rls-probe/drafts")
+      .set(asUser(world.tenantA.userId))
+      .expect(200);
+    const ids = res.body.map((d: { id: string }) => d.id);
+    expect(ids).toContain(world.tenantA.draftId);
+    expect(ids).not.toContain(world.tenantB.draftId);
   });
 });

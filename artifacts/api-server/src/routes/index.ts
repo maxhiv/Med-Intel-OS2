@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { userContext } from "../middlewares/auth";
+import { rlsTransactionMiddleware } from "../middlewares/rlsTransaction";
 import healthRouter from "./health";
 import webhooksRouter from "./webhooks";
 import meRouter from "./me";
@@ -24,6 +25,12 @@ router.use(webhooksRouter);
 
 // All routes below need user context.
 router.use(userContext);
+
+// Engage Postgres RLS for the rest of the request lifecycle so tenant
+// isolation is enforced at the database layer even if a route forgets its
+// `WHERE account_id = ?` filter. Skipped for platform admins and for routes
+// without a loaded account (see middleware).
+router.use(rlsTransactionMiddleware);
 
 router.use(meRouter);
 router.use(dashboardRouter);

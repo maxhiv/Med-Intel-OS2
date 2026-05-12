@@ -52,9 +52,49 @@ async function main() {
       console.warn("  ⚠ pgvector not available, semantic search disabled");
     }
 
+    console.log("→ Ensuring app_rls role (non-superuser, non-bypass) for RLS");
+    // Postgres superusers and BYPASSRLS roles ignore RLS even with FORCE.
+    // We create a NOLOGIN, non-superuser, non-bypass role and have the
+    // app `SET LOCAL ROLE app_rls` inside each request transaction so the
+    // policies actually apply.
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_rls') THEN
+          CREATE ROLE app_rls NOLOGIN NOSUPERUSER NOBYPASSRLS;
+        ELSE
+          ALTER ROLE app_rls NOSUPERUSER NOBYPASSRLS;
+        END IF;
+      END $$;
+    `);
+    // Grant on existing + future objects so the role can read/write all
+    // tables; RLS policies still gate which rows it actually sees.
+    await client.query(`GRANT USAGE ON SCHEMA public TO app_rls`);
+    await client.query(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rls`,
+    );
+    await client.query(
+      `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_rls`,
+    );
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA public
+         GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_rls`,
+    );
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA public
+         GRANT USAGE, SELECT ON SEQUENCES TO app_rls`,
+    );
+    // Allow the connecting role to SET ROLE app_rls
+    await client.query(
+      `GRANT app_rls TO CURRENT_USER`,
+    );
+
     console.log("→ Enabling RLS policies");
     for (const table of RLS_TABLES) {
       await client.query(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
+      // FORCE so the table owner / superuser is also subject to policies —
+      // otherwise the app's own DB role bypasses RLS and isolation is moot.
+      await client.query(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
       await client.query(`DROP POLICY IF EXISTS ${table}_isolation ON ${table}`);
       if (table === "report_templates") {
         await client.query(

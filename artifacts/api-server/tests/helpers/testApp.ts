@@ -1,6 +1,8 @@
-import express, { type Express, type RequestHandler } from "express";
+import express, { type Express, type RequestHandler, Router } from "express";
 import { eq } from "drizzle-orm";
-import { db, users, accounts } from "@workspace/db";
+import { db, users, accounts, campaigns, outreachDrafts } from "@workspace/db";
+import { rlsTransactionMiddleware } from "../../src/middlewares/rlsTransaction";
+import { requireAccount } from "../../src/middlewares/auth";
 import healthRouter from "../../src/routes/health";
 import meRouter from "../../src/routes/me";
 import dashboardRouter from "../../src/routes/dashboard";
@@ -49,11 +51,38 @@ const testUserContext: RequestHandler = async (req, _res, next) => {
   }
 };
 
+/**
+ * Test-only router that runs DELIBERATELY-UNFILTERED queries against
+ * RLS-protected tables. The regression test asserts that even without
+ * an application-level `WHERE account_id = ?`, a request can only read
+ * its own tenant's rows — proof that the database layer enforces
+ * isolation, not just the route code.
+ */
+const rlsProbeRouter = Router();
+rlsProbeRouter.get(
+  "/__rls-probe/campaigns",
+  requireAccount,
+  async (_req, res) => {
+    const rows = await db.select().from(campaigns);
+    res.json(rows);
+  },
+);
+rlsProbeRouter.get(
+  "/__rls-probe/drafts",
+  requireAccount,
+  async (_req, res) => {
+    const rows = await db.select().from(outreachDrafts);
+    res.json(rows);
+  },
+);
+
 export function createTestApp(): Express {
   const app = express();
   app.use(express.json());
   app.use(healthRouter);
   app.use(testUserContext);
+  app.use(rlsTransactionMiddleware);
+  app.use(rlsProbeRouter);
   app.use(meRouter);
   app.use(dashboardRouter);
   app.use(facilitiesRouter);
