@@ -186,6 +186,48 @@ router.post(
   },
 );
 
+router.patch(
+  "/admin/enrichment-sources/:source/budget",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const source = parseSource(String(req.params.source));
+    if (!source) {
+      res.status(400).json({ error: "invalid_source" });
+      return;
+    }
+    if ((FREE_ENRICHMENT_SOURCES as readonly string[]).includes(source)) {
+      res.status(400).json({ error: "free_source_has_no_budget" });
+      return;
+    }
+    const raw = req.body?.monthBudgetCents;
+    let budgetMicros: number | null;
+    if (raw === null || raw === undefined) {
+      budgetMicros = null;
+    } else if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+      budgetMicros = Math.round(raw) * 10_000;
+    } else {
+      res.status(400).json({ error: "invalid_monthBudgetCents" });
+      return;
+    }
+    await db
+      .insert(enrichmentSourceApprovals)
+      .values({
+        source,
+        approved: false,
+        monthlyBudgetLimit: budgetMicros,
+      })
+      .onConflictDoUpdate({
+        target: enrichmentSourceApprovals.source,
+        set: {
+          monthlyBudgetLimit: budgetMicros,
+          updatedAt: new Date(),
+        },
+      });
+    const found = (await listAllSources()).find((s) => s.source === source);
+    res.json(found);
+  },
+);
+
 router.get("/admin/platform-stats", requirePlatformAdmin, async (_req, res) => {
   // Note: users field intentionally not in PlatformStats schema
   void users;

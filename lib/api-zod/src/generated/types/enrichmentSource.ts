@@ -10,9 +10,12 @@ export interface EnrichmentSource {
   source: string;
   approved: boolean;
   notes?: string | null;
-  monthlyBudgetLimit?: number | null;
-  currentMonthSpend?: number;
+  /** Monthly cap in cents (null = no cap) */
+  monthBudgetCents?: number | null;
+  /** Month-to-date spend in cents */
+  monthSpendCents: number;
   approvedAt?: Date | null;
+  approvedBy?: string | null;
   envEnabled?: boolean;
   envKeyPresent?: boolean;
   isFreeSource: boolean;

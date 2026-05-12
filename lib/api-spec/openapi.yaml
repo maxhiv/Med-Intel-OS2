@@ -589,6 +589,21 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EnrichmentSource" } } } }
 
+  /admin/enrichment-sources/{source}/budget:
+    patch:
+      operationId: adminSetEnrichmentSourceBudget
+      tags: [admin]
+      summary: Set or clear the monthly budget cap (in cents) for a paid enrichment source
+      parameters:
+        - { name: source, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetSourceBudgetInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EnrichmentSource" } } } }
+
   /admin/platform-stats:
     get:
       operationId: adminPlatformStats
@@ -1125,14 +1140,15 @@ components:
 
     EnrichmentSource:
       type: object
-      required: [source, approved, isFreeSource]
+      required: [source, approved, isFreeSource, monthSpendCents]
       properties:
         source: { type: string }
         approved: { type: boolean }
         notes: { type: string, nullable: true }
-        monthlyBudgetLimit: { type: integer, nullable: true }
-        currentMonthSpend: { type: integer }
+        monthBudgetCents: { type: integer, nullable: true, description: "Monthly cap in cents (null = no cap)" }
+        monthSpendCents: { type: integer, description: "Month-to-date spend in cents" }
         approvedAt: { type: string, format: date-time, nullable: true }
+        approvedBy: { type: string, nullable: true }
         envEnabled: { type: boolean }
         envKeyPresent: { type: boolean }
         isFreeSource: { type: boolean }
@@ -1142,6 +1158,14 @@ components:
       properties:
         notes: { type: string }
         monthlyBudgetLimit: { type: integer }
+
+    SetSourceBudgetInput:
+      type: object
+      properties:
+        monthBudgetCents:
+          type: integer
+          nullable: true
+          description: "Monthly cap in cents. Pass null to clear the cap."
 
     PlatformStats:
       type: object

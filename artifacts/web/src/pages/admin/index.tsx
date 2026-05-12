@@ -1,10 +1,91 @@
-import { useGetMe, useAdminPlatformStats, useAdminListAccounts, useAdminListEnrichmentSources, useAdminApproveEnrichmentSource } from "@workspace/api-client-react";
+import { useState } from "react";
+import { useGetMe, useAdminPlatformStats, useAdminListAccounts, useAdminListEnrichmentSources, useAdminApproveEnrichmentSource, useAdminSetEnrichmentSourceBudget } from "@workspace/api-client-react";
 import { Redirect } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { ShieldAlert, Activity, CheckCircle2, XCircle } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { ShieldAlert, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+
+function formatUsd(cents: number | null | undefined): string {
+  if (cents == null) return "—";
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
+function BudgetEditor({
+  source,
+  initialCents,
+  onSave,
+  isPending,
+}: {
+  source: string;
+  initialCents: number | null;
+  onSave: (cents: number | null) => void;
+  isPending: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(
+    initialCents == null ? "" : (initialCents / 100).toFixed(2),
+  );
+
+  if (!editing) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          setValue(initialCents == null ? "" : (initialCents / 100).toFixed(2));
+          setEditing(true);
+        }}
+        data-testid={`button-edit-budget-${source}`}
+      >
+        Set Budget
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-muted-foreground">$</span>
+      <Input
+        type="number"
+        min={0}
+        step="0.01"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="No cap"
+        className="w-28 h-8"
+        data-testid={`input-budget-${source}`}
+      />
+      <Button
+        size="sm"
+        disabled={isPending}
+        onClick={() => {
+          const trimmed = value.trim();
+          if (trimmed === "") {
+            onSave(null);
+          } else {
+            const dollars = Number(trimmed);
+            if (!Number.isFinite(dollars) || dollars < 0) return;
+            onSave(Math.round(dollars * 100));
+          }
+          setEditing(false);
+        }}
+        data-testid={`button-save-budget-${source}`}
+      >
+        Save
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => setEditing(false)}
+      >
+        Cancel
+      </Button>
+    </div>
+  );
+}
 
 export default function AdminPage() {
   const { data: me, isLoading: loadingMe } = useGetMe();
@@ -15,6 +96,7 @@ export default function AdminPage() {
   const { toast } = useToast();
   
   const approveSource = useAdminApproveEnrichmentSource();
+  const setBudget = useAdminSetEnrichmentSourceBudget();
 
   if (loadingMe) return null;
   if (!me?.isPlatformAdmin) return <Redirect to="/dashboard" />;
@@ -26,6 +108,23 @@ export default function AdminPage() {
         refetchSources();
       }
     });
+  };
+
+  const handleSaveBudget = (source: string, cents: number | null) => {
+    setBudget.mutate(
+      { source, data: { monthBudgetCents: cents } },
+      {
+        onSuccess: () => {
+          toast({
+            title: cents == null ? "Budget cap cleared" : "Monthly budget updated",
+          });
+          refetchSources();
+        },
+        onError: () => {
+          toast({ title: "Failed to update budget", variant: "destructive" });
+        },
+      },
+    );
   };
 
   return (
@@ -66,54 +165,126 @@ export default function AdminPage() {
           <Card>
             <CardHeader>
               <CardTitle>Data Sources</CardTitle>
-              <CardDescription>Manage third-party API integrations for contact enrichment</CardDescription>
+              <CardDescription>Manage third-party API integrations and monthly spend caps</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 {sources && sources.length > 0 ? (
                   sources.map(src => {
                     const isActive = src.isFreeSource ? src.envEnabled : (src.envEnabled && src.envKeyPresent && src.approved);
+                    const spend = src.monthSpendCents ?? 0;
+                    const budget = src.monthBudgetCents ?? null;
+                    const pctOfBudget =
+                      budget == null
+                        ? null
+                        : budget > 0
+                          ? (spend / budget) * 100
+                          : spend > 0
+                            ? 100
+                            : 0;
+                    const overBudget = pctOfBudget != null && pctOfBudget >= 100;
+                    const nearBudget =
+                      pctOfBudget != null && pctOfBudget >= 80 && pctOfBudget < 100;
                     return (
-                      <div key={src.source} className="p-4 border rounded-md flex items-center justify-between">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-lg">{src.source}</span>
-                            {isActive ? (
-                              <span className="text-xs bg-green-500/10 text-green-500 px-2 py-0.5 rounded font-medium flex items-center gap-1"><CheckCircle2 className="h-3 w-3"/> Active</span>
-                            ) : (
-                              <span className="text-xs bg-red-500/10 text-red-500 px-2 py-0.5 rounded font-medium flex items-center gap-1"><XCircle className="h-3 w-3"/> Inactive</span>
-                            )}
-                            {src.isFreeSource && <span className="text-xs bg-blue-500/10 text-blue-500 px-2 py-0.5 rounded font-medium">Free</span>}
-                          </div>
-                          
-                          <div className="flex gap-4 mt-2 text-sm">
-                            <div className="flex items-center gap-1">
-                              {src.envEnabled ? <CheckCircle2 className="h-4 w-4 text-green-500"/> : <XCircle className="h-4 w-4 text-red-500"/>} 
-                              <span className={src.envEnabled ? "text-foreground" : "text-muted-foreground"}>Env Enabled</span>
+                      <div key={src.source} className="p-4 border rounded-md" data-testid={`row-source-${src.source}`}>
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-lg">{src.source}</span>
+                              {isActive ? (
+                                <span className="text-xs bg-green-500/10 text-green-500 px-2 py-0.5 rounded font-medium flex items-center gap-1"><CheckCircle2 className="h-3 w-3"/> Active</span>
+                              ) : (
+                                <span className="text-xs bg-red-500/10 text-red-500 px-2 py-0.5 rounded font-medium flex items-center gap-1"><XCircle className="h-3 w-3"/> Inactive</span>
+                              )}
+                              {src.isFreeSource && <span className="text-xs bg-blue-500/10 text-blue-500 px-2 py-0.5 rounded font-medium">Free</span>}
                             </div>
+
+                            <div className="flex flex-wrap gap-4 mt-2 text-sm">
+                              <div className="flex items-center gap-1">
+                                {src.envEnabled ? <CheckCircle2 className="h-4 w-4 text-green-500"/> : <XCircle className="h-4 w-4 text-red-500"/>}
+                                <span className={src.envEnabled ? "text-foreground" : "text-muted-foreground"}>Env Enabled</span>
+                              </div>
+                              {!src.isFreeSource && (
+                                <>
+                                  <div className="flex items-center gap-1">
+                                    {src.envKeyPresent ? <CheckCircle2 className="h-4 w-4 text-green-500"/> : <XCircle className="h-4 w-4 text-red-500"/>}
+                                    <span className={src.envKeyPresent ? "text-foreground" : "text-muted-foreground"}>API Key</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    {src.approved ? <CheckCircle2 className="h-4 w-4 text-green-500"/> : <XCircle className="h-4 w-4 text-red-500"/>}
+                                    <span className={src.approved ? "text-foreground" : "text-muted-foreground"}>Approved</span>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+
                             {!src.isFreeSource && (
-                              <>
-                                <div className="flex items-center gap-1">
-                                  {src.envKeyPresent ? <CheckCircle2 className="h-4 w-4 text-green-500"/> : <XCircle className="h-4 w-4 text-red-500"/>} 
-                                  <span className={src.envKeyPresent ? "text-foreground" : "text-muted-foreground"}>API Key</span>
+                              <div className="mt-3 space-y-2">
+                                <div className="flex items-center gap-3 text-sm">
+                                  <span className="text-muted-foreground">Month-to-date:</span>
+                                  <span
+                                    className={`font-semibold ${overBudget ? "text-red-500" : nearBudget ? "text-amber-500" : "text-foreground"}`}
+                                    data-testid={`text-spend-${src.source}`}
+                                  >
+                                    {formatUsd(spend)}
+                                  </span>
+                                  <span className="text-muted-foreground">/</span>
+                                  <span data-testid={`text-budget-${src.source}`}>
+                                    {budget == null ? (
+                                      <span className="text-muted-foreground italic">no cap</span>
+                                    ) : (
+                                      formatUsd(budget)
+                                    )}
+                                  </span>
+                                  {pctOfBudget != null && (
+                                    <span
+                                      className={`text-xs ${overBudget ? "text-red-500" : nearBudget ? "text-amber-500" : "text-muted-foreground"}`}
+                                    >
+                                      ({pctOfBudget.toFixed(0)}%)
+                                    </span>
+                                  )}
+                                  {(nearBudget || overBudget) && (
+                                    <span
+                                      className={`text-xs px-2 py-0.5 rounded font-medium flex items-center gap-1 ${overBudget ? "bg-red-500/10 text-red-500" : "bg-amber-500/10 text-amber-500"}`}
+                                      data-testid={`badge-budget-warning-${src.source}`}
+                                    >
+                                      <AlertTriangle className="h-3 w-3" />
+                                      {overBudget ? "Over budget" : "Approaching cap"}
+                                    </span>
+                                  )}
                                 </div>
-                                <div className="flex items-center gap-1">
-                                  {src.approved ? <CheckCircle2 className="h-4 w-4 text-green-500"/> : <XCircle className="h-4 w-4 text-red-500"/>} 
-                                  <span className={src.approved ? "text-foreground" : "text-muted-foreground"}>Approved</span>
-                                </div>
-                              </>
+                                {pctOfBudget != null && (
+                                  <div className="h-1.5 w-full max-w-sm bg-secondary rounded overflow-hidden">
+                                    <div
+                                      className={`h-full ${overBudget ? "bg-red-500" : nearBudget ? "bg-amber-500" : "bg-primary"}`}
+                                      style={{ width: `${Math.min(100, pctOfBudget)}%` }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex flex-col items-end gap-2">
+                            {!src.isFreeSource && !src.approved && (
+                              <Button
+                                onClick={() => handleApprove(src.source)}
+                                disabled={approveSource.isPending}
+                                data-testid={`button-approve-${src.source}`}
+                              >
+                                Approve Source
+                              </Button>
+                            )}
+                            {!src.isFreeSource && (
+                              <BudgetEditor
+                                source={src.source}
+                                initialCents={budget}
+                                onSave={(c) => handleSaveBudget(src.source, c)}
+                                isPending={setBudget.isPending}
+                              />
                             )}
                           </div>
                         </div>
-                        
-                        {!src.isFreeSource && !src.approved && (
-                          <Button 
-                            onClick={() => handleApprove(src.source)}
-                            disabled={approveSource.isPending}
-                          >
-                            Approve Source
-                          </Button>
-                        )}
                       </div>
                     );
                   })

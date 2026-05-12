@@ -1274,9 +1274,13 @@ export const AdminListEnrichmentSourcesResponseItem = zod.object({
   source: zod.string(),
   approved: zod.boolean(),
   notes: zod.string().nullish(),
-  monthlyBudgetLimit: zod.number().nullish(),
-  currentMonthSpend: zod.number().optional(),
+  monthBudgetCents: zod
+    .number()
+    .nullish()
+    .describe("Monthly cap in cents (null = no cap)"),
+  monthSpendCents: zod.number().describe("Month-to-date spend in cents"),
   approvedAt: zod.coerce.date().nullish(),
+  approvedBy: zod.string().nullish(),
   envEnabled: zod.boolean().optional(),
   envKeyPresent: zod.boolean().optional(),
   isFreeSource: zod.boolean(),
@@ -1298,9 +1302,13 @@ export const AdminApproveEnrichmentSourceResponse = zod.object({
   source: zod.string(),
   approved: zod.boolean(),
   notes: zod.string().nullish(),
-  monthlyBudgetLimit: zod.number().nullish(),
-  currentMonthSpend: zod.number().optional(),
+  monthBudgetCents: zod
+    .number()
+    .nullish()
+    .describe("Monthly cap in cents (null = no cap)"),
+  monthSpendCents: zod.number().describe("Month-to-date spend in cents"),
   approvedAt: zod.coerce.date().nullish(),
+  approvedBy: zod.string().nullish(),
   envEnabled: zod.boolean().optional(),
   envKeyPresent: zod.boolean().optional(),
   isFreeSource: zod.boolean(),
@@ -1314,9 +1322,43 @@ export const AdminRevokeEnrichmentSourceResponse = zod.object({
   source: zod.string(),
   approved: zod.boolean(),
   notes: zod.string().nullish(),
-  monthlyBudgetLimit: zod.number().nullish(),
-  currentMonthSpend: zod.number().optional(),
+  monthBudgetCents: zod
+    .number()
+    .nullish()
+    .describe("Monthly cap in cents (null = no cap)"),
+  monthSpendCents: zod.number().describe("Month-to-date spend in cents"),
   approvedAt: zod.coerce.date().nullish(),
+  approvedBy: zod.string().nullish(),
+  envEnabled: zod.boolean().optional(),
+  envKeyPresent: zod.boolean().optional(),
+  isFreeSource: zod.boolean(),
+});
+
+/**
+ * @summary Set or clear the monthly budget cap (in cents) for a paid enrichment source
+ */
+export const AdminSetEnrichmentSourceBudgetParams = zod.object({
+  source: zod.coerce.string(),
+});
+
+export const AdminSetEnrichmentSourceBudgetBody = zod.object({
+  monthBudgetCents: zod
+    .number()
+    .nullish()
+    .describe("Monthly cap in cents. Pass null to clear the cap."),
+});
+
+export const AdminSetEnrichmentSourceBudgetResponse = zod.object({
+  source: zod.string(),
+  approved: zod.boolean(),
+  notes: zod.string().nullish(),
+  monthBudgetCents: zod
+    .number()
+    .nullish()
+    .describe("Monthly cap in cents (null = no cap)"),
+  monthSpendCents: zod.number().describe("Month-to-date spend in cents"),
+  approvedAt: zod.coerce.date().nullish(),
+  approvedBy: zod.string().nullish(),
   envEnabled: zod.boolean().optional(),
   envKeyPresent: zod.boolean().optional(),
   isFreeSource: zod.boolean(),

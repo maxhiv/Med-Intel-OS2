@@ -469,9 +469,12 @@ export interface EnrichmentSource {
   source: string;
   approved: boolean;
   notes?: string | null;
-  monthlyBudgetLimit?: number | null;
-  currentMonthSpend?: number;
+  /** Monthly cap in cents (null = no cap) */
+  monthBudgetCents?: number | null;
+  /** Month-to-date spend in cents */
+  monthSpendCents: number;
   approvedAt?: string | null;
+  approvedBy?: string | null;
   envEnabled?: boolean;
   envKeyPresent?: boolean;
   isFreeSource: boolean;
@@ -480,6 +483,11 @@ export interface EnrichmentSource {
 export interface ApproveSourceInput {
   notes?: string;
   monthlyBudgetLimit?: number;
+}
+
+export interface SetSourceBudgetInput {
+  /** Monthly cap in cents. Pass null to clear the cap. */
+  monthBudgetCents?: number | null;
 }
 
 export interface PlatformStats {

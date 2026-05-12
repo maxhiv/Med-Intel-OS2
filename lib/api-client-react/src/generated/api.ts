@@ -68,6 +68,7 @@ import type {
   SequenceInput,
   SequenceStep,
   SequenceStepInput,
+  SetSourceBudgetInput,
   SignalWithFacility,
   SubAccount,
   SubAccountInput,
@@ -3953,6 +3954,97 @@ export const useAdminRevokeEnrichmentSource = <
   TContext
 > => {
   return useMutation(getAdminRevokeEnrichmentSourceMutationOptions(options));
+};
+
+/**
+ * @summary Set or clear the monthly budget cap (in cents) for a paid enrichment source
+ */
+export const getAdminSetEnrichmentSourceBudgetUrl = (source: string) => {
+  return `/api/admin/enrichment-sources/${source}/budget`;
+};
+
+export const adminSetEnrichmentSourceBudget = async (
+  source: string,
+  setSourceBudgetInput: SetSourceBudgetInput,
+  options?: RequestInit,
+): Promise<EnrichmentSource> => {
+  return customFetch<EnrichmentSource>(
+    getAdminSetEnrichmentSourceBudgetUrl(source),
+    {
+      ...options,
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(setSourceBudgetInput),
+    },
+  );
+};
+
+export const getAdminSetEnrichmentSourceBudgetMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminSetEnrichmentSourceBudget>>,
+    TError,
+    { source: string; data: BodyType<SetSourceBudgetInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminSetEnrichmentSourceBudget>>,
+  TError,
+  { source: string; data: BodyType<SetSourceBudgetInput> },
+  TContext
+> => {
+  const mutationKey = ["adminSetEnrichmentSourceBudget"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminSetEnrichmentSourceBudget>>,
+    { source: string; data: BodyType<SetSourceBudgetInput> }
+  > = (props) => {
+    const { source, data } = props ?? {};
+
+    return adminSetEnrichmentSourceBudget(source, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminSetEnrichmentSourceBudgetMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminSetEnrichmentSourceBudget>>
+>;
+export type AdminSetEnrichmentSourceBudgetMutationBody =
+  BodyType<SetSourceBudgetInput>;
+export type AdminSetEnrichmentSourceBudgetMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Set or clear the monthly budget cap (in cents) for a paid enrichment source
+ */
+export const useAdminSetEnrichmentSourceBudget = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminSetEnrichmentSourceBudget>>,
+    TError,
+    { source: string; data: BodyType<SetSourceBudgetInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminSetEnrichmentSourceBudget>>,
+  TError,
+  { source: string; data: BodyType<SetSourceBudgetInput> },
+  TContext
+> => {
+  return useMutation(getAdminSetEnrichmentSourceBudgetMutationOptions(options));
 };
 
 export const getAdminPlatformStatsUrl = () => {
