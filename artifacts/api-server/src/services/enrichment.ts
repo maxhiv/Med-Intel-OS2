@@ -41,6 +41,7 @@ import {
   validateEmail as bouncerValidateEmail,
   BOUNCER_COST_MICROS,
 } from "./adapters/bouncer";
+import { rolloverSpendCounters } from "./monthRollover";
 
 export type EnrichmentSourceKey =
   | (typeof FREE_ENRICHMENT_SOURCES)[number]
@@ -98,6 +99,10 @@ function envKeyPresentFor(source: string): boolean {
 }
 
 export async function listAllSources(): Promise<SourceStatus[]> {
+  // Lazy reset: if the calendar month has rolled over since the last write,
+  // archive and zero stale counters before reading them so the admin
+  // dashboard never shows last month's accumulated total.
+  await rolloverSpendCounters();
   const approvals = await db.select().from(enrichmentSourceApprovals);
   const approvalMap = new Map(approvals.map((a) => [a.source, a]));
 
@@ -248,6 +253,10 @@ async function recordSpend(
   costMicros: number,
 ): Promise<void> {
   if (costMicros <= 0) return;
+  // Lazy reset before mutating the counter so a payment that lands on the
+  // first call of a new month gets credited to the new period instead of
+  // bumping last month's stale total.
+  await rolloverSpendCounters();
   await db
     .insert(enrichmentSourceApprovals)
     .values({

@@ -9,6 +9,7 @@ import { runAllAccounts } from "../services/batchRunner";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
 import { ingestConFilings } from "../services/conFilingsIngestor";
+import { rolloverSpendCounters } from "../services/monthRollover";
 
 let started = false;
 const locks = new Set<string>();
@@ -95,7 +96,21 @@ export function startCron(): void {
     { timezone: tz },
   );
 
+  // 00:05 UTC daily — proactively roll over the per-source month-to-date
+  // spend counters. Lazy resets in the enrichment service cover normal
+  // traffic, but this guarantees the rollover happens even if no enrichment
+  // calls land on the 1st (e.g. quiet weekend) so the admin dashboard never
+  // shows last month's number stuck on screen.
+  cron.schedule(
+    "5 0 * * *",
+    guarded("rolloverSpendCounters", async () => {
+      const r = await rolloverSpendCounters();
+      logger.info(r, "spend counter rollover complete");
+    }),
+    { timezone: "UTC" },
+  );
+
   logger.info(
-    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings",
+    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings, rolloverSpendCounters",
   );
 }

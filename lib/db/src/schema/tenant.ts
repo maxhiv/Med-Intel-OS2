@@ -76,12 +76,48 @@ export const enrichmentSourceApprovals = pgTable("enrichment_source_approvals", 
   notes: text("notes"),
   monthlyBudgetLimit: bigint("monthly_budget_limit", { mode: "number" }),
   currentMonthSpend: bigint("current_month_spend", { mode: "number" }).default(0),
+  /**
+   * UTC timestamp marking the start of the billing month that
+   * `currentMonthSpend` is currently accumulating into. When the live clock
+   * crosses into a new calendar month, the rollover routine archives the
+   * accumulated spend to `enrichment_source_spend_history`, zeros
+   * `currentMonthSpend`, and advances this pointer.
+   */
+  spendPeriodStart: timestamp("spend_period_start", { withTimezone: true })
+    .notNull()
+    .default(sql`date_trunc('month', now())`),
   lastResetAt: timestamp("last_reset_at", { withTimezone: true }).defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
 export type EnrichmentSourceApproval = typeof enrichmentSourceApprovals.$inferSelect;
+
+/**
+ * Archive of `enrichment_source_approvals.current_month_spend` per closed
+ * billing month. Written by the month-rollover routine so historical totals
+ * survive after the live counter is reset to 0.
+ */
+export const enrichmentSourceSpendHistory = pgTable(
+  "enrichment_source_spend_history",
+  {
+    id: uuid("id").primaryKey().default(sql`uuid_generate_v4()`),
+    source: enrichmentSourceEnum("source").notNull(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    totalSpendMicros: bigint("total_spend_micros", { mode: "number" })
+      .notNull()
+      .default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uniq_spend_history_source_period").on(t.source, t.periodStart),
+    index("idx_spend_history_source").on(t.source),
+  ],
+);
+
+export type EnrichmentSourceSpendHistory =
+  typeof enrichmentSourceSpendHistory.$inferSelect;
 
 export const subAccounts = pgTable(
   "sub_accounts",
