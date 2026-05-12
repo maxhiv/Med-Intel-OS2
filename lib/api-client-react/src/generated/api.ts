@@ -22,6 +22,7 @@ import type {
   AddContactsInput,
   AddContactsResult,
   AdminClearSubAccountCredentials200,
+  AdminEncryptionKeyRotationLogParams,
   AdminListSubAccountsParams,
   ApproveSourceInput,
   BatchRetryResult,
@@ -35,11 +36,15 @@ import type {
   ConflictResponse,
   Contact,
   CrmCredentialSchema,
+  CrmKeyRotationEvent,
   CrmTestResult,
   DashboardSummary,
   Draft,
   DraftEditInput,
   DraftListResponse,
+  EncryptionKeyRotateInput,
+  EncryptionKeyRotateResult,
+  EncryptionKeyStatus,
   EnrichInput,
   EnrichResult,
   EnrichmentSource,
@@ -5106,6 +5111,281 @@ export function useAdminValidationStats<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getAdminValidationStatsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Snapshot of CRM credential encryption key state and rotation backlog
+ */
+export const getAdminEncryptionKeyStatusUrl = () => {
+  return `/api/admin/encryption-key/status`;
+};
+
+export const adminEncryptionKeyStatus = async (
+  options?: RequestInit,
+): Promise<EncryptionKeyStatus> => {
+  return customFetch<EncryptionKeyStatus>(getAdminEncryptionKeyStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getAdminEncryptionKeyStatusQueryKey = () => {
+  return [`/api/admin/encryption-key/status`] as const;
+};
+
+export const getAdminEncryptionKeyStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminEncryptionKeyStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminEncryptionKeyStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAdminEncryptionKeyStatusQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminEncryptionKeyStatus>>
+  > = ({ signal }) => adminEncryptionKeyStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminEncryptionKeyStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminEncryptionKeyStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminEncryptionKeyStatus>>
+>;
+export type AdminEncryptionKeyStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Snapshot of CRM credential encryption key state and rotation backlog
+ */
+
+export function useAdminEncryptionKeyStatus<
+  TData = Awaited<ReturnType<typeof adminEncryptionKeyStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminEncryptionKeyStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminEncryptionKeyStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Re-encrypt all CRM credential blobs under the current primary key
+ */
+export const getAdminEncryptionKeyRotateUrl = () => {
+  return `/api/admin/encryption-key/rotate`;
+};
+
+export const adminEncryptionKeyRotate = async (
+  encryptionKeyRotateInput: EncryptionKeyRotateInput,
+  options?: RequestInit,
+): Promise<EncryptionKeyRotateResult> => {
+  return customFetch<EncryptionKeyRotateResult>(
+    getAdminEncryptionKeyRotateUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(encryptionKeyRotateInput),
+    },
+  );
+};
+
+export const getAdminEncryptionKeyRotateMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminEncryptionKeyRotate>>,
+    TError,
+    { data: BodyType<EncryptionKeyRotateInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminEncryptionKeyRotate>>,
+  TError,
+  { data: BodyType<EncryptionKeyRotateInput> },
+  TContext
+> => {
+  const mutationKey = ["adminEncryptionKeyRotate"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminEncryptionKeyRotate>>,
+    { data: BodyType<EncryptionKeyRotateInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return adminEncryptionKeyRotate(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminEncryptionKeyRotateMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminEncryptionKeyRotate>>
+>;
+export type AdminEncryptionKeyRotateMutationBody =
+  BodyType<EncryptionKeyRotateInput>;
+export type AdminEncryptionKeyRotateMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Re-encrypt all CRM credential blobs under the current primary key
+ */
+export const useAdminEncryptionKeyRotate = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminEncryptionKeyRotate>>,
+    TError,
+    { data: BodyType<EncryptionKeyRotateInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminEncryptionKeyRotate>>,
+  TError,
+  { data: BodyType<EncryptionKeyRotateInput> },
+  TContext
+> => {
+  return useMutation(getAdminEncryptionKeyRotateMutationOptions(options));
+};
+
+/**
+ * @summary Recent CRM credential rotation audit entries
+ */
+export const getAdminEncryptionKeyRotationLogUrl = (
+  params?: AdminEncryptionKeyRotationLogParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/encryption-key/rotation-log?${stringifiedParams}`
+    : `/api/admin/encryption-key/rotation-log`;
+};
+
+export const adminEncryptionKeyRotationLog = async (
+  params?: AdminEncryptionKeyRotationLogParams,
+  options?: RequestInit,
+): Promise<CrmKeyRotationEvent[]> => {
+  return customFetch<CrmKeyRotationEvent[]>(
+    getAdminEncryptionKeyRotationLogUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getAdminEncryptionKeyRotationLogQueryKey = (
+  params?: AdminEncryptionKeyRotationLogParams,
+) => {
+  return [
+    `/api/admin/encryption-key/rotation-log`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getAdminEncryptionKeyRotationLogQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminEncryptionKeyRotationLog>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: AdminEncryptionKeyRotationLogParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminEncryptionKeyRotationLog>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAdminEncryptionKeyRotationLogQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminEncryptionKeyRotationLog>>
+  > = ({ signal }) =>
+    adminEncryptionKeyRotationLog(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminEncryptionKeyRotationLog>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminEncryptionKeyRotationLogQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminEncryptionKeyRotationLog>>
+>;
+export type AdminEncryptionKeyRotationLogQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Recent CRM credential rotation audit entries
+ */
+
+export function useAdminEncryptionKeyRotationLog<
+  TData = Awaited<ReturnType<typeof adminEncryptionKeyRotationLog>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: AdminEncryptionKeyRotationLogParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminEncryptionKeyRotationLog>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminEncryptionKeyRotationLogQueryOptions(
+    params,
+    options,
+  );
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

@@ -1908,3 +1908,94 @@ export const AdminValidationStatsResponseItem = zod.object({
 export const AdminValidationStatsResponse = zod.array(
   AdminValidationStatsResponseItem,
 );
+
+/**
+ * @summary Snapshot of CRM credential encryption key state and rotation backlog
+ */
+export const AdminEncryptionKeyStatusResponse = zod.object({
+  primaryKid: zod
+    .string()
+    .describe("Short fingerprint of the current CRM_ENCRYPTION_KEY."),
+  previousKid: zod
+    .string()
+    .nullish()
+    .describe(
+      "Short fingerprint of CRM_ENCRYPTION_KEY_PREVIOUS, if configured.",
+    ),
+  previousKeyConfigured: zod.boolean(),
+  totalSubAccounts: zod.number(),
+  encryptedCount: zod.number(),
+  needsRotationCount: zod
+    .number()
+    .describe("Encrypted blobs not yet under the current primary key."),
+  plaintextCount: zod
+    .number()
+    .describe(
+      "Legacy unencrypted credential rows. Re-save them via the credentials editor to migrate.",
+    ),
+  emptyCount: zod.number(),
+  lastRunAt: zod.coerce.date().nullish(),
+  lastRunId: zod.string().uuid().nullish(),
+});
+
+/**
+ * @summary Re-encrypt all CRM credential blobs under the current primary key
+ */
+export const AdminEncryptionKeyRotateBody = zod.object({
+  dryRun: zod
+    .boolean()
+    .optional()
+    .describe(
+      "If true, do not write new encrypted blobs but still record audit log entries marked as dryRun.",
+    ),
+});
+
+export const AdminEncryptionKeyRotateResponse = zod.object({
+  runId: zod.string().uuid(),
+  dryRun: zod.boolean(),
+  primaryKid: zod.string(),
+  previousKid: zod.string().nullish(),
+  totalScanned: zod.number(),
+  reEncrypted: zod.number(),
+  alreadyCurrent: zod.number(),
+  skippedPlaintext: zod.number(),
+  failed: zod.number(),
+  failures: zod.array(
+    zod.object({
+      subAccountId: zod.string().uuid(),
+      error: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * @summary Recent CRM credential rotation audit entries
+ */
+export const adminEncryptionKeyRotationLogQueryLimitMax = 500;
+
+export const AdminEncryptionKeyRotationLogQueryParams = zod.object({
+  limit: zod.coerce
+    .number()
+    .min(1)
+    .max(adminEncryptionKeyRotationLogQueryLimitMax)
+    .optional(),
+});
+
+export const AdminEncryptionKeyRotationLogResponseItem = zod.object({
+  id: zod.string().uuid(),
+  runId: zod.string().uuid(),
+  subAccountId: zod.string().uuid().nullish(),
+  status: zod
+    .string()
+    .describe("re_encrypted | already_current | skipped_plaintext | failed"),
+  fromKid: zod.string().nullish(),
+  toKid: zod.string().nullish(),
+  decryptedWithPrevious: zod.boolean().nullish(),
+  dryRun: zod.boolean().nullish(),
+  errorMessage: zod.string().nullish(),
+  performedBy: zod.string().uuid().nullish(),
+  createdAt: zod.coerce.date().nullish(),
+});
+export const AdminEncryptionKeyRotationLogResponse = zod.array(
+  AdminEncryptionKeyRotationLogResponseItem,
+);

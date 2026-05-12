@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
 import { Router, type IRouter, type Request } from "express";
 import { eq, sql, desc, and } from "drizzle-orm";
 import {
@@ -14,16 +14,22 @@ import {
   syncBatches,
   contactValidationLog,
   replyEvents,
+  crmKeyRotationEvents,
   FREE_ENRICHMENT_SOURCES,
   PAID_ENRICHMENT_SOURCES,
 } from "@workspace/db";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { listAllSources } from "../services/enrichment";
 import {
+  blobNeedsRotation,
+  currentKeyId,
   decodeStoredCredentials,
+  decryptJsonWithFallback,
   encryptJson,
   isEncryptedBlob,
   maskSecret,
+  previousKeyId,
+  type EncryptedBlob,
 } from "../services/encryption";
 import {
   getCrmAdapter,
@@ -702,6 +708,219 @@ router.post(
       .set({ crmCredentials: merged, updatedAt: new Date() })
       .where(eq(subAccounts.id, id));
     res.json({ webhookSecret: newSecret, rotatedAt: new Date().toISOString() });
+  },
+);
+
+/**
+ * Status snapshot for the CRM credential encryption key. Lets the admin
+ * UI tell the operator: which key is primary, whether a previous-key
+ * fallback is configured, and how many sub-account credential blobs are
+ * still encrypted under the OLD key (and therefore need a rotation pass).
+ */
+router.get(
+  "/admin/encryption-key/status",
+  requirePlatformAdmin,
+  async (_req, res) => {
+    let primaryKid: string;
+    try {
+      primaryKid = currentKeyId();
+    } catch (err) {
+      res.status(500).json({
+        error: "encryption_key_not_configured",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    const prevKid = previousKeyId();
+
+    const rows = await db
+      .select({ id: subAccounts.id, creds: subAccounts.crmCredentials })
+      .from(subAccounts);
+
+    let total = 0;
+    let encryptedCount = 0;
+    let needsRotation = 0;
+    let plaintextCount = 0;
+    let emptyCount = 0;
+    for (const r of rows) {
+      total++;
+      const c = r.creds;
+      if (c == null || (typeof c === "object" && Object.keys(c as object).length === 0)) {
+        emptyCount++;
+        continue;
+      }
+      if (isEncryptedBlob(c)) {
+        encryptedCount++;
+        if (blobNeedsRotation(c, primaryKid)) needsRotation++;
+      } else {
+        plaintextCount++;
+      }
+    }
+
+    const [lastRun] = await db
+      .select({
+        runId: crmKeyRotationEvents.runId,
+        createdAt: crmKeyRotationEvents.createdAt,
+      })
+      .from(crmKeyRotationEvents)
+      .orderBy(desc(crmKeyRotationEvents.createdAt))
+      .limit(1);
+
+    res.json({
+      primaryKid,
+      previousKid: prevKid,
+      previousKeyConfigured: prevKid !== null,
+      totalSubAccounts: total,
+      encryptedCount,
+      needsRotationCount: needsRotation,
+      plaintextCount,
+      emptyCount,
+      lastRunAt: lastRun?.createdAt ?? null,
+      lastRunId: lastRun?.runId ?? null,
+    });
+  },
+);
+
+/**
+ * Re-encrypt every encrypted `sub_accounts.crm_credentials` blob with
+ * the current primary key. Decryption tries the primary key first, then
+ * falls back to `CRM_ENCRYPTION_KEY_PREVIOUS` so a rotation can run
+ * without downtime: deploy the new key as primary, keep the old one as
+ * `CRM_ENCRYPTION_KEY_PREVIOUS`, run this endpoint, then drop the
+ * previous-key secret once `needsRotationCount` is zero.
+ *
+ * Body: { dryRun?: boolean }. In dry-run mode no rows are updated but
+ * audit log entries are still written so operators can preview impact.
+ */
+router.post(
+  "/admin/encryption-key/rotate",
+  requirePlatformAdmin,
+  async (req, res) => {
+    let primaryKid: string;
+    try {
+      primaryKid = currentKeyId();
+    } catch (err) {
+      res.status(500).json({
+        error: "encryption_key_not_configured",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    const dryRun = Boolean(req.body?.dryRun);
+    const runId = randomUUID();
+    const performedBy = req.currentUser?.id ?? null;
+
+    const rows = await db
+      .select({ id: subAccounts.id, creds: subAccounts.crmCredentials })
+      .from(subAccounts);
+
+    let reEncrypted = 0;
+    let alreadyCurrent = 0;
+    let skippedPlaintext = 0;
+    let failed = 0;
+    const failures: Array<{ subAccountId: string; error: string }> = [];
+
+    for (const r of rows) {
+      const c = r.creds;
+      if (c == null || (typeof c === "object" && Object.keys(c as object).length === 0)) {
+        continue; // empty creds, nothing to do
+      }
+
+      if (!isEncryptedBlob(c)) {
+        // Legacy plaintext row — flag it but don't touch (saving via the
+        // credentials editor is the safe way to migrate these).
+        skippedPlaintext++;
+        await db.insert(crmKeyRotationEvents).values({
+          runId,
+          subAccountId: r.id,
+          status: "skipped_plaintext",
+          fromKid: null,
+          toKid: primaryKid,
+          decryptedWithPrevious: false,
+          dryRun,
+          performedBy,
+        });
+        continue;
+      }
+
+      const blob = c as EncryptedBlob;
+      if (!blobNeedsRotation(blob, primaryKid)) {
+        alreadyCurrent++;
+        continue;
+      }
+
+      try {
+        const { value, decryptedWith } = decryptJsonWithFallback<unknown>(blob);
+        if (!dryRun) {
+          const next = encryptJson(value);
+          await db
+            .update(subAccounts)
+            .set({ crmCredentials: next, updatedAt: new Date() })
+            .where(eq(subAccounts.id, r.id));
+        }
+        reEncrypted++;
+        await db.insert(crmKeyRotationEvents).values({
+          runId,
+          subAccountId: r.id,
+          status: "re_encrypted",
+          fromKid: blob.kid ?? null,
+          toKid: primaryKid,
+          decryptedWithPrevious: decryptedWith === "previous",
+          dryRun,
+          performedBy,
+        });
+      } catch (err) {
+        failed++;
+        const msg = err instanceof Error ? err.message : String(err);
+        failures.push({ subAccountId: r.id, error: msg });
+        await db.insert(crmKeyRotationEvents).values({
+          runId,
+          subAccountId: r.id,
+          status: "failed",
+          fromKid: blob.kid ?? null,
+          toKid: primaryKid,
+          decryptedWithPrevious: false,
+          dryRun,
+          errorMessage: msg.slice(0, 500),
+          performedBy,
+        });
+      }
+    }
+
+    res.json({
+      runId,
+      dryRun,
+      primaryKid,
+      previousKid: previousKeyId(),
+      totalScanned: rows.length,
+      reEncrypted,
+      alreadyCurrent,
+      skippedPlaintext,
+      failed,
+      failures,
+    });
+  },
+);
+
+/**
+ * Recent rotation audit entries. Useful for admins to confirm a rotation
+ * actually swept everything before they remove the previous-key secret.
+ */
+router.get(
+  "/admin/encryption-key/rotation-log",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const rawLimit = Number(req.query.limit);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 && rawLimit <= 500
+      ? Math.floor(rawLimit)
+      : 100;
+    const rows = await db
+      .select()
+      .from(crmKeyRotationEvents)
+      .orderBy(desc(crmKeyRotationEvents.createdAt))
+      .limit(limit);
+    res.json(rows);
   },
 );
 

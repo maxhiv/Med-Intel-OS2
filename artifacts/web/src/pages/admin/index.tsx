@@ -8,6 +8,9 @@ import {
   useAdminSetEnrichmentSourceBudget,
   useAdminValidationStats,
   useAdminListSubAccounts,
+  useAdminEncryptionKeyStatus,
+  useAdminEncryptionKeyRotate,
+  useAdminEncryptionKeyRotationLog,
   type SubAccount,
 } from "@workspace/api-client-react";
 import { Redirect } from "wouter";
@@ -15,7 +18,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ShieldAlert, Activity, CheckCircle2, XCircle, AlertTriangle, KeyRound } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { ShieldAlert, Activity, CheckCircle2, XCircle, AlertTriangle, KeyRound, RefreshCw, Lock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { SubAccountCredentialsDialog } from "./sub-account-credentials";
 import { WebhookConfigRow } from "@/components/admin/webhook-config-row";
@@ -95,6 +99,235 @@ function BudgetEditor({
       >
         Cancel
       </Button>
+    </div>
+  );
+}
+
+function EncryptionKeyPanel() {
+  const { toast } = useToast();
+  const statusQ = useAdminEncryptionKeyStatus();
+  const logQ = useAdminEncryptionKeyRotationLog({ limit: 25 });
+  const rotateMut = useAdminEncryptionKeyRotate();
+
+  const status = statusQ.data;
+  const needsRotation = (status?.needsRotationCount ?? 0) > 0;
+  const previousConfigured = status?.previousKeyConfigured ?? false;
+
+  const handleRotate = (dryRun: boolean) => {
+    if (!dryRun && !confirm(
+      "This will re-encrypt every CRM credential blob with the current primary key. Existing connections keep working throughout. Proceed?",
+    )) return;
+    rotateMut.mutate(
+      { data: { dryRun } },
+      {
+        onSuccess: (res) => {
+          toast({
+            title: dryRun ? "Dry run complete" : "Rotation complete",
+            description: `Re-encrypted ${res.reEncrypted}, already current ${res.alreadyCurrent}, failed ${res.failed}.`,
+            variant: res.failed > 0 ? "destructive" : "default",
+          });
+          statusQ.refetch();
+          logQ.refetch();
+        },
+        onError: (err) => {
+          const e = err as unknown as { error?: string; message?: string };
+          toast({
+            title: "Rotation failed",
+            description: e?.message || e?.error || "Unknown error",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Lock className="h-5 w-5" /> CRM Credential Encryption Key
+          </CardTitle>
+          <CardDescription>
+            Sub-account CRM tokens are encrypted at rest with AES-256-GCM
+            under the <code>CRM_ENCRYPTION_KEY</code> secret. Rotation
+            re-encrypts every stored blob under a new primary key without
+            interrupting in-flight syncs.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Alert>
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>How to rotate safely (no downtime)</AlertTitle>
+            <AlertDescription>
+              <ol className="list-decimal pl-5 space-y-1 mt-2 text-sm">
+                <li>
+                  Generate a new 32-byte key:{" "}
+                  <code>openssl rand -base64 32</code>
+                </li>
+                <li>
+                  Set <code>CRM_ENCRYPTION_KEY_PREVIOUS</code> to the
+                  current value of <code>CRM_ENCRYPTION_KEY</code>, then
+                  set <code>CRM_ENCRYPTION_KEY</code> to the new key.
+                  Redeploy. Existing blobs continue to decrypt via the
+                  fallback while new writes use the new key.
+                </li>
+                <li>
+                  Click <strong>Dry run</strong> below to confirm how many
+                  rows will be touched, then click <strong>Run rotation</strong>.
+                  This re-encrypts every <code>sub_accounts.crm_credentials</code>{" "}
+                  blob with the new primary key and writes one audit log
+                  entry per row.
+                </li>
+                <li>
+                  When <strong>Needs rotation</strong> reaches 0, remove
+                  the <code>CRM_ENCRYPTION_KEY_PREVIOUS</code> secret and
+                  redeploy. The old key is no longer in use anywhere.
+                </li>
+                <li>
+                  Legacy plaintext rows (if any) cannot be auto-rotated —
+                  open each sub-account's credentials editor and re-save
+                  to encrypt them.
+                </li>
+              </ol>
+            </AlertDescription>
+          </Alert>
+
+          {statusQ.isLoading && <div className="text-sm text-muted-foreground">Loading status…</div>}
+          {status && (
+            <div className="grid gap-3 md:grid-cols-3">
+              <Stat label="Primary key id" value={status.primaryKid} mono />
+              <Stat
+                label="Previous key id"
+                value={status.previousKid ?? "— (not configured)"}
+                mono
+              />
+              <Stat
+                label="Needs rotation"
+                value={`${status.needsRotationCount} / ${status.encryptedCount} encrypted`}
+                emphasis={needsRotation ? "warn" : "ok"}
+              />
+              <Stat label="Total sub-accounts" value={String(status.totalSubAccounts)} />
+              <Stat label="Plaintext (legacy)" value={String(status.plaintextCount)} emphasis={status.plaintextCount > 0 ? "warn" : "ok"} />
+              <Stat
+                label="Last rotation"
+                value={status.lastRunAt ? new Date(status.lastRunAt).toLocaleString() : "Never"}
+              />
+            </div>
+          )}
+
+          {previousConfigured && (
+            <Alert>
+              <Activity className="h-4 w-4" />
+              <AlertTitle>Fallback key is active</AlertTitle>
+              <AlertDescription>
+                <code>CRM_ENCRYPTION_KEY_PREVIOUS</code> is configured and
+                will be tried whenever the primary key fails to decrypt a
+                blob. Remove it after rotation is complete.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => handleRotate(true)}
+              disabled={rotateMut.isPending || !status}
+              data-testid="button-key-rotate-dryrun"
+            >
+              <RefreshCw className="h-4 w-4 mr-2" /> Dry run
+            </Button>
+            <Button
+              onClick={() => handleRotate(false)}
+              disabled={rotateMut.isPending || !needsRotation}
+              data-testid="button-key-rotate-run"
+            >
+              <RefreshCw className="h-4 w-4 mr-2" />
+              {rotateMut.isPending ? "Rotating…" : "Run rotation"}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => { statusQ.refetch(); logQ.refetch(); }}
+            >
+              Refresh
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Recent rotation events</CardTitle>
+          <CardDescription>
+            One row per sub-account touched by a rotation run. Grouped by{" "}
+            <code>runId</code>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {!logQ.data || logQ.data.length === 0 ? (
+            <div className="text-sm text-muted-foreground py-4">
+              No rotation events recorded yet.
+            </div>
+          ) : (
+            <div className="text-xs border rounded-md divide-y max-h-96 overflow-auto">
+              {logQ.data.map((ev) => (
+                <div key={ev.id} className="p-2 flex flex-wrap gap-x-4 gap-y-1 items-center">
+                  <span className="font-mono text-muted-foreground">
+                    {ev.createdAt ? new Date(ev.createdAt).toLocaleString() : ""}
+                  </span>
+                  <span
+                    className={
+                      ev.status === "failed"
+                        ? "text-destructive font-bold"
+                        : ev.status === "re_encrypted"
+                          ? "text-green-600 font-bold"
+                          : "text-muted-foreground"
+                    }
+                  >
+                    {ev.status}
+                  </span>
+                  {ev.dryRun && <span className="bg-secondary px-1 rounded">dry-run</span>}
+                  {ev.decryptedWithPrevious && <span className="bg-amber-100 dark:bg-amber-900 px-1 rounded">via previous key</span>}
+                  <span className="font-mono text-muted-foreground">
+                    {ev.fromKid ?? "—"} → {ev.toKid ?? "—"}
+                  </span>
+                  <span className="font-mono text-muted-foreground truncate">
+                    sub: {ev.subAccountId ?? "—"}
+                  </span>
+                  {ev.errorMessage && (
+                    <span className="text-destructive truncate">{ev.errorMessage}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  mono,
+  emphasis,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  emphasis?: "ok" | "warn";
+}) {
+  const valueClass =
+    emphasis === "warn"
+      ? "text-amber-600 dark:text-amber-400"
+      : emphasis === "ok"
+        ? "text-green-600 dark:text-green-400"
+        : "";
+  return (
+    <div className="border rounded-md p-3">
+      <div className="text-xs uppercase text-muted-foreground">{label}</div>
+      <div className={`text-lg ${mono ? "font-mono" : ""} ${valueClass}`}>{value}</div>
     </div>
   );
 }
@@ -181,6 +414,7 @@ export default function AdminPage() {
           <TabsTrigger value="validators">Validators (30d)</TabsTrigger>
           <TabsTrigger value="sub-accounts">Sub-Account CRM Credentials</TabsTrigger>
           <TabsTrigger value="webhooks" data-testid="tab-webhooks">CRM Webhooks</TabsTrigger>
+          <TabsTrigger value="encryption-key">Encryption Key</TabsTrigger>
         </TabsList>
 
         <TabsContent value="sources" className="mt-4">
@@ -476,6 +710,10 @@ export default function AdminPage() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="encryption-key" className="mt-4">
+          <EncryptionKeyPanel />
         </TabsContent>
       </Tabs>
 

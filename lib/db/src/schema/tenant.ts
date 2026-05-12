@@ -149,6 +149,42 @@ export const insertSubAccountSchema = createInsertSchema(subAccounts).omit({
 export type SubAccount = typeof subAccounts.$inferSelect;
 export type InsertSubAccount = z.infer<typeof insertSubAccountSchema>;
 
+/**
+ * Audit trail for CRM credential encryption-key rotations. One row per
+ * sub-account touched by a rotation run (`runId` groups them). Lets ops
+ * answer "when was this row last re-encrypted, by whom, with which key?"
+ * without exposing any plaintext or key material.
+ */
+export const crmKeyRotationEvents = pgTable(
+  "crm_key_rotation_events",
+  {
+    id: uuid("id").primaryKey().default(sql`uuid_generate_v4()`),
+    runId: uuid("run_id").notNull(),
+    subAccountId: uuid("sub_account_id").references(() => subAccounts.id, {
+      onDelete: "set null",
+    }),
+    /** "re_encrypted" | "already_current" | "skipped_plaintext" | "failed" */
+    status: text("status").notNull(),
+    /** Short fingerprint (first 8 hex chars of sha256(key)) of the key that decrypted the blob. */
+    fromKid: text("from_kid"),
+    /** Short fingerprint of the new primary key the blob was re-encrypted under. */
+    toKid: text("to_kid"),
+    /** Was decryption performed with the fallback CRM_ENCRYPTION_KEY_PREVIOUS? */
+    decryptedWithPrevious: boolean("decrypted_with_previous").default(false),
+    dryRun: boolean("dry_run").default(false),
+    errorMessage: text("error_message"),
+    performedBy: uuid("performed_by").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    index("idx_crm_key_rotation_run").on(t.runId),
+    index("idx_crm_key_rotation_sub").on(t.subAccountId),
+    index("idx_crm_key_rotation_created").on(t.createdAt),
+  ],
+);
+
+export type CrmKeyRotationEvent = typeof crmKeyRotationEvents.$inferSelect;
+
 export const accountFacilities = pgTable(
   "account_facilities",
   {

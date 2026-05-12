@@ -682,6 +682,61 @@ export interface RecomputeResult {
   updated?: number;
 }
 
+export interface EncryptionKeyStatus {
+  /** Short fingerprint of the current CRM_ENCRYPTION_KEY. */
+  primaryKid: string;
+  /** Short fingerprint of CRM_ENCRYPTION_KEY_PREVIOUS, if configured. */
+  previousKid?: string | null;
+  previousKeyConfigured: boolean;
+  totalSubAccounts: number;
+  encryptedCount: number;
+  /** Encrypted blobs not yet under the current primary key. */
+  needsRotationCount: number;
+  /** Legacy unencrypted credential rows. Re-save them via the credentials editor to migrate. */
+  plaintextCount: number;
+  emptyCount: number;
+  lastRunAt?: string | null;
+  lastRunId?: string | null;
+}
+
+export interface EncryptionKeyRotateInput {
+  /** If true, do not write new encrypted blobs but still record audit log entries marked as dryRun. */
+  dryRun?: boolean;
+}
+
+export interface EncryptionKeyRotateFailure {
+  subAccountId: string;
+  error: string;
+}
+
+export interface EncryptionKeyRotateResult {
+  runId: string;
+  dryRun: boolean;
+  primaryKid: string;
+  previousKid?: string | null;
+  totalScanned: number;
+  reEncrypted: number;
+  alreadyCurrent: number;
+  skippedPlaintext: number;
+  failed: number;
+  failures: EncryptionKeyRotateFailure[];
+}
+
+export interface CrmKeyRotationEvent {
+  id: string;
+  runId: string;
+  subAccountId?: string | null;
+  /** re_encrypted | already_current | skipped_plaintext | failed */
+  status: string;
+  fromKid?: string | null;
+  toKid?: string | null;
+  decryptedWithPrevious?: boolean | null;
+  dryRun?: boolean | null;
+  errorMessage?: string | null;
+  performedBy?: string | null;
+  createdAt?: string | null;
+}
+
 /**
  * Unauthorized
  */
@@ -801,4 +856,12 @@ export type AdminListSubAccountsParams = {
 export type AdminClearSubAccountCredentials200 = {
   subAccountId: string;
   cleared: boolean;
+};
+
+export type AdminEncryptionKeyRotationLogParams = {
+  /**
+   * @minimum 1
+   * @maximum 500
+   */
+  limit?: number;
 };

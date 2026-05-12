@@ -767,6 +767,42 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/ValidatorStats" }
 
+  /admin/encryption-key/status:
+    get:
+      operationId: adminEncryptionKeyStatus
+      tags: [admin]
+      summary: Snapshot of CRM credential encryption key state and rotation backlog
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EncryptionKeyStatus" } } } }
+
+  /admin/encryption-key/rotate:
+    post:
+      operationId: adminEncryptionKeyRotate
+      tags: [admin]
+      summary: Re-encrypt all CRM credential blobs under the current primary key
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EncryptionKeyRotateInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EncryptionKeyRotateResult" } } } }
+
+  /admin/encryption-key/rotation-log:
+    get:
+      operationId: adminEncryptionKeyRotationLog
+      tags: [admin]
+      summary: Recent CRM credential rotation audit entries
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CrmKeyRotationEvent" }
+
 components:
   responses:
     Unauthorized:
@@ -1521,3 +1557,81 @@ components:
       type: object
       properties:
         updated: { type: integer }
+
+    EncryptionKeyStatus:
+      type: object
+      required:
+        - primaryKid
+        - previousKeyConfigured
+        - totalSubAccounts
+        - encryptedCount
+        - needsRotationCount
+        - plaintextCount
+        - emptyCount
+      properties:
+        primaryKid: { type: string, description: "Short fingerprint of the current CRM_ENCRYPTION_KEY." }
+        previousKid: { type: string, nullable: true, description: "Short fingerprint of CRM_ENCRYPTION_KEY_PREVIOUS, if configured." }
+        previousKeyConfigured: { type: boolean }
+        totalSubAccounts: { type: integer }
+        encryptedCount: { type: integer }
+        needsRotationCount: { type: integer, description: "Encrypted blobs not yet under the current primary key." }
+        plaintextCount: { type: integer, description: "Legacy unencrypted credential rows. Re-save them via the credentials editor to migrate." }
+        emptyCount: { type: integer }
+        lastRunAt: { type: string, format: date-time, nullable: true }
+        lastRunId: { type: string, format: uuid, nullable: true }
+
+    EncryptionKeyRotateInput:
+      type: object
+      properties:
+        dryRun:
+          type: boolean
+          description: "If true, do not write new encrypted blobs but still record audit log entries marked as dryRun."
+
+    EncryptionKeyRotateFailure:
+      type: object
+      required: [subAccountId, error]
+      properties:
+        subAccountId: { type: string, format: uuid }
+        error: { type: string }
+
+    EncryptionKeyRotateResult:
+      type: object
+      required:
+        - runId
+        - dryRun
+        - primaryKid
+        - totalScanned
+        - reEncrypted
+        - alreadyCurrent
+        - skippedPlaintext
+        - failed
+        - failures
+      properties:
+        runId: { type: string, format: uuid }
+        dryRun: { type: boolean }
+        primaryKid: { type: string }
+        previousKid: { type: string, nullable: true }
+        totalScanned: { type: integer }
+        reEncrypted: { type: integer }
+        alreadyCurrent: { type: integer }
+        skippedPlaintext: { type: integer }
+        failed: { type: integer }
+        failures:
+          type: array
+          items: { $ref: "#/components/schemas/EncryptionKeyRotateFailure" }
+
+    CrmKeyRotationEvent:
+      type: object
+      required: [id, runId, status]
+      properties:
+        id: { type: string, format: uuid }
+        runId: { type: string, format: uuid }
+        subAccountId: { type: string, format: uuid, nullable: true }
+        status: { type: string, description: "re_encrypted | already_current | skipped_plaintext | failed" }
+        fromKid: { type: string, nullable: true }
+        toKid: { type: string, nullable: true }
+        decryptedWithPrevious: { type: boolean, nullable: true }
+        dryRun: { type: boolean, nullable: true }
+        errorMessage: { type: string, nullable: true }
+        performedBy: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true }
