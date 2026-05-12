@@ -6,10 +6,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { Account } from "./account";
+import type { SubAccount } from "./subAccount";
 import type { User } from "./user";
 
 export interface Me {
   user: User;
   account?: Account;
   isPlatformAdmin?: boolean;
+  subAccounts?: SubAccount[];
 }

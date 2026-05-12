@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useListCampaigns, useCreateCampaign, useGetDashboardSummary } from "@workspace/api-client-react";
+import { useListCampaigns, useCreateCampaign, useGetMe } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,8 +15,9 @@ export default function CampaignsPage() {
   const [description, setDescription] = useState("");
   const { toast } = useToast();
 
-  const { data: summary } = useGetDashboardSummary();
-  const subAccountId = summary?.myCampaigns ? "default" : "default"; // Mock logic if subaccount needed
+  const { data: me } = useGetMe();
+  const subAccounts = me?.subAccounts ?? [];
+  const [subAccountId, setSubAccountId] = useState<string>("");
 
   const { data: campaignsRes, isLoading, refetch } = useListCampaigns();
   const campaigns = campaignsRes ?? [];
@@ -28,8 +29,17 @@ export default function CampaignsPage() {
       toast({ title: "Name required", variant: "destructive" });
       return;
     }
+    const chosenSubId = subAccountId || subAccounts[0]?.id;
+    if (!chosenSubId) {
+      toast({
+        title: "No sub-account",
+        description: "Ask your platform admin to provision a sub-account before creating a campaign.",
+        variant: "destructive",
+      });
+      return;
+    }
     createCampaign.mutate({
-      data: { name, description, subAccountId: "dummy-subaccount-id" } // we might need a real subaccount ID from me?
+      data: { name, description, subAccountId: chosenSubId },
     }, {
       onSuccess: () => {
         toast({ title: "Campaign created" });
@@ -71,6 +81,26 @@ export default function CampaignsPage() {
                 <label className="text-sm font-medium">Description</label>
                 <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional details" />
               </div>
+              {subAccounts.length > 1 && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Sub-account</label>
+                  <select
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={subAccountId || subAccounts[0]?.id || ""}
+                    onChange={(e) => setSubAccountId(e.target.value)}
+                  >
+                    {subAccounts.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {subAccounts.length === 0 && (
+                <div className="text-sm text-destructive">
+                  No sub-account is provisioned for your account yet. Ask your
+                  platform admin to create one before creating campaigns.
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>Cancel</Button>

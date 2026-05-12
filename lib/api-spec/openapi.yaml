@@ -602,6 +602,9 @@ components:
         user: { $ref: "#/components/schemas/User" }
         account: { $ref: "#/components/schemas/Account" }
         isPlatformAdmin: { type: boolean }
+        subAccounts:
+          type: array
+          items: { $ref: "#/components/schemas/SubAccount" }
 
     User:
       type: object

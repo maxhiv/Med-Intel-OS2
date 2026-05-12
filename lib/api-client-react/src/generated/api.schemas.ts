@@ -37,19 +37,6 @@ export interface Account {
   createdAt?: string;
 }
 
-export interface Me {
-  user: User;
-  account?: Account;
-  isPlatformAdmin?: boolean;
-}
-
-export interface AccountInput {
-  name: string;
-  planTier?: string;
-  defaultCrm?: string;
-  status?: string;
-}
-
 export interface SubAccount {
   id: string;
   accountId: string;
@@ -60,6 +47,20 @@ export interface SubAccount {
   repEmail?: string | null;
   timezone?: string;
   isActive?: boolean;
+}
+
+export interface Me {
+  user: User;
+  account?: Account;
+  isPlatformAdmin?: boolean;
+  subAccounts?: SubAccount[];
+}
+
+export interface AccountInput {
+  name: string;
+  planTier?: string;
+  defaultCrm?: string;
+  status?: string;
 }
 
 export interface SubAccountInput {

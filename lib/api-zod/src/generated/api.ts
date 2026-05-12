@@ -42,6 +42,21 @@ export const GetMeResponse = zod.object({
     })
     .optional(),
   isPlatformAdmin: zod.boolean().optional(),
+  subAccounts: zod
+    .array(
+      zod.object({
+        id: zod.string().uuid(),
+        accountId: zod.string().uuid(),
+        name: zod.string(),
+        crmType: zod.string().nullish(),
+        batchSizeDaily: zod.number().optional(),
+        repName: zod.string().nullish(),
+        repEmail: zod.string().nullish(),
+        timezone: zod.string().optional(),
+        isActive: zod.boolean().optional(),
+      }),
+    )
+    .optional(),
 });
 
 /**
