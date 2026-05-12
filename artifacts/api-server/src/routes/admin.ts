@@ -20,6 +20,7 @@ import {
 } from "@workspace/db";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { listAllSources } from "../services/enrichment";
+import { backfillConFilingFacilities } from "../services/conFacilityMatcher";
 import {
   blobNeedsRotation,
   currentKeyId,
@@ -921,6 +922,19 @@ router.get(
       .orderBy(desc(crmKeyRotationEvents.createdAt))
       .limit(limit);
     res.json(rows);
+  },
+);
+
+router.post(
+  "/admin/con-filings/backfill-facilities",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const rawLimit = Number((req.body ?? {}).limit);
+    const rawEmit = (req.body ?? {}).emitSignals;
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 1000;
+    const emitSignals = rawEmit === false ? false : true;
+    const result = await backfillConFilingFacilities({ limit, emitSignals });
+    res.json(result);
   },
 );
 

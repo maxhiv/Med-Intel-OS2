@@ -16,7 +16,7 @@
  * `CON_FEED_URL_MI`, `CON_FEED_URL_OH`) so ops can swap portals without
  * a code change when state IT teams move things around.
  */
-import { and, eq, ilike, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   db,
   facilities,
@@ -24,12 +24,7 @@ import {
   purchaseSignals,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
-import {
-  candidateTokens,
-  pickBestFacility,
-  DEFAULT_MATCH_THRESHOLD,
-  type FacilityCandidate,
-} from "./facilityNameMatch";
+import { resolveConApplicantToFacility } from "./conFacilityMatcher";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -481,86 +476,6 @@ function parseNcFilename(name: string): {
 // Persistence
 // ---------------------------------------------------------------------------
 
-/** Maximum candidate facilities pulled from the DB before fuzzy scoring. */
-const CANDIDATE_POOL_LIMIT = 50;
-
-/**
- * Try to resolve a tracked facility for a CON filing.
- *
- * Resolution order:
- *   1. Exact NPI match (strongest signal, no state filter needed).
- *   2. Token-based candidate pool from `name`, `doing_business_as` and
- *      `system_name` within the same state, then fuzzy-scored with
- *      `pickBestFacility`. The applicant string is split on `d/b/a`,
- *      `on behalf of`, etc. so parent-system filings still resolve.
- */
-async function findFacility(
-  applicant: string,
-  state: string,
-  npi?: string,
-): Promise<{ id: string } | null> {
-  // 1. Exact NPI match — strongest signal, no state filter needed.
-  if (npi && /^\d{10}$/.test(npi)) {
-    const [byNpi] = await db
-      .select({ id: facilities.id })
-      .from(facilities)
-      .where(eq(facilities.npi, npi))
-      .limit(1);
-    if (byNpi) return byNpi;
-  }
-
-  // 2. Build a small candidate pool keyed on shared meaningful tokens across
-  // any of name / DBA / system_name. We use the longest tokens first so noisy
-  // 4-letter tokens don't blow the pool past the limit.
-  const tokens = candidateTokens(applicant).slice(0, 6);
-  if (tokens.length === 0) return null;
-
-  const tokenConds = tokens.flatMap((t) => {
-    const pattern = `%${t}%`;
-    return [
-      ilike(facilities.name, pattern),
-      ilike(facilities.doingBusinessAs, pattern),
-      ilike(facilities.systemName, pattern),
-    ];
-  });
-
-  const rows = await db
-    .select({
-      id: facilities.id,
-      name: facilities.name,
-      doingBusinessAs: facilities.doingBusinessAs,
-      systemName: facilities.systemName,
-    })
-    .from(facilities)
-    .where(and(eq(facilities.state, state), or(...tokenConds)))
-    .limit(CANDIDATE_POOL_LIMIT);
-
-  if (rows.length === 0) return null;
-
-  const candidates: FacilityCandidate[] = rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    doingBusinessAs: r.doingBusinessAs,
-    systemName: r.systemName,
-  }));
-  const best = pickBestFacility(applicant, candidates, {
-    threshold: DEFAULT_MATCH_THRESHOLD,
-  });
-  if (!best) return null;
-  logger.debug(
-    {
-      applicant,
-      state,
-      facilityId: best.facility.id,
-      score: Number(best.score.toFixed(3)),
-      via: best.matchedField,
-      pool: rows.length,
-    },
-    "con applicant matched to facility",
-  );
-  return { id: best.facility.id };
-}
-
 function toDateOnly(d: Date | undefined): string | undefined {
   if (!d) return undefined;
   return d.toISOString().slice(0, 10);
@@ -622,7 +537,11 @@ export async function ingestConFilings(opts: {
         .limit(1);
       if (existing) continue;
 
-      const facility = await findFacility(raw.applicantName, raw.state, raw.npi);
+      const facility = await resolveConApplicantToFacility(
+        raw.applicantName,
+        raw.state,
+        raw.npi,
+      );
       if (facility) result.facilitiesLinked += 1;
 
       const [inserted] = await db
