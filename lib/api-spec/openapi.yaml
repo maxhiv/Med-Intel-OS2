@@ -676,6 +676,62 @@ paths:
               schema: { $ref: "#/components/schemas/RotateWebhookSecretResult" }
         "404": { description: Not found }
 
+  /sub-accounts/{id}/crm/connection:
+    get:
+      operationId: getSubAccountCrmConnection
+      tags: [admin]
+      summary: Whether a sub-account has CRM credentials connected (rep-accessible)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SubAccountCrmConnection" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /sub-accounts/{id}/crm/oauth/{provider}/start:
+    get:
+      operationId: startSubAccountCrmOauth
+      tags: [admin]
+      summary: Begin a CRM OAuth flow for a sub-account; returns the authorization URL
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: provider, in: path, required: true, schema: { type: string, enum: [hubspot, salesforce] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorizationUrl]
+                properties:
+                  authorizationUrl: { type: string }
+                  redirectUri: { type: string }
+        "400": { description: Bad request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { description: Provider not configured, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /sub-accounts/{id}/crm/credentials:
+    delete:
+      operationId: disconnectSubAccountCrm
+      tags: [admin]
+      summary: Wipe CRM credentials for a sub-account (rep-accessible disconnect)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [subAccountId, cleared]
+                properties:
+                  subAccountId: { type: string, format: uuid }
+                  cleared: { type: boolean }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /admin/users:
     get:
       operationId: adminListUsers
@@ -952,6 +1008,23 @@ components:
         details:
           type: object
           additionalProperties: true
+
+    SubAccountCrmConnection:
+      type: object
+      required: [subAccountId, connected, providers]
+      properties:
+        subAccountId: { type: string, format: uuid }
+        crmType: { type: string, nullable: true }
+        connected: { type: boolean }
+        callbackUri: { type: string, nullable: true }
+        providers:
+          type: array
+          items:
+            type: object
+            required: [provider, configured]
+            properties:
+              provider: { type: string, enum: [hubspot, salesforce] }
+              configured: { type: boolean }
 
     SubAccountInput:
       type: object

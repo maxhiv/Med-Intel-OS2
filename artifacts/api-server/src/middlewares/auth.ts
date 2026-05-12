@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { getAuth } from "@clerk/express";
 import { eq } from "drizzle-orm";
-import { db, users, accounts, type User, type Account } from "@workspace/db";
+import { db, users, accounts, subAccounts, type User, type Account } from "@workspace/db";
 
 declare global {
   namespace Express {
@@ -123,6 +123,50 @@ export const requireAccount: RequestHandler = (req, res, next) => {
     return;
   }
   next();
+};
+
+/**
+ * Resolves the sub-account on `req.params.id` (or `req.params.subAccountId`)
+ * and lets through:
+ *   - platform admins
+ *   - any authenticated user whose `accountId` matches the sub-account's
+ *     parent account (i.e. an account owner / rep self-serving for their
+ *     own sub-account)
+ *
+ * Stashes the loaded row on `res.locals.subAccount` so route handlers
+ * don't have to re-query.
+ */
+export const requireSubAccountAccess: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.currentUser) {
+      res.status(401).json({ error: "unauthenticated" });
+      return;
+    }
+    const id = String(req.params.id ?? req.params.subAccountId ?? "");
+    if (!id) {
+      res.status(400).json({ error: "sub_account_id_required" });
+      return;
+    }
+    const [sub] = await db
+      .select()
+      .from(subAccounts)
+      .where(eq(subAccounts.id, id))
+      .limit(1);
+    if (!sub) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const isOwner =
+      req.currentAccount?.id != null && req.currentAccount.id === sub.accountId;
+    if (!req.isPlatformAdmin && !isOwner) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    res.locals.subAccount = sub;
+    next();
+  } catch (err) {
+    next(err);
+  }
 };
 
 export const requirePlatformAdmin: RequestHandler = (req, res, next) => {

@@ -5,6 +5,9 @@ import {
   useAdminTestSubAccountCredentials,
   useAdminClearSubAccountCredentials,
   useAdminListCrmCredentialSchemas,
+  useGetSubAccountCrmConnection,
+  startSubAccountCrmOauth,
+  disconnectSubAccountCrm,
   type SubAccount,
   type CrmCredentialField,
 } from "@workspace/api-client-react";
@@ -22,7 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Spinner } from "@/components/ui/spinner";
-import { ShieldCheck, ShieldAlert, CheckCircle2, XCircle, KeyRound } from "lucide-react";
+import { ShieldCheck, ShieldAlert, CheckCircle2, XCircle, KeyRound, Link2, Link2Off } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface Props {
@@ -46,9 +49,60 @@ export function SubAccountCredentialsDialog({ subAccount, open, onOpenChange }: 
       queryKey: ["adminGetSubAccountCredentials", subAccount.id],
     },
   });
+  const connectionQuery = useGetSubAccountCrmConnection(subAccount.id, {
+    query: {
+      enabled: open,
+      queryKey: ["getSubAccountCrmConnection", subAccount.id],
+    },
+  });
   const updateMut = useAdminUpdateSubAccountCredentials();
   const testMut = useAdminTestSubAccountCredentials();
   const clearMut = useAdminClearSubAccountCredentials();
+  const [oauthBusy, setOauthBusy] = useState<string | null>(null);
+
+  const handleConnect = async (provider: "hubspot" | "salesforce") => {
+    setOauthBusy(provider);
+    try {
+      const res = await startSubAccountCrmOauth(subAccount.id, provider);
+      if (res?.authorizationUrl) {
+        window.location.href = res.authorizationUrl;
+        return;
+      }
+      toast({
+        title: "Could not start connection",
+        description: "No authorization URL was returned.",
+        variant: "destructive",
+      });
+    } catch (err) {
+      const e = err as { error?: string; message?: string };
+      toast({
+        title: "Could not start connection",
+        description: e?.message || e?.error || `OAuth not configured for ${provider}.`,
+        variant: "destructive",
+      });
+    } finally {
+      setOauthBusy(null);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    if (!confirm("Disconnect this sub-account from its CRM? Tokens will be wiped.")) return;
+    try {
+      await disconnectSubAccountCrm(subAccount.id);
+      toast({ title: "CRM disconnected" });
+      credsQuery.refetch();
+      connectionQuery.refetch();
+      setDraft({});
+      setTestResult(null);
+    } catch (err) {
+      const e = err as { error?: string; message?: string };
+      toast({
+        title: "Disconnect failed",
+        description: e?.message || e?.error || "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
 
   // Reset state when re-opened or sub-account changes.
   useEffect(() => {
@@ -157,6 +211,74 @@ export function SubAccountCredentialsDialog({ subAccount, open, onOpenChange }: 
               )}
             </div>
           </div>
+
+          {(crmType === "hubspot" || crmType === "salesforce") && (
+            <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm">
+                  <div className="font-medium flex items-center gap-2">
+                    <Link2 className="h-4 w-4" /> Guided OAuth
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Skip pasting tokens — sign in with{" "}
+                    {crmType === "hubspot" ? "HubSpot" : "Salesforce"} and we'll
+                    store the access &amp; refresh tokens encrypted at rest.
+                  </p>
+                </div>
+                {(() => {
+                  const providerInfo = connectionQuery.data?.providers.find(
+                    (p) => p.provider === crmType,
+                  );
+                  const configured = providerInfo?.configured ?? true;
+                  const alreadyConnected =
+                    connectionQuery.data?.connected &&
+                    connectionQuery.data.crmType === crmType;
+                  return (
+                    <div className="flex items-center gap-2">
+                      {alreadyConnected && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleDisconnect}
+                          data-testid={`button-disconnect-${crmType}`}
+                        >
+                          <Link2Off className="h-4 w-4 mr-1" /> Disconnect
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        onClick={() => handleConnect(crmType as "hubspot" | "salesforce")}
+                        disabled={oauthBusy === crmType || !configured}
+                        data-testid={`button-connect-${crmType}`}
+                        title={
+                          configured
+                            ? undefined
+                            : "Server is missing OAuth client credentials for this provider"
+                        }
+                      >
+                        {oauthBusy === crmType ? (
+                          <Spinner className="mr-2 h-4 w-4" />
+                        ) : (
+                          <Link2 className="h-4 w-4 mr-2" />
+                        )}
+                        {alreadyConnected
+                          ? "Reconnect"
+                          : `Connect ${crmType === "hubspot" ? "HubSpot" : "Salesforce"}`}
+                      </Button>
+                    </div>
+                  );
+                })()}
+              </div>
+              {connectionQuery.data?.providers.find((p) => p.provider === crmType)?.configured ===
+                false && (
+                <p className="text-xs text-amber-600">
+                  Server-side OAuth client isn't configured for {crmType}. Ask
+                  the platform admin to set the matching environment variables,
+                  or paste a long-lived token below for now.
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label>CRM Type</Label>

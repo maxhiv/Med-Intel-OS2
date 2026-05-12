@@ -1722,6 +1722,51 @@ export const AdminRotateSubAccountWebhookSecretResponse = zod.object({
   rotatedAt: zod.coerce.date().optional(),
 });
 
+/**
+ * @summary Whether a sub-account has CRM credentials connected (rep-accessible)
+ */
+export const GetSubAccountCrmConnectionParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const GetSubAccountCrmConnectionResponse = zod.object({
+  subAccountId: zod.string().uuid(),
+  crmType: zod.string().nullish(),
+  connected: zod.boolean(),
+  callbackUri: zod.string().nullish(),
+  providers: zod.array(
+    zod.object({
+      provider: zod.enum(["hubspot", "salesforce"]),
+      configured: zod.boolean(),
+    }),
+  ),
+});
+
+/**
+ * @summary Begin a CRM OAuth flow for a sub-account; returns the authorization URL
+ */
+export const StartSubAccountCrmOauthParams = zod.object({
+  id: zod.coerce.string().uuid(),
+  provider: zod.enum(["hubspot", "salesforce"]),
+});
+
+export const StartSubAccountCrmOauthResponse = zod.object({
+  authorizationUrl: zod.string(),
+  redirectUri: zod.string().optional(),
+});
+
+/**
+ * @summary Wipe CRM credentials for a sub-account (rep-accessible disconnect)
+ */
+export const DisconnectSubAccountCrmParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const DisconnectSubAccountCrmResponse = zod.object({
+  subAccountId: zod.string().uuid(),
+  cleared: zod.boolean(),
+});
+
 export const AdminListUsersResponseItem = zod.object({
   id: zod.string().uuid(),
   email: zod.string(),

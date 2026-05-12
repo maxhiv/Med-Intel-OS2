@@ -14,6 +14,7 @@ import draftsRouter from "./drafts";
 import batchesRouter from "./batches";
 import reportsRouter from "./reports";
 import adminRouter from "./admin";
+import oauthRouter from "./oauth";
 
 const router: IRouter = Router();
 
@@ -43,5 +44,6 @@ router.use(draftsRouter);
 router.use(batchesRouter);
 router.use(reportsRouter);
 router.use(adminRouter);
+router.use(oauthRouter);
 
 export default router;

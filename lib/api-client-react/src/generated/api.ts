@@ -39,6 +39,7 @@ import type {
   CrmKeyRotationEvent,
   CrmTestResult,
   DashboardSummary,
+  DisconnectSubAccountCrm200,
   Draft,
   DraftEditInput,
   DraftListResponse,
@@ -55,6 +56,7 @@ import type {
   FacilityListResponse,
   FacilityNpiInput,
   FacilityUpdateInput,
+  ForbiddenResponse,
   GenerateDraftsResult,
   GetRecentSignalsParams,
   GetTopFacilitiesParams,
@@ -83,9 +85,11 @@ import type {
   SequenceStepInput,
   SetSourceBudgetInput,
   SignalWithFacility,
+  StartSubAccountCrmOauth200,
   SubAccount,
   SubAccountCredentialState,
   SubAccountCredentialUpdate,
+  SubAccountCrmConnection,
   SubAccountInput,
   SubAccountWebhookConfig,
   SyncBatch,
@@ -4484,6 +4488,296 @@ export const useAdminRotateSubAccountWebhookSecret = <
   return useMutation(
     getAdminRotateSubAccountWebhookSecretMutationOptions(options),
   );
+};
+
+/**
+ * @summary Whether a sub-account has CRM credentials connected (rep-accessible)
+ */
+export const getGetSubAccountCrmConnectionUrl = (id: string) => {
+  return `/api/sub-accounts/${id}/crm/connection`;
+};
+
+export const getSubAccountCrmConnection = async (
+  id: string,
+  options?: RequestInit,
+): Promise<SubAccountCrmConnection> => {
+  return customFetch<SubAccountCrmConnection>(
+    getGetSubAccountCrmConnectionUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetSubAccountCrmConnectionQueryKey = (id: string) => {
+  return [`/api/sub-accounts/${id}/crm/connection`] as const;
+};
+
+export const getGetSubAccountCrmConnectionQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSubAccountCrmConnection>>,
+  TError = ErrorType<ForbiddenResponse | NotFoundResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getSubAccountCrmConnection>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetSubAccountCrmConnectionQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getSubAccountCrmConnection>>
+  > = ({ signal }) =>
+    getSubAccountCrmConnection(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getSubAccountCrmConnection>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetSubAccountCrmConnectionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getSubAccountCrmConnection>>
+>;
+export type GetSubAccountCrmConnectionQueryError = ErrorType<
+  ForbiddenResponse | NotFoundResponse
+>;
+
+/**
+ * @summary Whether a sub-account has CRM credentials connected (rep-accessible)
+ */
+
+export function useGetSubAccountCrmConnection<
+  TData = Awaited<ReturnType<typeof getSubAccountCrmConnection>>,
+  TError = ErrorType<ForbiddenResponse | NotFoundResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getSubAccountCrmConnection>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetSubAccountCrmConnectionQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Begin a CRM OAuth flow for a sub-account; returns the authorization URL
+ */
+export const getStartSubAccountCrmOauthUrl = (
+  id: string,
+  provider: "hubspot" | "salesforce",
+) => {
+  return `/api/sub-accounts/${id}/crm/oauth/${provider}/start`;
+};
+
+export const startSubAccountCrmOauth = async (
+  id: string,
+  provider: "hubspot" | "salesforce",
+  options?: RequestInit,
+): Promise<StartSubAccountCrmOauth200> => {
+  return customFetch<StartSubAccountCrmOauth200>(
+    getStartSubAccountCrmOauthUrl(id, provider),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getStartSubAccountCrmOauthQueryKey = (
+  id: string,
+  provider: "hubspot" | "salesforce",
+) => {
+  return [`/api/sub-accounts/${id}/crm/oauth/${provider}/start`] as const;
+};
+
+export const getStartSubAccountCrmOauthQueryOptions = <
+  TData = Awaited<ReturnType<typeof startSubAccountCrmOauth>>,
+  TError = ErrorType<Error | ForbiddenResponse>,
+>(
+  id: string,
+  provider: "hubspot" | "salesforce",
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof startSubAccountCrmOauth>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getStartSubAccountCrmOauthQueryKey(id, provider);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof startSubAccountCrmOauth>>
+  > = ({ signal }) =>
+    startSubAccountCrmOauth(id, provider, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!(id && provider),
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof startSubAccountCrmOauth>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type StartSubAccountCrmOauthQueryResult = NonNullable<
+  Awaited<ReturnType<typeof startSubAccountCrmOauth>>
+>;
+export type StartSubAccountCrmOauthQueryError = ErrorType<
+  Error | ForbiddenResponse
+>;
+
+/**
+ * @summary Begin a CRM OAuth flow for a sub-account; returns the authorization URL
+ */
+
+export function useStartSubAccountCrmOauth<
+  TData = Awaited<ReturnType<typeof startSubAccountCrmOauth>>,
+  TError = ErrorType<Error | ForbiddenResponse>,
+>(
+  id: string,
+  provider: "hubspot" | "salesforce",
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof startSubAccountCrmOauth>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getStartSubAccountCrmOauthQueryOptions(
+    id,
+    provider,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Wipe CRM credentials for a sub-account (rep-accessible disconnect)
+ */
+export const getDisconnectSubAccountCrmUrl = (id: string) => {
+  return `/api/sub-accounts/${id}/crm/credentials`;
+};
+
+export const disconnectSubAccountCrm = async (
+  id: string,
+  options?: RequestInit,
+): Promise<DisconnectSubAccountCrm200> => {
+  return customFetch<DisconnectSubAccountCrm200>(
+    getDisconnectSubAccountCrmUrl(id),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDisconnectSubAccountCrmMutationOptions = <
+  TError = ErrorType<ForbiddenResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof disconnectSubAccountCrm>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof disconnectSubAccountCrm>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["disconnectSubAccountCrm"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof disconnectSubAccountCrm>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return disconnectSubAccountCrm(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DisconnectSubAccountCrmMutationResult = NonNullable<
+  Awaited<ReturnType<typeof disconnectSubAccountCrm>>
+>;
+
+export type DisconnectSubAccountCrmMutationError = ErrorType<
+  ForbiddenResponse | NotFoundResponse
+>;
+
+/**
+ * @summary Wipe CRM credentials for a sub-account (rep-accessible disconnect)
+ */
+export const useDisconnectSubAccountCrm = <
+  TError = ErrorType<ForbiddenResponse | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof disconnectSubAccountCrm>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof disconnectSubAccountCrm>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getDisconnectSubAccountCrmMutationOptions(options));
 };
 
 export const getAdminListUsersUrl = () => {

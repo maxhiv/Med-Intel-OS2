@@ -110,6 +110,27 @@ export interface CrmTestResult {
   details?: CrmTestResultDetails;
 }
 
+export type SubAccountCrmConnectionProvidersItemProvider =
+  (typeof SubAccountCrmConnectionProvidersItemProvider)[keyof typeof SubAccountCrmConnectionProvidersItemProvider];
+
+export const SubAccountCrmConnectionProvidersItemProvider = {
+  hubspot: "hubspot",
+  salesforce: "salesforce",
+} as const;
+
+export type SubAccountCrmConnectionProvidersItem = {
+  provider: SubAccountCrmConnectionProvidersItemProvider;
+  configured: boolean;
+};
+
+export interface SubAccountCrmConnection {
+  subAccountId: string;
+  crmType?: string | null;
+  connected: boolean;
+  callbackUri?: string | null;
+  providers: SubAccountCrmConnectionProvidersItem[];
+}
+
 export interface SubAccountInput {
   accountId: string;
   name: string;
@@ -854,6 +875,16 @@ export type AdminListSubAccountsParams = {
 };
 
 export type AdminClearSubAccountCredentials200 = {
+  subAccountId: string;
+  cleared: boolean;
+};
+
+export type StartSubAccountCrmOauth200 = {
+  authorizationUrl: string;
+  redirectUri?: string;
+};
+
+export type DisconnectSubAccountCrm200 = {
   subAccountId: string;
   cleared: boolean;
 };

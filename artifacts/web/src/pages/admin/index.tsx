@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   useGetMe,
   useAdminPlatformStats,
@@ -344,6 +344,41 @@ export default function AdminPage() {
   const { toast } = useToast();
 
   const [credsTarget, setCredsTarget] = useState<SubAccount | null>(null);
+
+  // Surface the result of an OAuth callback redirect (?crmConnected=1 or
+  // ?crmConnectError=...) so the rep sees a toast and the URL is cleaned up.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ok = params.get("crmConnected");
+    const err = params.get("crmConnectError");
+    const provider = params.get("provider");
+    const subAccountId = params.get("subAccountId");
+    if (ok || err) {
+      if (ok) {
+        toast({
+          title: `${provider ? provider.toUpperCase() : "CRM"} connected`,
+          description: subAccountId
+            ? `Tokens stored encrypted for sub-account ${subAccountId.slice(0, 8)}…`
+            : "Tokens stored encrypted at rest.",
+        });
+      } else {
+        toast({
+          title: "CRM connection failed",
+          description: err ?? "Unknown error",
+          variant: "destructive",
+        });
+      }
+      params.delete("crmConnected");
+      params.delete("crmConnectError");
+      params.delete("provider");
+      params.delete("subAccountId");
+      const next =
+        window.location.pathname + (params.toString() ? `?${params.toString()}` : "");
+      window.history.replaceState(null, "", next);
+    }
+    // toast is stable from useToast; safe to omit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const approveSource = useAdminApproveEnrichmentSource();
   const setBudget = useAdminSetEnrichmentSourceBudget();
