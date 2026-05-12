@@ -1098,6 +1098,12 @@ components:
         myCampaigns: { type: integer }
         avgSignalScore: { type: number }
         signalsByType: { type: array, items: { type: object, properties: { signalType: { type: string }, count: { type: integer } } } }
+        sentCount: { type: integer, description: "Drafts synced to a CRM in the last 30 days" }
+        openedCount: { type: integer }
+        repliedCount: { type: integer }
+        bouncedCount: { type: integer }
+        replyRate: { type: number, description: "repliedCount / sentCount * 100, last 30 days" }
+        bounceRate: { type: number }
 
     EnrichInput:
       type: object

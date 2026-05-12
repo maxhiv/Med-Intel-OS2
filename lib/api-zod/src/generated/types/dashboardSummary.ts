@@ -18,4 +18,12 @@ export interface DashboardSummary {
   myCampaigns?: number;
   avgSignalScore?: number;
   signalsByType?: DashboardSummarySignalsByTypeItem[];
+  /** Drafts synced to a CRM in the last 30 days */
+  sentCount?: number;
+  openedCount?: number;
+  repliedCount?: number;
+  bouncedCount?: number;
+  /** repliedCount / sentCount * 100, last 30 days */
+  replyRate?: number;
+  bounceRate?: number;
 }

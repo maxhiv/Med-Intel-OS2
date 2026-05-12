@@ -1,6 +1,6 @@
 import { useGetDashboardSummary, useGetRecentSignals, useGetTopFacilities } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Building2, Users, Target, Activity, CheckCircle2, AlertTriangle, ArrowRight } from "lucide-react";
+import { Building2, Users, Target, Activity, CheckCircle2, AlertTriangle, ArrowRight, MailCheck, MailX } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -99,6 +99,60 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="bg-card">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Outreach Engagement</CardTitle>
+            <CardDescription>Reply and bounce rates over the last 30 days, fed back into facility scores</CardDescription>
+          </div>
+          <Activity className="h-4 w-4 text-muted-foreground" />
+        </CardHeader>
+        <CardContent>
+          {loadingSummary ? (
+            <div className="grid gap-4 md:grid-cols-4">
+              {Array(4).fill(0).map((_, i) => (
+                <Skeleton key={i} className="h-16 w-full" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-4">
+              <div>
+                <div className="text-xs text-muted-foreground uppercase tracking-wide">Sent</div>
+                <div className="text-2xl font-bold mt-1">{summary?.sentCount ?? 0}</div>
+                <p className="text-xs text-muted-foreground mt-1">Synced to CRM</p>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                  <MailCheck className="h-3 w-3 text-green-500" /> Reply rate
+                </div>
+                <div className="text-2xl font-bold mt-1 text-green-500">
+                  {(summary?.replyRate ?? 0).toFixed(1)}%
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {summary?.repliedCount ?? 0} replies received
+                </p>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground uppercase tracking-wide">Opens</div>
+                <div className="text-2xl font-bold mt-1">{summary?.openedCount ?? 0}</div>
+                <p className="text-xs text-muted-foreground mt-1">Trackable opens</p>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                  <MailX className="h-3 w-3 text-destructive" /> Bounce rate
+                </div>
+                <div className="text-2xl font-bold mt-1 text-destructive">
+                  {(summary?.bounceRate ?? 0).toFixed(1)}%
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {summary?.bouncedCount ?? 0} bounced / unsubscribed
+                </p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
         <Card className="col-span-4 bg-card">

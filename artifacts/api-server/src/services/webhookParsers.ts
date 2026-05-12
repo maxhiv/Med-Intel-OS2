@@ -25,6 +25,7 @@ export type CanonicalEventType =
   | "opened"
   | "replied"
   | "bounced"
+  | "unsubscribed"
   | "task_completed"
   | "other";
 
@@ -165,6 +166,9 @@ function asDate(v: unknown): Date | null {
 
 function classify(rawType: string): CanonicalEventType {
   const t = rawType.toLowerCase();
+  if (t.includes("unsub") || t.includes("optout") || t.includes("opt_out") || t.includes("opt-out")) {
+    return "unsubscribed";
+  }
   if (t.includes("bounce")) return "bounced";
   if (t.includes("reply") || t.includes("inboundmessage") || t.includes("inbound_message")) {
     return "replied";

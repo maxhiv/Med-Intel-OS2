@@ -26,6 +26,7 @@ import { logger } from "../lib/logger";
 import { parseEvents, verifySignature } from "../services/webhookParsers";
 import type { CrmType } from "../services/crmAdapters";
 import { classifyPendingReplies } from "../services/replyClassifier";
+import { recomputeEngagementForAccountFacility } from "../services/signalScorer";
 
 const router: IRouter = Router();
 
@@ -270,6 +271,7 @@ async function processEvent(
   }
 
   // Stamp engagement timestamp on the draft for canonical events.
+  let affectedFacilityId: string | null = null;
   if (draftId) {
     const ts = e.occurredAt ?? new Date();
     if (e.canonical === "opened") {
@@ -282,11 +284,45 @@ async function processEvent(
         .update(outreachDrafts)
         .set({ repliedAt: ts, status: "sent" })
         .where(eq(outreachDrafts.id, draftId));
-    } else if (e.canonical === "bounced") {
+    } else if (e.canonical === "bounced" || e.canonical === "unsubscribed") {
+      // Unsubscribes are persisted on `bouncedAt` so they flow through the
+      // same negative-engagement path as hard bounces; the original event
+      // type is preserved on the `reply_events` row above.
       await db
         .update(outreachDrafts)
         .set({ bouncedAt: ts })
         .where(eq(outreachDrafts.id, draftId));
+    }
+
+    // Recompute the parent facility's signal score so the daily pick list
+    // reflects the new engagement signal immediately. Only triggered for
+    // canonical engagement events; "other" / task-completed events don't
+    // move the score.
+    if (
+      e.canonical === "opened" ||
+      e.canonical === "replied" ||
+      e.canonical === "bounced" ||
+      e.canonical === "unsubscribed"
+    ) {
+      const [d] = await db
+        .select({ facilityId: outreachDrafts.facilityId })
+        .from(outreachDrafts)
+        .where(eq(outreachDrafts.id, draftId))
+        .limit(1);
+      if (d?.facilityId) affectedFacilityId = d.facilityId;
+    }
+  }
+
+  if (affectedFacilityId) {
+    try {
+      // Strictly tenant-scoped: only refresh engagement for THIS account's
+      // view of the facility. Never touches other tenants' scores.
+      await recomputeEngagementForAccountFacility(accountId, affectedFacilityId);
+    } catch (err) {
+      logger.warn(
+        { err, accountId, facilityId: affectedFacilityId },
+        "post-webhook engagement recompute failed",
+      );
     }
   }
 

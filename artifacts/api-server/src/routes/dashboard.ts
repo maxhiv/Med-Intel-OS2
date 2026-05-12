@@ -123,6 +123,28 @@ router.get("/dashboard/summary", requireAccount, async (req, res) => {
       ),
     );
 
+  // Engagement aggregates over the last 30 days. `sentCount` is anything that
+  // left the platform (synced to a CRM); the rates are computed off that base
+  // so they reflect actual deliverability rather than total drafts generated.
+  const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const [eng] = await db
+    .select({
+      sent: sql<number>`count(*) FILTER (WHERE ${outreachDrafts.crmSyncedAt} IS NOT NULL AND ${outreachDrafts.crmSyncedAt} >= ${since30})::int`,
+      opened: sql<number>`count(*) FILTER (WHERE ${outreachDrafts.openedAt} IS NOT NULL AND ${outreachDrafts.openedAt} >= ${since30})::int`,
+      replied: sql<number>`count(*) FILTER (WHERE ${outreachDrafts.repliedAt} IS NOT NULL AND ${outreachDrafts.repliedAt} >= ${since30})::int`,
+      bounced: sql<number>`count(*) FILTER (WHERE ${outreachDrafts.bouncedAt} IS NOT NULL AND ${outreachDrafts.bouncedAt} >= ${since30})::int`,
+    })
+    .from(outreachDrafts)
+    .where(eq(outreachDrafts.accountId, accountId));
+  const sentCount = eng?.sent ?? 0;
+  const openedCount = eng?.opened ?? 0;
+  const repliedCount = eng?.replied ?? 0;
+  const bouncedCount = eng?.bounced ?? 0;
+  const replyRate =
+    sentCount > 0 ? Number(((repliedCount / sentCount) * 100).toFixed(1)) : 0;
+  const bounceRate =
+    sentCount > 0 ? Number(((bouncedCount / sentCount) * 100).toFixed(1)) : 0;
+
   res.json({
     totalFacilities,
     totalContacts,
@@ -134,6 +156,12 @@ router.get("/dashboard/summary", requireAccount, async (req, res) => {
     myCampaigns: myCampaigns.c,
     avgSignalScore: Number(avgScore.toFixed(1)),
     signalsByType,
+    sentCount,
+    openedCount,
+    repliedCount,
+    bouncedCount,
+    replyRate,
+    bounceRate,
   });
 });
 
@@ -174,16 +202,30 @@ router.get("/dashboard/recent-signals", requireAccount, async (req, res) => {
 router.get("/dashboard/top-facilities", requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
   const limit = Math.min(Number(req.query.limit) || 10, 50);
-  const facIds = await tenantFacilityIds(accountId);
-  if (facIds.length === 0) {
-    res.json([]);
-    return;
-  }
+  // Rank by the tenant-scoped combination of objective facility score plus
+  // this account's engagement score. Engagement is per-tenant and lives on
+  // `account_facilities.engagement_score`, so other tenants' replies and
+  // bounces never influence this ordering.
   const rows = await db
-    .select()
-    .from(facilities)
-    .where(inArray(facilities.id, facIds))
-    .orderBy(desc(facilities.signalScore))
+    .select({
+      id: facilities.id,
+      npi: facilities.npi,
+      name: facilities.name,
+      facilityType: facilities.facilityType,
+      city: facilities.city,
+      state: facilities.state,
+      beds: facilities.beds,
+      signalScore: facilities.signalScore,
+      engagementScore: accountFacilities.engagementScore,
+    })
+    .from(accountFacilities)
+    .innerJoin(facilities, eq(facilities.id, accountFacilities.facilityId))
+    .where(eq(accountFacilities.accountId, accountId))
+    .orderBy(
+      desc(
+        sql`COALESCE(${facilities.signalScore},0) + COALESCE(${accountFacilities.engagementScore},0) - 50`,
+      ),
+    )
     .limit(limit);
   res.json(rows);
 });

@@ -80,6 +80,18 @@ export const GetDashboardSummaryResponse = zod.object({
       }),
     )
     .optional(),
+  sentCount: zod
+    .number()
+    .optional()
+    .describe("Drafts synced to a CRM in the last 30 days"),
+  openedCount: zod.number().optional(),
+  repliedCount: zod.number().optional(),
+  bouncedCount: zod.number().optional(),
+  replyRate: zod
+    .number()
+    .optional()
+    .describe("repliedCount \/ sentCount \* 100, last 30 days"),
+  bounceRate: zod.number().optional(),
 });
 
 /**

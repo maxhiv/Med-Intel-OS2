@@ -159,6 +159,7 @@ export const accountFacilities = pgTable(
     status: text("status").default("identified"),
     priority: smallint("priority").default(5),
     dealScore: smallint("deal_score").default(0),
+    engagementScore: smallint("engagement_score").default(0),
     notes: text("notes"),
     tags: text("tags").array().default(sql`'{}'`),
     crmCompanyId: text("crm_company_id"),
@@ -180,6 +181,30 @@ export const insertAccountFacilitySchema = createInsertSchema(accountFacilities)
 });
 export type AccountFacility = typeof accountFacilities.$inferSelect;
 export type InsertAccountFacility = z.infer<typeof insertAccountFacilitySchema>;
+
+// Per-tenant engagement score for individual contacts. Contacts themselves are
+// global rows (a clinician at Acme Health is the same person regardless of
+// which sub-account is working them), but engagement (replies, opens, bounces)
+// is account-specific outreach data and must not leak across tenants.
+export const accountContactEngagement = pgTable(
+  "account_contact_engagement",
+  {
+    id: uuid("id").primaryKey().default(sql`uuid_generate_v4()`),
+    accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id").notNull(),
+    engagementScore: smallint("engagement_score").default(0),
+    repliesCount: smallint("replies_count").default(0),
+    bouncesCount: smallint("bounces_count").default(0),
+    opensCount: smallint("opens_count").default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uniq_acct_contact_eng").on(t.accountId, t.contactId),
+    index("idx_acct_contact_eng_account").on(t.accountId),
+  ],
+);
+
+export type AccountContactEngagement = typeof accountContactEngagement.$inferSelect;
 
 export const campaigns = pgTable(
   "campaigns",
