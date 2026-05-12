@@ -19,6 +19,8 @@ export * from "./campaignDetail";
 export * from "./campaignFilterCriteria";
 export * from "./campaignInput";
 export * from "./campaignInputFilterCriteria";
+export * from "./campaignPatchInput";
+export * from "./campaignPatchInputFilterCriteria";
 export * from "./conflictResponse";
 export * from "./contact";
 export * from "./dashboardSummary";

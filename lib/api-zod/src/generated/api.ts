@@ -519,9 +519,8 @@ export const UpdateCampaignParams = zod.object({
 });
 
 export const UpdateCampaignBody = zod.object({
-  name: zod.string(),
-  subAccountId: zod.string().uuid(),
-  description: zod.string().optional(),
+  name: zod.string().optional(),
+  description: zod.string().nullish(),
   filterCriteria: zod.record(zod.string(), zod.unknown()).optional(),
   status: zod.string().optional(),
   batchSizeDaily: zod.number().optional(),

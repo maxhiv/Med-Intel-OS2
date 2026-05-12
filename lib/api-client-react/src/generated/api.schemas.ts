@@ -246,6 +246,16 @@ export interface CampaignInput {
   batchSizeDaily?: number;
 }
 
+export type CampaignPatchInputFilterCriteria = { [key: string]: unknown };
+
+export interface CampaignPatchInput {
+  name?: string;
+  description?: string | null;
+  filterCriteria?: CampaignPatchInputFilterCriteria;
+  status?: string;
+  batchSizeDaily?: number;
+}
+
 export interface CampaignContact {
   id: string;
   campaignId: string;

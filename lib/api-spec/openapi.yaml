@@ -248,7 +248,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/CampaignInput" }
+            schema: { $ref: "#/components/schemas/CampaignPatchInput" }
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Campaign" } } } }
 
@@ -839,6 +839,15 @@ components:
         name: { type: string }
         subAccountId: { type: string, format: uuid }
         description: { type: string }
+        filterCriteria: { type: object, additionalProperties: true }
+        status: { type: string }
+        batchSizeDaily: { type: integer }
+
+    CampaignPatchInput:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string, nullable: true }
         filterCriteria: { type: object, additionalProperties: true }
         status: { type: string }
         batchSizeDaily: { type: integer }

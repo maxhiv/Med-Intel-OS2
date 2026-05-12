@@ -28,6 +28,7 @@ import type {
   CampaignContact,
   CampaignDetail,
   CampaignInput,
+  CampaignPatchInput,
   ConflictResponse,
   Contact,
   DashboardSummary,
@@ -1560,14 +1561,14 @@ export const getUpdateCampaignUrl = (id: string) => {
 
 export const updateCampaign = async (
   id: string,
-  campaignInput: CampaignInput,
+  campaignPatchInput: CampaignPatchInput,
   options?: RequestInit,
 ): Promise<Campaign> => {
   return customFetch<Campaign>(getUpdateCampaignUrl(id), {
     ...options,
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...options?.headers },
-    body: JSON.stringify(campaignInput),
+    body: JSON.stringify(campaignPatchInput),
   });
 };
 
@@ -1578,14 +1579,14 @@ export const getUpdateCampaignMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof updateCampaign>>,
     TError,
-    { id: string; data: BodyType<CampaignInput> },
+    { id: string; data: BodyType<CampaignPatchInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof updateCampaign>>,
   TError,
-  { id: string; data: BodyType<CampaignInput> },
+  { id: string; data: BodyType<CampaignPatchInput> },
   TContext
 > => {
   const mutationKey = ["updateCampaign"];
@@ -1599,7 +1600,7 @@ export const getUpdateCampaignMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof updateCampaign>>,
-    { id: string; data: BodyType<CampaignInput> }
+    { id: string; data: BodyType<CampaignPatchInput> }
   > = (props) => {
     const { id, data } = props ?? {};
 
@@ -1612,7 +1613,7 @@ export const getUpdateCampaignMutationOptions = <
 export type UpdateCampaignMutationResult = NonNullable<
   Awaited<ReturnType<typeof updateCampaign>>
 >;
-export type UpdateCampaignMutationBody = BodyType<CampaignInput>;
+export type UpdateCampaignMutationBody = BodyType<CampaignPatchInput>;
 export type UpdateCampaignMutationError = ErrorType<unknown>;
 
 export const useUpdateCampaign = <
@@ -1622,14 +1623,14 @@ export const useUpdateCampaign = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof updateCampaign>>,
     TError,
-    { id: string; data: BodyType<CampaignInput> },
+    { id: string; data: BodyType<CampaignPatchInput> },
     TContext
   >;
   request?: SecondParameter<typeof customFetch>;
 }): UseMutationResult<
   Awaited<ReturnType<typeof updateCampaign>>,
   TError,
-  { id: string; data: BodyType<CampaignInput> },
+  { id: string; data: BodyType<CampaignPatchInput> },
   TContext
 > => {
   return useMutation(getUpdateCampaignMutationOptions(options));
