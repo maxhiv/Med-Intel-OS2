@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
+import { ingestConFilings } from "../services/conFilingsIngestor";
 
 const router: IRouter = Router();
 
@@ -27,6 +28,16 @@ router.post(
       limit = Math.floor(n);
     }
     const result = await ingestClinicalTrials({ limit });
+    res.json(result);
+  },
+);
+
+// Manually trigger the state CON-filings ingestor. Useful for ops + tests.
+router.post(
+  "/signals/ingest/con-filings",
+  requirePlatformAdmin,
+  async (_req, res) => {
+    const result = await ingestConFilings();
     res.json(result);
   },
 );

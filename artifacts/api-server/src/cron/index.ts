@@ -8,6 +8,7 @@ import { logger } from "../lib/logger";
 import { runAllAccounts } from "../services/batchRunner";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
+import { ingestConFilings } from "../services/conFilingsIngestor";
 
 let started = false;
 const locks = new Set<string>();
@@ -81,7 +82,20 @@ export function startCron(): void {
     { timezone: tz },
   );
 
+  // 05:15 daily — pull recent CON filings from a few state portals and emit
+  // `con_filed` / `con_approved` purchase signals. Each state adapter is
+  // best-effort (returns [] on any HTTP/parse failure) so a single broken
+  // portal never breaks the others.
+  cron.schedule(
+    "15 5 * * *",
+    guarded("ingestConFilings", async () => {
+      const r = await ingestConFilings();
+      logger.info(r, "con filings ingest complete");
+    }),
+    { timezone: tz },
+  );
+
   logger.info(
-    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials",
+    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings",
   );
 }

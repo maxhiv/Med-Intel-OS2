@@ -183,24 +183,32 @@ export const insertSignalSchema = createInsertSchema(purchaseSignals).omit({
 export type Signal = typeof purchaseSignals.$inferSelect;
 export type InsertSignal = z.infer<typeof insertSignalSchema>;
 
-export const conFilings = pgTable("con_filings", {
-  id: uuid("id")
-    .primaryKey()
-    .default(sql`uuid_generate_v4()`),
-  facilityId: uuid("facility_id").references(() => facilities.id),
-  state: char("state", { length: 2 }).notNull(),
-  filingDate: date("filing_date"),
-  decisionDate: date("decision_date"),
-  equipmentType: text("equipment_type"),
-  modality: text("modality"),
-  requestedAmount: bigint("requested_amount", { mode: "number" }),
-  approvedAmount: bigint("approved_amount", { mode: "number" }),
-  status: text("status"),
-  applicantName: text("applicant_name"),
-  filingUrl: text("filing_url"),
-  notes: text("notes"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
-});
+export const conFilings = pgTable(
+  "con_filings",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`uuid_generate_v4()`),
+    facilityId: uuid("facility_id").references(() => facilities.id),
+    state: char("state", { length: 2 }).notNull(),
+    filingDate: date("filing_date"),
+    decisionDate: date("decision_date"),
+    equipmentType: text("equipment_type"),
+    modality: text("modality"),
+    requestedAmount: bigint("requested_amount", { mode: "number" }),
+    approvedAmount: bigint("approved_amount", { mode: "number" }),
+    status: text("status"),
+    applicantName: text("applicant_name"),
+    filingUrl: text("filing_url"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    // Hard idempotency guarantee for the CON ingestor under concurrent runs.
+    uniqueIndex("uniq_con_filings_state_url").on(t.state, t.filingUrl),
+    index("idx_con_filings_facility").on(t.facilityId),
+  ],
+);
 
 export const facilityContacts = pgTable(
   "facility_contacts",
