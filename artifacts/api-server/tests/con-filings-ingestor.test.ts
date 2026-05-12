@@ -134,6 +134,15 @@ describe("inferModality", () => {
     ["x-ray room", "XRAY"],
     ["xray room", "XRAY"],
     ["cardiac cath lab", "CATH"],
+    // Combo wording — the more specialised modality should win regardless of
+    // which keyword appears first in the source text.
+    ["PET/CT scanner", "PET"],
+    ["CT/PET hybrid scanner", "PET"],
+    ["SPECT/CT camera replacement", "SPECT"],
+    ["MRI + ultrasound suite", "MRI"],
+    ["ultrasound and MRI suite", "MRI"],
+    ["linear accelerator with CT planning", "LINAC"],
+    ["mammography and ultrasound center", "MAMMO"],
   ])("%s -> %s", (input, expected) => {
     expect(inferModality(input)).toBe(expected);
   });
@@ -143,6 +152,13 @@ describe("inferModality", () => {
     expect(inferModality("")).toBeUndefined();
     expect(inferModality(null)).toBeUndefined();
     expect(inferModality(undefined)).toBeUndefined();
+  });
+
+  it("breaks ties between equal-priority modalities by list order (PET before SPECT)", () => {
+    // Both PET and SPECT have priority 10; the first-listed wins so the
+    // behavior is deterministic and documented.
+    expect(inferModality("hybrid PET and SPECT imaging center")).toBe("PET");
+    expect(inferModality("SPECT and PET combined suite")).toBe("PET");
   });
 
   it("matches case-insensitively but respects word boundaries", () => {

@@ -77,24 +77,34 @@ export interface ConIngestResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const MODALITY_KEYWORDS: { re: RegExp; modality: string }[] = [
-  { re: /\bMRI\b|magnetic resonance/i, modality: "MRI" },
-  { re: /\bCT\b|computed tomograph/i, modality: "CT" },
-  { re: /\bPET\b|positron emission/i, modality: "PET" },
-  { re: /\bSPECT\b/i, modality: "SPECT" },
-  { re: /linear accelerator|\bLINAC\b/i, modality: "LINAC" },
-  { re: /\bmammograph/i, modality: "MAMMO" },
-  { re: /ultrasound/i, modality: "US" },
-  { re: /\bx-?ray\b/i, modality: "XRAY" },
-  { re: /cardiac cath/i, modality: "CATH" },
+/**
+ * Ordered modality matchers. `priority` ranks how specific / clinically
+ * valuable the signal is — when a filing mentions multiple modalities (e.g.
+ * "PET/CT scanner", "SPECT/CT camera", "MRI + ultrasound suite") we want the
+ * more specialised one to win rather than whichever keyword happens to appear
+ * first in the list. Higher = more specific.
+ */
+const MODALITY_KEYWORDS: { re: RegExp; modality: string; priority: number }[] = [
+  { re: /\bPET\b|positron emission/i, modality: "PET", priority: 10 },
+  { re: /\bSPECT\b/i, modality: "SPECT", priority: 10 },
+  { re: /linear accelerator|\bLINAC\b/i, modality: "LINAC", priority: 9 },
+  { re: /\bMRI\b|magnetic resonance/i, modality: "MRI", priority: 8 },
+  { re: /\bCT\b|computed tomograph/i, modality: "CT", priority: 7 },
+  { re: /\bmammograph/i, modality: "MAMMO", priority: 6 },
+  { re: /cardiac cath/i, modality: "CATH", priority: 5 },
+  { re: /ultrasound/i, modality: "US", priority: 3 },
+  { re: /\bx-?ray\b/i, modality: "XRAY", priority: 2 },
 ];
 
 export function inferModality(text: string | undefined | null): string | undefined {
   if (!text) return undefined;
-  for (const { re, modality } of MODALITY_KEYWORDS) {
-    if (re.test(text)) return modality;
+  let best: { modality: string; priority: number } | undefined;
+  for (const { re, modality, priority } of MODALITY_KEYWORDS) {
+    if (re.test(text) && (!best || priority > best.priority)) {
+      best = { modality, priority };
+    }
   }
-  return undefined;
+  return best?.modality;
 }
 
 export function looksApproved(status: string | undefined | null): boolean {
