@@ -2,8 +2,10 @@ import { Router, type IRouter } from "express";
 import { eq, and, desc, sql, type SQL } from "drizzle-orm";
 import { db, outreachDrafts, draftEdits, type OutreachDraft } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
+import { validateBody } from "../middlewares/validate";
 import { pushApprovedDraftToCrm } from "../services/crmPush";
 import { logger } from "../lib/logger";
+import { RejectDraftBody } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
@@ -59,7 +61,7 @@ async function recordEdits(
   userId: string | undefined,
 ) {
   for (const [field, value] of Object.entries(patch)) {
-    const oldVal = (before as unknown as Record<string, unknown>)[field];
+    const oldVal = (before as Record<string, unknown>)[field];
     if (oldVal !== value) {
       await db.insert(draftEdits).values({
         draftId,
@@ -146,7 +148,7 @@ router.post("/drafts/:id/approve", requireAccount, async (req, res) => {
   res.json({ ...updated, crmDraftId: crmDraftId ?? updated.crmDraftId, crmSyncedAt: crmSyncedAt ?? updated.crmSyncedAt });
 });
 
-router.post("/drafts/:id/reject", requireAccount, async (req, res) => {
+router.post("/drafts/:id/reject", requireAccount, validateBody(RejectDraftBody), async (req, res) => {
   const accountId = req.currentAccount!.id;
   const id = String(req.params.id);
   const reason = (req.body?.reason as string | undefined) ?? null;

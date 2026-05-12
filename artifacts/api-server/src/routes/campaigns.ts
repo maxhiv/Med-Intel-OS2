@@ -10,7 +10,9 @@ import {
   accountFacilities,
 } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
+import { validateBody } from "../middlewares/validate";
 import { generateDraftsForCampaign } from "../services/draftGenerator";
+import { CreateCampaignBody, UpdateCampaignBody } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
@@ -24,7 +26,7 @@ router.get("/campaigns", requireAccount, async (req, res) => {
   res.json(rows);
 });
 
-router.post("/campaigns", requireAccount, async (req, res) => {
+router.post("/campaigns", requireAccount, validateBody(CreateCampaignBody), async (req, res) => {
   const accountId = req.currentAccount!.id;
   const { name, description, subAccountId, batchSizeDaily, filterCriteria } =
     req.body ?? {};
@@ -100,7 +102,7 @@ router.get("/campaigns/:id", requireAccount, async (req, res) => {
   res.json({ ...c, contactCount: ct });
 });
 
-router.patch("/campaigns/:id", requireAccount, async (req, res) => {
+router.patch("/campaigns/:id", requireAccount, validateBody(UpdateCampaignBody), async (req, res) => {
   const accountId = req.currentAccount!.id;
   const id = String(req.params.id);
   const allowed: Record<string, unknown> = {};
@@ -131,19 +133,9 @@ router.get("/campaigns/:id/contacts", requireAccount, async (req, res) => {
   const id = String(req.params.id);
   const rows = await db
     .select({
-      id: campaignContacts.id,
-      campaignId: campaignContacts.campaignId,
-      contactId: campaignContacts.contactId,
-      score: campaignContacts.score,
-      status: campaignContacts.status,
-      enrolledAt: campaignContacts.enrolledAt,
-      contactFirstName: facilityContacts.firstName,
-      contactLastName: facilityContacts.lastName,
-      contactTitle: facilityContacts.title,
-      contactEmail: facilityContacts.email,
-      facilityId: facilities.id,
-      facilityName: facilities.name,
-      facilityState: facilities.state,
+      cc: campaignContacts,
+      contact: facilityContacts,
+      facility: facilities,
     })
     .from(campaignContacts)
     .innerJoin(
@@ -158,7 +150,20 @@ router.get("/campaigns/:id/contacts", requireAccount, async (req, res) => {
       ),
     )
     .orderBy(desc(campaignContacts.score));
-  res.json(rows);
+
+  // Reshape to match the OpenAPI CampaignContact schema (nested contact/facility)
+  res.json(
+    rows.map((r) => ({
+      id: r.cc.id,
+      campaignId: r.cc.campaignId,
+      contactId: r.cc.contactId,
+      status: r.cc.status,
+      score: r.cc.score,
+      enrolledAt: r.cc.enrolledAt,
+      contact: r.contact,
+      facility: r.facility,
+    })),
+  );
 });
 
 router.post("/campaigns/:id/contacts", requireAccount, async (req, res) => {

@@ -2,11 +2,13 @@ import { Router, type IRouter } from "express";
 import { eq, and } from "drizzle-orm";
 import { db, facilityContacts, accountFacilities } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
+import { validateBody } from "../middlewares/validate";
 import { enrichContact } from "../services/enrichment";
+import { EnrichContactBody } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
-router.post("/contacts/:id/enrich", requireAccount, async (req, res) => {
+router.post("/contacts/:id/enrich", requireAccount, validateBody(EnrichContactBody), async (req, res) => {
   const accountId = req.currentAccount!.id;
   const id = String(req.params.id);
   const dryRun = Boolean(req.body?.dryRun);

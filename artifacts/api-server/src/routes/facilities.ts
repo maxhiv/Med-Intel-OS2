@@ -18,8 +18,10 @@ import {
   accountFacilities,
 } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
+import { validateBody } from "../middlewares/validate";
 import { syncFacilityFromNpi } from "../services/npiSync";
 import { recomputeOne } from "../services/signalScorer";
+import { CreateFacilityFromNpiBody, UpdateFacilityBody } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
@@ -84,7 +86,7 @@ router.get("/facilities", requireAccount, async (req, res) => {
   res.json({ data: rows, total: c, limit, offset });
 });
 
-router.post("/facilities", requireAccount, async (req, res) => {
+router.post("/facilities", requireAccount, validateBody(CreateFacilityFromNpiBody), async (req, res) => {
   const accountId = req.currentAccount!.id;
   const npi = String(req.body?.npi ?? "");
   if (npi.length !== 10) {
@@ -121,33 +123,42 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [signalCount] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(purchaseSignals)
-    .where(
-      and(
-        eq(purchaseSignals.facilityId, id),
-        eq(purchaseSignals.isActive, true),
-      ),
-    );
-  const [contactCount] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(facilityContacts)
-    .where(eq(facilityContacts.facilityId, id));
-  const [equipCount] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(equipmentRecords)
-    .where(eq(equipmentRecords.facilityId, id));
+  const [signals, contacts, equipment] = await Promise.all([
+    db
+      .select()
+      .from(purchaseSignals)
+      .where(
+        and(
+          eq(purchaseSignals.facilityId, id),
+          eq(purchaseSignals.isActive, true),
+        ),
+      )
+      .orderBy(desc(purchaseSignals.detectedAt))
+      .limit(50),
+    db
+      .select()
+      .from(facilityContacts)
+      .where(eq(facilityContacts.facilityId, id))
+      .limit(200),
+    db
+      .select()
+      .from(equipmentRecords)
+      .where(eq(equipmentRecords.facilityId, id))
+      .limit(200),
+  ]);
 
   res.json({
     ...f,
-    activeSignalCount: signalCount.c,
-    contactCount: contactCount.c,
-    equipmentCount: equipCount.c,
+    signals,
+    contacts,
+    equipment,
+    activeSignalCount: signals.length,
+    contactCount: contacts.length,
+    equipmentCount: equipment.length,
   });
 });
 
-router.patch("/facilities/:id", requireAccount, async (req, res) => {
+router.patch("/facilities/:id", requireAccount, validateBody(UpdateFacilityBody), async (req, res) => {
   const accountId = req.currentAccount!.id;
   const id = String(req.params.id);
   if (!(await assertAccountOwnsFacility(accountId, id))) {

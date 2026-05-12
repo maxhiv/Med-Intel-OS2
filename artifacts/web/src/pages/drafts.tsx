@@ -7,8 +7,21 @@ import { FileText, Check, X, RefreshCw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 
+type DraftStatus = "pending" | "approved" | "sent" | "skipped" | "rejected";
+const DRAFT_STATUSES: readonly DraftStatus[] = [
+  "pending",
+  "approved",
+  "sent",
+  "skipped",
+  "rejected",
+];
+
+function isDraftStatus(v: string): v is DraftStatus {
+  return (DRAFT_STATUSES as readonly string[]).includes(v);
+}
+
 export default function DraftsPage() {
-  const [status, setStatus] = useState<"pending" | "approved" | "sent" | "skipped" | "rejected">("pending");
+  const [status, setStatus] = useState<DraftStatus>("pending");
   const { data: draftsRes, isLoading, refetch } = useListDrafts({ status, limit: 50 });
   const drafts = draftsRes?.data || [];
   const { toast } = useToast();
@@ -44,7 +57,13 @@ export default function DraftsPage() {
         <Button variant="outline" onClick={() => refetch()}><RefreshCw className="mr-2 h-4 w-4" /> Refresh</Button>
       </div>
 
-      <Tabs value={status} onValueChange={(v) => setStatus(v as any)} className="w-full">
+      <Tabs
+        value={status}
+        onValueChange={(v) => {
+          if (isDraftStatus(v)) setStatus(v);
+        }}
+        className="w-full"
+      >
         <TabsList className="mb-4">
           <TabsTrigger value="pending">Pending Review</TabsTrigger>
           <TabsTrigger value="approved">Approved</TabsTrigger>

@@ -67,7 +67,7 @@ catalogs:
       specifier: ^7.3.2
       version: 7.3.2
     zod:
-      specifier: ^3.25.76
+      specifier: 3.25.76
       version: 3.25.76
 
 overrides:
@@ -168,7 +168,7 @@ importers:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.78.0
-        version: 0.78.0(zod@4.3.6)
+        version: 0.78.0(zod@3.25.76)
       '@clerk/express':
         specifier: ^2.1.15
         version: 2.1.15(express@5.2.1)
@@ -217,6 +217,9 @@ importers:
       pino-http:
         specifier: ^10
         version: 10.5.0
+      zod:
+        specifier: 'catalog:'
+        version: 3.25.76
     devDependencies:
       '@types/compression':
         specifier: ^1.8.1
@@ -3392,6 +3395,12 @@ packages:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
 snapshots:
+
+  '@anthropic-ai/sdk@0.78.0(zod@3.25.76)':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+    optionalDependencies:
+      zod: 3.25.76
 
   '@anthropic-ai/sdk@0.78.0(zod@4.3.6)':
     dependencies:

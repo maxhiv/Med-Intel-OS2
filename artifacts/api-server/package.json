@@ -26,7 +26,8 @@
     "http-proxy-middleware": "^4.0.0",
     "node-cron": "^4.2.1",
     "pino": "^9",
-    "pino-http": "^10"
+    "pino-http": "^10",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/compression": "^1.8.1",
