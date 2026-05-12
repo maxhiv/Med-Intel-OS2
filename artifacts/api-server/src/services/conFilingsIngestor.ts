@@ -24,6 +24,12 @@ import {
   purchaseSignals,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import {
+  candidateTokens,
+  pickBestFacility,
+  DEFAULT_MATCH_THRESHOLD,
+  type FacilityCandidate,
+} from "./facilityNameMatch";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -459,10 +465,18 @@ function parseNcFilename(name: string): {
 // Persistence
 // ---------------------------------------------------------------------------
 
+/** Maximum candidate facilities pulled from the DB before fuzzy scoring. */
+const CANDIDATE_POOL_LIMIT = 50;
+
 /**
- * Try to resolve a tracked facility for a CON filing. Prefers NPI when the
- * source provides one (exact unique match), and falls back to a
- * case-insensitive name match scoped to the filing's state.
+ * Try to resolve a tracked facility for a CON filing.
+ *
+ * Resolution order:
+ *   1. Exact NPI match (strongest signal, no state filter needed).
+ *   2. Token-based candidate pool from `name`, `doing_business_as` and
+ *      `system_name` within the same state, then fuzzy-scored with
+ *      `pickBestFacility`. The applicant string is split on `d/b/a`,
+ *      `on behalf of`, etc. so parent-system filings still resolve.
  */
 async function findFacility(
   applicant: string,
@@ -479,29 +493,56 @@ async function findFacility(
     if (byNpi) return byNpi;
   }
 
-  // 2. Name + state heuristic with light corporate-suffix stripping. Also
-  // checks `doing_business_as` so DBA-named filings still resolve.
-  const cleaned = applicant
-    .replace(/\b(inc|llc|llp|pa|pc|pllc|corp|corporation|co|the)\b\.?/gi, "")
-    .replace(/[^a-z0-9 ]/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (cleaned.length < 4) return null;
-  const pattern = `%${cleaned}%`;
-  const [hit] = await db
-    .select({ id: facilities.id })
+  // 2. Build a small candidate pool keyed on shared meaningful tokens across
+  // any of name / DBA / system_name. We use the longest tokens first so noisy
+  // 4-letter tokens don't blow the pool past the limit.
+  const tokens = candidateTokens(applicant).slice(0, 6);
+  if (tokens.length === 0) return null;
+
+  const tokenConds = tokens.flatMap((t) => {
+    const pattern = `%${t}%`;
+    return [
+      ilike(facilities.name, pattern),
+      ilike(facilities.doingBusinessAs, pattern),
+      ilike(facilities.systemName, pattern),
+    ];
+  });
+
+  const rows = await db
+    .select({
+      id: facilities.id,
+      name: facilities.name,
+      doingBusinessAs: facilities.doingBusinessAs,
+      systemName: facilities.systemName,
+    })
     .from(facilities)
-    .where(
-      and(
-        eq(facilities.state, state),
-        or(
-          ilike(facilities.name, pattern),
-          ilike(facilities.doingBusinessAs, pattern),
-        ),
-      ),
-    )
-    .limit(1);
-  return hit ?? null;
+    .where(and(eq(facilities.state, state), or(...tokenConds)))
+    .limit(CANDIDATE_POOL_LIMIT);
+
+  if (rows.length === 0) return null;
+
+  const candidates: FacilityCandidate[] = rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    doingBusinessAs: r.doingBusinessAs,
+    systemName: r.systemName,
+  }));
+  const best = pickBestFacility(applicant, candidates, {
+    threshold: DEFAULT_MATCH_THRESHOLD,
+  });
+  if (!best) return null;
+  logger.debug(
+    {
+      applicant,
+      state,
+      facilityId: best.facility.id,
+      score: Number(best.score.toFixed(3)),
+      via: best.matchedField,
+      pool: rows.length,
+    },
+    "con applicant matched to facility",
+  );
+  return { id: best.facility.id };
 }
 
 function toDateOnly(d: Date | undefined): string | undefined {
