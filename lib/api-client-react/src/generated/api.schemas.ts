@@ -478,6 +478,8 @@ export interface EnrichmentSource {
   envEnabled?: boolean;
   envKeyPresent?: boolean;
   isFreeSource: boolean;
+  /** True when the source is currently skipped because month-to-date spend has hit the configured monthly cap. */
+  autoPaused?: boolean;
 }
 
 export interface ApproveSourceInput {

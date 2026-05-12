@@ -196,6 +196,15 @@ export default function AdminPage() {
                               ) : (
                                 <span className="text-xs bg-red-500/10 text-red-500 px-2 py-0.5 rounded font-medium flex items-center gap-1"><XCircle className="h-3 w-3"/> Inactive</span>
                               )}
+                              {src.autoPaused && (
+                                <span
+                                  className="text-xs bg-red-500/10 text-red-500 px-2 py-0.5 rounded font-medium flex items-center gap-1"
+                                  data-testid={`badge-auto-paused-${src.source}`}
+                                  title="Skipped during enrichment until spend resets or the cap is raised"
+                                >
+                                  <AlertTriangle className="h-3 w-3" /> Auto-paused
+                                </span>
+                              )}
                               {src.isFreeSource && <span className="text-xs bg-blue-500/10 text-blue-500 px-2 py-0.5 rounded font-medium">Free</span>}
                             </div>
 

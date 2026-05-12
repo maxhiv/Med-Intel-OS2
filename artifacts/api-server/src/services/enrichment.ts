@@ -70,6 +70,15 @@ export interface SourceStatus {
   monthSpendCents: number;
   /** Hard monthly budget cap in cents (null = no cap configured). */
   monthBudgetCents: number | null;
+  /** Raw micros values used for precise budget gating. */
+  monthSpendMicros: number;
+  monthBudgetMicros: number | null;
+  /**
+   * True when this paid source has hit or exceeded its configured monthly
+   * budget cap and should be skipped by the enrichment waterfall until the
+   * counter resets or the cap is raised.
+   */
+  autoPaused: boolean;
 }
 
 function envEnabledFor(source: string): boolean {
@@ -104,6 +113,8 @@ export async function listAllSources(): Promise<SourceStatus[]> {
     const a = approvalMap.get(source);
     const spendMicros = a?.currentMonthSpend ?? 0;
     const budgetMicros = a?.monthlyBudgetLimit ?? null;
+    const autoPaused =
+      !isFree && budgetMicros != null && spendMicros >= budgetMicros;
     return {
       source,
       isFreeSource: isFree,
@@ -115,6 +126,9 @@ export async function listAllSources(): Promise<SourceStatus[]> {
       monthSpendCents: Math.round(spendMicros / 10_000),
       monthBudgetCents:
         budgetMicros == null ? null : Math.round(budgetMicros / 10_000),
+      monthSpendMicros: spendMicros,
+      monthBudgetMicros: budgetMicros,
+      autoPaused,
     };
   });
 }
@@ -122,6 +136,10 @@ export async function listAllSources(): Promise<SourceStatus[]> {
 function isSourceActive(s: SourceStatus): boolean {
   if (s.isFreeSource) return true;
   return s.envEnabled && s.envKeyPresent && s.approved;
+}
+
+function isOverBudget(s: SourceStatus): boolean {
+  return s.autoPaused;
 }
 
 export interface EnrichResult {
@@ -288,6 +306,25 @@ export async function enrichContact(
           ? "missing_key"
           : "not_approved";
       sourcesSkipped.push({ source: s.source, reason });
+      continue;
+    }
+
+    // Hard-stop paid sources whose month-to-date spend has reached the
+    // configured monthly cap. Free sources are never gated this way.
+    // Checked before the Bouncer-fallback guard so an over-budget paid
+    // source is reported as `budget_exceeded` rather than masked by
+    // `zerobounce_succeeded`.
+    if (!s.isFreeSource && isOverBudget(s)) {
+      sourcesSkipped.push({ source: s.source, reason: "budget_exceeded" });
+      logger.info(
+        {
+          source: s.source,
+          contactId,
+          monthSpendMicros: s.monthSpendMicros,
+          monthBudgetMicros: s.monthBudgetMicros,
+        },
+        "paid source auto-paused: monthly budget exceeded",
+      );
       continue;
     }
 

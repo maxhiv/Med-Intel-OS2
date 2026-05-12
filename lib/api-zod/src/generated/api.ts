@@ -1284,6 +1284,12 @@ export const AdminListEnrichmentSourcesResponseItem = zod.object({
   envEnabled: zod.boolean().optional(),
   envKeyPresent: zod.boolean().optional(),
   isFreeSource: zod.boolean(),
+  autoPaused: zod
+    .boolean()
+    .optional()
+    .describe(
+      "True when the source is currently skipped because month-to-date spend has hit the configured monthly cap.",
+    ),
 });
 export const AdminListEnrichmentSourcesResponse = zod.array(
   AdminListEnrichmentSourcesResponseItem,
@@ -1312,6 +1318,12 @@ export const AdminApproveEnrichmentSourceResponse = zod.object({
   envEnabled: zod.boolean().optional(),
   envKeyPresent: zod.boolean().optional(),
   isFreeSource: zod.boolean(),
+  autoPaused: zod
+    .boolean()
+    .optional()
+    .describe(
+      "True when the source is currently skipped because month-to-date spend has hit the configured monthly cap.",
+    ),
 });
 
 export const AdminRevokeEnrichmentSourceParams = zod.object({
@@ -1332,6 +1344,12 @@ export const AdminRevokeEnrichmentSourceResponse = zod.object({
   envEnabled: zod.boolean().optional(),
   envKeyPresent: zod.boolean().optional(),
   isFreeSource: zod.boolean(),
+  autoPaused: zod
+    .boolean()
+    .optional()
+    .describe(
+      "True when the source is currently skipped because month-to-date spend has hit the configured monthly cap.",
+    ),
 });
 
 /**
@@ -1362,6 +1380,12 @@ export const AdminSetEnrichmentSourceBudgetResponse = zod.object({
   envEnabled: zod.boolean().optional(),
   envKeyPresent: zod.boolean().optional(),
   isFreeSource: zod.boolean(),
+  autoPaused: zod
+    .boolean()
+    .optional()
+    .describe(
+      "True when the source is currently skipped because month-to-date spend has hit the configured monthly cap.",
+    ),
 });
 
 export const AdminPlatformStatsResponse = zod.object({

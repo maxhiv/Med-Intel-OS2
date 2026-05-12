@@ -1152,6 +1152,9 @@ components:
         envEnabled: { type: boolean }
         envKeyPresent: { type: boolean }
         isFreeSource: { type: boolean }
+        autoPaused:
+          type: boolean
+          description: "True when the source is currently skipped because month-to-date spend has hit the configured monthly cap."
 
     ApproveSourceInput:
       type: object
