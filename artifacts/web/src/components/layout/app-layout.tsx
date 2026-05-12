@@ -88,7 +88,7 @@ export function AppLayout({ children }: AppLayoutProps) {
                 {me.account.name}
               </span>
             ) : null}
-            <UserButton afterSignOutUrl="/" appearance={{ elements: { avatarBox: "h-8 w-8" } }} />
+            <UserButton appearance={{ elements: { avatarBox: "h-8 w-8" } }} />
           </div>
         </header>
         

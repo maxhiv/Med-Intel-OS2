@@ -6,16 +6,16 @@ import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function BatchesPage() {
-  const { data: batchesRes, isLoading, refetch } = useListBatches({ limit: 50 });
-  const batches = batchesRes?.data || [];
+  const { data: batchesRes, isLoading, refetch } = useListBatches();
+  const batches = batchesRes ?? [];
   const { toast } = useToast();
   
   const runBatches = useRunBatches();
 
   const handleRun = () => {
-    runBatches.mutate({}, {
+    runBatches.mutate(undefined, {
       onSuccess: (res) => {
-        toast({ title: "Batches Queued", description: `Pushed ${res.totalPushed} records to CRM.` });
+        toast({ title: "Batches Queued", description: `Pushed ${res.totalPushed ?? 0} records to CRM.` });
         refetch();
       },
       onError: (err) => toast({ title: "Error", description: err.message, variant: "destructive" })
@@ -55,7 +55,7 @@ export default function BatchesPage() {
                 {isLoading ? (
                   <tr><td colSpan={5} className="p-4"><Skeleton className="h-24 w-full" /></td></tr>
                 ) : batches.length > 0 ? (
-                  batches.map(batch => (
+                  batches.map((batch) => (
                     <tr key={batch.id} className="border-b last:border-0 hover:bg-muted/30">
                       <td className="p-4 font-medium">{new Date(batch.batchDate).toLocaleDateString()}</td>
                       <td className="p-4">

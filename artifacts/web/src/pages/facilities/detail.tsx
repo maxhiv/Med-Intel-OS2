@@ -21,7 +21,7 @@ export default function FacilityDetailPage() {
   const syncFacility = useSyncFacilityFromNpi();
   
   const handleSync = () => {
-    syncFacility.mutate({ data: { npi: facility?.npi || "" } }, {
+    syncFacility.mutate({ npi: facility?.npi || "" }, {
       onSuccess: () => {
         toast({ title: "Sync Complete", description: "Facility data updated from NPI registry." });
         refetch();
@@ -124,9 +124,9 @@ export default function FacilityDetailPage() {
                   <CardDescription>Purchase intent and organizational changes</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {facility.signals && facility.signals.length > 0 ? (
+                  {(facility as { signals?: Array<{ id: string; signalType: string; source: string; signalValue?: string | null; detectedAt?: string | Date | null; confidence?: number | null }> }).signals && (facility as { signals?: unknown[] }).signals!.length > 0 ? (
                     <div className="space-y-4">
-                      {facility.signals.map(signal => (
+                      {(facility as { signals: Array<{ id: string; signalType: string; source: string; signalValue?: string | null; detectedAt?: string | Date | null; confidence?: number | null }> }).signals.map((signal) => (
                         <div key={signal.id} className="flex items-start gap-4 pb-4 border-b last:border-0 last:pb-0">
                           <div className={`p-2 rounded-full ${signal.confidence && signal.confidence >= 80 ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`}>
                             <Activity className="h-4 w-4" />
@@ -158,9 +158,9 @@ export default function FacilityDetailPage() {
                   <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Add Contact</Button>
                 </CardHeader>
                 <CardContent>
-                  {facility.contacts && facility.contacts.length > 0 ? (
+                  {(facility as { contacts?: Array<{ id: string; firstName?: string; lastName?: string; title?: string; department?: string; email?: string; phone?: string }> }).contacts && (facility as { contacts?: unknown[] }).contacts!.length > 0 ? (
                     <div className="divide-y border border-border rounded-md">
-                      {facility.contacts.map(contact => (
+                      {(facility as { contacts: Array<{ id: string; firstName?: string; lastName?: string; title?: string; department?: string; email?: string; phone?: string }> }).contacts.map((contact) => (
                         <div key={contact.id} className="p-4 flex items-center justify-between hover:bg-muted/30">
                           <div className="flex items-center gap-4">
                             <div className="h-10 w-10 rounded-full bg-secondary flex items-center justify-center font-semibold text-secondary-foreground">
@@ -198,9 +198,9 @@ export default function FacilityDetailPage() {
                   <CardDescription>Known active capital equipment</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {facility.equipment && facility.equipment.length > 0 ? (
+                  {(facility as { equipment?: Array<{ id: string; modality: string; manufacturer?: string; model?: string; installYear?: number; estReplacementYear?: number | null }> }).equipment && (facility as { equipment?: unknown[] }).equipment!.length > 0 ? (
                     <div className="divide-y border border-border rounded-md">
-                      {facility.equipment.map(eq => (
+                      {(facility as { equipment: Array<{ id: string; modality: string; manufacturer?: string; model?: string; installYear?: number; estReplacementYear?: number | null }> }).equipment.map((eq) => (
                         <div key={eq.id} className="p-4 flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <Settings className="h-5 w-5 text-muted-foreground" />

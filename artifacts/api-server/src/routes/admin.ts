@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, sql, and, desc } from "drizzle-orm";
+import { eq, sql, desc } from "drizzle-orm";
 import {
   db,
   accounts,
@@ -9,9 +9,23 @@ import {
   facilities,
   purchaseSignals,
   outreachDrafts,
+  FREE_ENRICHMENT_SOURCES,
+  PAID_ENRICHMENT_SOURCES,
 } from "@workspace/db";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { listAllSources } from "../services/enrichment";
+
+const ALL_ENRICHMENT_SOURCES = [
+  ...FREE_ENRICHMENT_SOURCES,
+  ...PAID_ENRICHMENT_SOURCES,
+] as const;
+type EnrichmentSourceKey = (typeof ALL_ENRICHMENT_SOURCES)[number];
+
+function parseSource(raw: string): EnrichmentSourceKey | null {
+  return (ALL_ENRICHMENT_SOURCES as readonly string[]).includes(raw)
+    ? (raw as EnrichmentSourceKey)
+    : null;
+}
 
 const router: IRouter = Router();
 
@@ -117,13 +131,16 @@ router.post(
   "/admin/enrichment-sources/:source/approve",
   requirePlatformAdmin,
   async (req, res) => {
-    const source = String(req.params.source);
+    const source = parseSource(String(req.params.source));
+    if (!source) {
+      res.status(400).json({ error: "invalid_source" });
+      return;
+    }
     const notes = (req.body?.notes as string | undefined) ?? null;
     await db
       .insert(enrichmentSourceApprovals)
       .values({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        source: source as any,
+        source,
         approved: true,
         approvedAt: new Date(),
         approvedBy: req.currentUser?.id ?? null,
@@ -139,12 +156,8 @@ router.post(
           updatedAt: new Date(),
         },
       });
-    const [all] = (await listAllSources()).filter((s) => s.source === source)
-      ? [
-          (await listAllSources()).find((s) => s.source === source),
-        ]
-      : [undefined];
-    res.json(all);
+    const found = (await listAllSources()).find((s) => s.source === source);
+    res.json(found);
   },
 );
 
@@ -152,7 +165,11 @@ router.post(
   "/admin/enrichment-sources/:source/revoke",
   requirePlatformAdmin,
   async (req, res) => {
-    const source = String(req.params.source);
+    const source = parseSource(String(req.params.source));
+    if (!source) {
+      res.status(400).json({ error: "invalid_source" });
+      return;
+    }
     await db
       .update(enrichmentSourceApprovals)
       .set({
@@ -161,8 +178,7 @@ router.post(
         approvedBy: null,
         updatedAt: new Date(),
       })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .where(eq(enrichmentSourceApprovals.source, source as any));
+      .where(eq(enrichmentSourceApprovals.source, source));
     const found = (await listAllSources()).find((s) => s.source === source);
     res.json(found);
   },
@@ -195,5 +211,4 @@ router.get("/admin/platform-stats", requirePlatformAdmin, async (_req, res) => {
   });
 });
 
-void and;
 export default router;

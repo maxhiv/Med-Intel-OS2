@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, inArray } from "drizzle-orm";
 import {
   db,
   campaigns,
@@ -7,6 +7,7 @@ import {
   facilityContacts,
   facilities,
   subAccounts,
+  accountFacilities,
 } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
 import { generateDraftsForCampaign } from "../services/draftGenerator";
@@ -164,14 +165,48 @@ router.post("/campaigns/:id/contacts", requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
   const id = String(req.params.id);
   const contactIds: string[] = Array.isArray(req.body?.contactIds)
-    ? req.body.contactIds
+    ? req.body.contactIds.filter((x: unknown) => typeof x === "string")
     : [];
   if (contactIds.length === 0) {
     res.status(400).json({ error: "contactIds_required" });
     return;
   }
+
+  // 1. Verify the campaign belongs to the caller's account
+  const [own] = await db
+    .select({ id: campaigns.id })
+    .from(campaigns)
+    .where(and(eq(campaigns.id, id), eq(campaigns.accountId, accountId)))
+    .limit(1);
+  if (!own) {
+    res.status(404).json({ error: "campaign_not_found" });
+    return;
+  }
+
+  // 2. Verify every contact maps to a facility owned by this account
+  const ownedRows = await db
+    .select({ contactId: facilityContacts.id })
+    .from(facilityContacts)
+    .innerJoin(
+      accountFacilities,
+      eq(accountFacilities.facilityId, facilityContacts.facilityId),
+    )
+    .where(
+      and(
+        eq(accountFacilities.accountId, accountId),
+        inArray(facilityContacts.id, contactIds),
+      ),
+    );
+  const ownedSet = new Set(ownedRows.map((r) => r.contactId));
+  const allowed = contactIds.filter((cid) => ownedSet.has(cid));
+  const rejected = contactIds.length - allowed.length;
+  if (allowed.length === 0) {
+    res.status(403).json({ error: "no_owned_contacts" });
+    return;
+  }
+
   let added = 0;
-  for (const cid of contactIds) {
+  for (const cid of allowed) {
     try {
       await db.insert(campaignContacts).values({
         campaignId: id,
@@ -185,7 +220,9 @@ router.post("/campaigns/:id/contacts", requireAccount, async (req, res) => {
       // Unique conflict — already enrolled
     }
   }
-  res.status(201).json({ added, requested: contactIds.length });
+  res
+    .status(201)
+    .json({ added, requested: contactIds.length, rejectedCrossTenant: rejected });
 });
 
 router.post(

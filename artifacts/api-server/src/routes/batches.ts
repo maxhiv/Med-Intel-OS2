@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { eq, desc } from "drizzle-orm";
 import { db, syncBatches } from "@workspace/db";
-import { requireAccount, requirePlatformAdmin } from "../middlewares/auth";
+import { requireAccount } from "../middlewares/auth";
 import { runDailyBatchesForAccount, runAllAccounts } from "../services/batchRunner";
 
 const router: IRouter = Router();
@@ -31,5 +31,3 @@ router.post("/batches/run", requireAccount, async (req, res) => {
 });
 
 export default router;
-// requirePlatformAdmin re-exported for type-checker; not used directly here.
-void requirePlatformAdmin;

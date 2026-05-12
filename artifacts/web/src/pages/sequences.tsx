@@ -6,8 +6,8 @@ import { Layers, Plus } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function SequencesPage() {
-  const { data: sequencesRes, isLoading } = useListSequences({ limit: 50 });
-  const sequences = sequencesRes?.data || [];
+  const { data: sequencesRes, isLoading } = useListSequences();
+  const sequences = sequencesRes ?? [];
 
   return (
     <div className="space-y-6">
@@ -25,7 +25,7 @@ export default function SequencesPage() {
             {isLoading ? (
               <div className="p-6"><Skeleton className="h-24 w-full" /></div>
             ) : sequences.length > 0 ? (
-              sequences.map(seq => (
+              sequences.map((seq) => (
                 <div key={seq.id} className="p-6 flex items-center justify-between hover:bg-muted/30">
                   <div className="space-y-1">
                     <div className="font-semibold text-lg">{seq.name}</div>

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, or, isNull, desc, and } from "drizzle-orm";
+import { eq, or, isNull, desc } from "drizzle-orm";
 import { db, reportTemplates, reportRuns } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
 
@@ -102,5 +102,4 @@ router.get("/reports/runs", requireAccount, async (req, res) => {
   res.json(rows);
 });
 
-void and;
 export default router;

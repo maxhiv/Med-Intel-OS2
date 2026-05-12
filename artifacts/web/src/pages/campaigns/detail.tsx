@@ -18,15 +18,15 @@ export default function CampaignDetailPage() {
   const { toast } = useToast();
   
   const { data: campaign, isLoading } = useGetCampaign(id);
-  const { data: contactsRes, isLoading: loadingContacts } = useListCampaignContacts(id, { limit: 100 });
-  const contacts = contactsRes?.data || [];
+  const { data: contactsRes, isLoading: loadingContacts } = useListCampaignContacts(id);
+  const contacts = contactsRes ?? [];
 
   const generateDrafts = useGenerateCampaignDrafts();
 
   const handleGenerateDrafts = () => {
     generateDrafts.mutate({ id }, {
       onSuccess: (res) => {
-        toast({ title: "Drafts generated", description: `Queued ${res.queued} drafts for generation.` });
+        toast({ title: "Drafts generated", description: `Queued ${(res as { queued?: number }).queued ?? 0} drafts for generation.` });
       },
       onError: (err) => {
         toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -114,14 +114,24 @@ export default function CampaignDetailPage() {
                     {loadingContacts ? (
                       <tr><td colSpan={4} className="p-4 text-center text-muted-foreground">Loading...</td></tr>
                     ) : contacts.length > 0 ? (
-                      contacts.map(cc => (
-                        <tr key={cc.id} className="border-b last:border-0">
-                          <td className="p-4 font-medium">{cc.contact?.firstName} {cc.contact?.lastName}</td>
-                          <td className="p-4 text-muted-foreground">{cc.facility?.name}</td>
-                          <td className="p-4 text-right">{cc.score || 0}</td>
-                          <td className="p-4 text-right">{cc.status}</td>
-                        </tr>
-                      ))
+                      contacts.map((cc) => {
+                        const c = cc as unknown as {
+                          id: string;
+                          contactFirstName?: string;
+                          contactLastName?: string;
+                          facilityName?: string;
+                          score?: number;
+                          status?: string;
+                        };
+                        return (
+                          <tr key={c.id} className="border-b last:border-0">
+                            <td className="p-4 font-medium">{c.contactFirstName} {c.contactLastName}</td>
+                            <td className="p-4 text-muted-foreground">{c.facilityName}</td>
+                            <td className="p-4 text-right">{c.score || 0}</td>
+                            <td className="p-4 text-right">{c.status}</td>
+                          </tr>
+                        );
+                      })
                     ) : (
                       <tr>
                         <td colSpan={4} className="h-32 text-center text-muted-foreground">

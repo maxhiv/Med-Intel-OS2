@@ -3,7 +3,7 @@
  * row (stubbed CRM push). Real CRM adapters (HubSpot, Salesforce, GHL,
  * Pipedrive, etc.) live behind this; here we just record the intent.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, isNull, asc } from "drizzle-orm";
 import {
   db,
   subAccounts,
@@ -30,21 +30,25 @@ export async function runDailyBatchesForAccount(
   const date = todayDateString();
 
   for (const sub of subs) {
-    const approvedDrafts = await db
+    // Filter unsynced drafts in SQL before LIMIT so we don't starve unsynced
+    // rows when older approved drafts have already been pushed.
+    const toPush = await db
       .select({ id: outreachDrafts.id })
       .from(outreachDrafts)
       .where(
         and(
           eq(outreachDrafts.accountId, accountId),
           eq(outreachDrafts.status, "approved"),
+          isNull(outreachDrafts.crmSyncedAt),
         ),
       )
+      .orderBy(asc(outreachDrafts.generatedAt))
       .limit(sub.batchSizeDaily ?? 10);
 
-    const target = approvedDrafts.length;
+    const target = toPush.length;
     if (target === 0) continue;
 
-    const [batch] = await db
+    await db
       .insert(syncBatches)
       .values({
         accountId,
@@ -57,20 +61,20 @@ export async function runDailyBatchesForAccount(
         status: "complete",
         startedAt: new Date(),
         completedAt: new Date(),
-      })
-      .returning();
+      });
     batches += 1;
     pushed += target;
 
-    // Mark drafts as sent (stubbed CRM push)
-    for (const d of approvedDrafts) {
+    // Stubbed CRM push: record that the draft was delivered to the CRM as a
+    // pending artifact (e.g. a draft email/task on the rep's timeline).
+    // Status remains "approved" — only an actual rep send transitions to "sent".
+    const now = new Date();
+    for (const d of toPush) {
       await db
         .update(outreachDrafts)
-        .set({ status: "sent", sentAt: new Date() })
+        .set({ crmSyncedAt: now, crmDraftId: `stub_${d.id.slice(0, 8)}` })
         .where(eq(outreachDrafts.id, d.id));
     }
-
-    void batch;
   }
 
   return { batches, pushed };

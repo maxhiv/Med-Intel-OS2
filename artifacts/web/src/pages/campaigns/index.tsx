@@ -19,12 +19,15 @@ export default function CampaignsPage() {
   const subAccountId = summary?.myCampaigns ? "default" : "default"; // Mock logic if subaccount needed
 
   const { data: campaignsRes, isLoading, refetch } = useListCampaigns();
-  const campaigns = campaignsRes?.data || [];
+  const campaigns = campaignsRes ?? [];
 
   const createCampaign = useCreateCampaign();
 
   const handleCreate = () => {
-    if (!name) return toast({ title: "Name required", variant: "destructive" });
+    if (!name) {
+      toast({ title: "Name required", variant: "destructive" });
+      return;
+    }
     createCampaign.mutate({
       data: { name, description, subAccountId: "dummy-subaccount-id" } // we might need a real subaccount ID from me?
     }, {
@@ -86,7 +89,7 @@ export default function CampaignsPage() {
             <Target className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{campaigns.filter(c => c.status === 'active').length}</div>
+            <div className="text-2xl font-bold">{campaigns.filter((c) => c.status === 'active').length}</div>
           </CardContent>
         </Card>
       </div>
@@ -125,7 +128,7 @@ export default function CampaignsPage() {
                     </tr>
                   ))
                 ) : campaigns.length > 0 ? (
-                  campaigns.map((camp) => (
+                  campaigns.map((camp: typeof campaigns[number]) => (
                     <tr key={camp.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
                       <td className="p-4">
                         <Link href={`/campaigns/${camp.id}`} className="font-medium text-primary hover:underline">

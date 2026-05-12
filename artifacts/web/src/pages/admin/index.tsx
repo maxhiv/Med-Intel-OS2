@@ -11,7 +11,7 @@ export default function AdminPage() {
   const { data: stats } = useAdminPlatformStats();
   const { data: accountsRes } = useAdminListAccounts();
   const { data: sources, refetch: refetchSources } = useAdminListEnrichmentSources();
-  const accounts = accountsRes?.data || [];
+  const accounts = accountsRes ?? [];
   const { toast } = useToast();
   
   const approveSource = useAdminApproveEnrichmentSource();
@@ -132,7 +132,7 @@ export default function AdminPage() {
              </CardHeader>
              <CardContent>
                <div className="divide-y border rounded-md">
-                 {accounts.map(acc => (
+                 {accounts.map((acc) => (
                    <div key={acc.id} className="p-4 flex justify-between items-center">
                      <div>
                        <div className="font-bold">{acc.name}</div>

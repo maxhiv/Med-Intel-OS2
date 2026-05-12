@@ -5,10 +5,10 @@ import { Button } from "@/components/ui/button";
 
 export default function ReportsPage() {
   const { data: templatesRes } = useListReportTemplates();
-  const templates = templatesRes?.data || [];
+  const templates = templatesRes ?? [];
   
   const { data: runsRes } = useListReportRuns({ limit: 10 });
-  const runs = runsRes?.data || [];
+  const runs = runsRes ?? [];
 
   return (
     <div className="space-y-6">
@@ -29,7 +29,7 @@ export default function ReportsPage() {
           <CardContent>
             {templates.length > 0 ? (
               <div className="space-y-4">
-                {templates.map(t => (
+                {templates.map((t) => (
                   <div key={t.id} className="p-4 border rounded-md flex justify-between items-center">
                     <div>
                       <div className="font-medium">{t.name}</div>
@@ -56,7 +56,7 @@ export default function ReportsPage() {
           <CardContent>
             {runs.length > 0 ? (
               <div className="space-y-4">
-                {runs.map(r => (
+                {runs.map((r) => (
                   <div key={r.id} className="p-3 border rounded-md flex justify-between items-center bg-muted/20">
                     <div className="text-sm font-medium">Run #{r.id.slice(0,8)}</div>
                     <div className="text-sm text-muted-foreground">{r.status}</div>

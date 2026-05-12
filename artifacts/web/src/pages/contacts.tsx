@@ -19,13 +19,13 @@ export default function ContactsPage() {
   const activeFacilityId = selectedFacility || (facilities.length > 0 ? facilities[0].id : "");
 
   const { data: contacts, isLoading: loadingContacts, refetch } = useGetFacilityContacts(activeFacilityId, {
-    query: { enabled: !!activeFacilityId }
+    query: { enabled: !!activeFacilityId, queryKey: [`/api/facilities/${activeFacilityId}/contacts`] }
   });
 
   const enrichContact = useEnrichContact();
 
   const handleEnrich = (contactId: string) => {
-    enrichContact.mutate({ data: { dryRun: false } }, { // TODO: Check actual payload structure
+    enrichContact.mutate({ id: contactId, data: { dryRun: false } }, {
       onSuccess: () => {
         toast({ title: "Contact Enriched", description: "Successfully gathered more data on contact." });
         refetch();
