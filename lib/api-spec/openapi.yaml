@@ -559,6 +559,76 @@ paths:
       responses:
         "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SubAccount" } } } }
 
+  /admin/crm-credential-schemas:
+    get:
+      operationId: adminListCrmCredentialSchemas
+      tags: [admin]
+      summary: List the credential field schema for every supported CRM
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/CrmCredentialSchema" }
+
+  /admin/sub-accounts/{id}/credentials:
+    get:
+      operationId: adminGetSubAccountCredentials
+      tags: [admin]
+      summary: Inspect stored CRM credentials (secrets are masked)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SubAccountCredentialState" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: adminUpdateSubAccountCredentials
+      tags: [admin]
+      summary: Replace CRM credentials for a sub-account; encrypted at rest
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubAccountCredentialUpdate" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SubAccountCredentialState" } } } }
+        "400": { description: Bad request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: adminClearSubAccountCredentials
+      tags: [admin]
+      summary: Wipe stored CRM credentials for a sub-account
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [subAccountId, cleared]
+                properties:
+                  subAccountId: { type: string, format: uuid }
+                  cleared: { type: boolean }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /admin/sub-accounts/{id}/credentials/test:
+    post:
+      operationId: adminTestSubAccountCredentials
+      tags: [admin]
+      summary: Run a no-op call against the CRM to verify credentials
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CrmTestResult" } } } }
+        "400": { description: Failed, content: { application/json: { schema: { $ref: "#/components/schemas/CrmTestResult" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /admin/users:
     get:
       operationId: adminListUsers
@@ -728,6 +798,67 @@ components:
         repEmail: { type: string, nullable: true }
         timezone: { type: string }
         isActive: { type: boolean }
+
+    CrmCredentialField:
+      type: object
+      required: [key, label, required, secret]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        required: { type: boolean }
+        secret: { type: boolean }
+        placeholder: { type: string }
+        helpText: { type: string }
+
+    CrmCredentialSchema:
+      type: object
+      required: [crmType, fields]
+      properties:
+        crmType: { type: string }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/CrmCredentialField" }
+
+    SubAccountCredentialFieldState:
+      type: object
+      required: [present]
+      properties:
+        present: { type: boolean }
+        value: { type: string, nullable: true }
+
+    SubAccountCredentialState:
+      type: object
+      required: [subAccountId, encrypted, adapterAvailable, schema, fields]
+      properties:
+        subAccountId: { type: string, format: uuid }
+        crmType: { type: string, nullable: true }
+        encrypted: { type: boolean }
+        adapterAvailable: { type: boolean }
+        schema:
+          type: array
+          items: { $ref: "#/components/schemas/CrmCredentialField" }
+        fields:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/SubAccountCredentialFieldState" }
+
+    SubAccountCredentialUpdate:
+      type: object
+      required: [credentials]
+      properties:
+        crmType: { type: string }
+        credentials:
+          type: object
+          additionalProperties: true
+
+    CrmTestResult:
+      type: object
+      required: [ok, message]
+      properties:
+        ok: { type: boolean }
+        message: { type: string }
+        details:
+          type: object
+          additionalProperties: true
 
     SubAccountInput:
       type: object

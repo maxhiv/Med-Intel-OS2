@@ -63,6 +63,53 @@ export interface AccountInput {
   status?: string;
 }
 
+export interface CrmCredentialField {
+  key: string;
+  label: string;
+  required: boolean;
+  secret: boolean;
+  placeholder?: string;
+  helpText?: string;
+}
+
+export interface CrmCredentialSchema {
+  crmType: string;
+  fields: CrmCredentialField[];
+}
+
+export interface SubAccountCredentialFieldState {
+  present: boolean;
+  value?: string | null;
+}
+
+export type SubAccountCredentialStateFields = {
+  [key: string]: SubAccountCredentialFieldState;
+};
+
+export interface SubAccountCredentialState {
+  subAccountId: string;
+  crmType?: string | null;
+  encrypted: boolean;
+  adapterAvailable: boolean;
+  schema: CrmCredentialField[];
+  fields: SubAccountCredentialStateFields;
+}
+
+export type SubAccountCredentialUpdateCredentials = { [key: string]: unknown };
+
+export interface SubAccountCredentialUpdate {
+  crmType?: string;
+  credentials: SubAccountCredentialUpdateCredentials;
+}
+
+export type CrmTestResultDetails = { [key: string]: unknown };
+
+export interface CrmTestResult {
+  ok: boolean;
+  message: string;
+  details?: CrmTestResultDetails;
+}
+
 export interface SubAccountInput {
   accountId: string;
   name: string;
@@ -633,4 +680,9 @@ export type ListReportRunsParams = {
 
 export type AdminListSubAccountsParams = {
   accountId?: string;
+};
+
+export type AdminClearSubAccountCredentials200 = {
+  subAccountId: string;
+  cleared: boolean;
 };

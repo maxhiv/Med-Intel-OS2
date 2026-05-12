@@ -1422,6 +1422,118 @@ export const AdminCreateSubAccountBody = zod.object({
   timezone: zod.string().optional(),
 });
 
+/**
+ * @summary List the credential field schema for every supported CRM
+ */
+export const AdminListCrmCredentialSchemasResponseItem = zod.object({
+  crmType: zod.string(),
+  fields: zod.array(
+    zod.object({
+      key: zod.string(),
+      label: zod.string(),
+      required: zod.boolean(),
+      secret: zod.boolean(),
+      placeholder: zod.string().optional(),
+      helpText: zod.string().optional(),
+    }),
+  ),
+});
+export const AdminListCrmCredentialSchemasResponse = zod.array(
+  AdminListCrmCredentialSchemasResponseItem,
+);
+
+/**
+ * @summary Inspect stored CRM credentials (secrets are masked)
+ */
+export const AdminGetSubAccountCredentialsParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const AdminGetSubAccountCredentialsResponse = zod.object({
+  subAccountId: zod.string().uuid(),
+  crmType: zod.string().nullish(),
+  encrypted: zod.boolean(),
+  adapterAvailable: zod.boolean(),
+  schema: zod.array(
+    zod.object({
+      key: zod.string(),
+      label: zod.string(),
+      required: zod.boolean(),
+      secret: zod.boolean(),
+      placeholder: zod.string().optional(),
+      helpText: zod.string().optional(),
+    }),
+  ),
+  fields: zod.record(
+    zod.string(),
+    zod.object({
+      present: zod.boolean(),
+      value: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Replace CRM credentials for a sub-account; encrypted at rest
+ */
+export const AdminUpdateSubAccountCredentialsParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const AdminUpdateSubAccountCredentialsBody = zod.object({
+  crmType: zod.string().optional(),
+  credentials: zod.record(zod.string(), zod.unknown()),
+});
+
+export const AdminUpdateSubAccountCredentialsResponse = zod.object({
+  subAccountId: zod.string().uuid(),
+  crmType: zod.string().nullish(),
+  encrypted: zod.boolean(),
+  adapterAvailable: zod.boolean(),
+  schema: zod.array(
+    zod.object({
+      key: zod.string(),
+      label: zod.string(),
+      required: zod.boolean(),
+      secret: zod.boolean(),
+      placeholder: zod.string().optional(),
+      helpText: zod.string().optional(),
+    }),
+  ),
+  fields: zod.record(
+    zod.string(),
+    zod.object({
+      present: zod.boolean(),
+      value: zod.string().nullish(),
+    }),
+  ),
+});
+
+/**
+ * @summary Wipe stored CRM credentials for a sub-account
+ */
+export const AdminClearSubAccountCredentialsParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const AdminClearSubAccountCredentialsResponse = zod.object({
+  subAccountId: zod.string().uuid(),
+  cleared: zod.boolean(),
+});
+
+/**
+ * @summary Run a no-op call against the CRM to verify credentials
+ */
+export const AdminTestSubAccountCredentialsParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const AdminTestSubAccountCredentialsResponse = zod.object({
+  ok: zod.boolean(),
+  message: zod.string(),
+  details: zod.record(zod.string(), zod.unknown()).optional(),
+});
+
 export const AdminListUsersResponseItem = zod.object({
   id: zod.string().uuid(),
   email: zod.string(),

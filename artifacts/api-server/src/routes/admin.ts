@@ -17,6 +17,17 @@ import {
 } from "@workspace/db";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { listAllSources } from "../services/enrichment";
+import {
+  decodeStoredCredentials,
+  encryptJson,
+  isEncryptedBlob,
+  maskSecret,
+} from "../services/encryption";
+import {
+  getCrmAdapter,
+  listCrmAdapters,
+  type CredentialFieldSpec,
+} from "../services/crmAdapters";
 
 const ALL_ENRICHMENT_SOURCES = [
   ...FREE_ENRICHMENT_SOURCES,
@@ -114,6 +125,218 @@ router.post("/admin/sub-accounts", requirePlatformAdmin, async (req, res) => {
     })
     .returning();
   res.status(201).json(created);
+});
+
+/**
+ * Inspect the credential editor schema + currently-stored values for a
+ * sub-account. Secret fields are masked (last 4 chars only); non-secret
+ * fields are returned in clear so the admin sees what's there.
+ */
+router.get(
+  "/admin/sub-accounts/:id/credentials",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const id = String(req.params.id);
+    const [sub] = await db.select().from(subAccounts).where(eq(subAccounts.id, id)).limit(1);
+    if (!sub) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const adapter = getCrmAdapter(sub.crmType);
+    if (!adapter) {
+      res.json({
+        subAccountId: sub.id,
+        crmType: sub.crmType ?? null,
+        encrypted: false,
+        schema: [],
+        fields: {},
+        adapterAvailable: false,
+      });
+      return;
+    }
+    const decoded = decodeStoredCredentials<Record<string, unknown>>(
+      sub.crmCredentials ?? {},
+    );
+    const fields: Record<string, { present: boolean; value: string | null }> = {};
+    for (const f of adapter.credentialSchema as CredentialFieldSpec[]) {
+      const raw = decoded[f.key];
+      const present = raw !== undefined && raw !== null && raw !== "";
+      const value = present
+        ? f.secret
+          ? maskSecret(String(raw))
+          : String(raw)
+        : null;
+      fields[f.key] = { present, value };
+    }
+    res.json({
+      subAccountId: sub.id,
+      crmType: sub.crmType,
+      encrypted: isEncryptedBlob(sub.crmCredentials),
+      adapterAvailable: true,
+      schema: adapter.credentialSchema,
+      fields,
+    });
+  },
+);
+
+/**
+ * Replace the stored CRM credentials for a sub-account. Body: a flat
+ * object matching the adapter's credential schema (e.g. `{ accessToken,
+ * locationId }`). Optional `crmType` switches the sub-account's CRM type
+ * at the same time. The blob is encrypted at rest and never returned to
+ * the client in plaintext.
+ */
+router.put(
+  "/admin/sub-accounts/:id/credentials",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const id = String(req.params.id);
+    const [sub] = await db.select().from(subAccounts).where(eq(subAccounts.id, id)).limit(1);
+    if (!sub) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const body = (req.body ?? {}) as {
+      crmType?: string;
+      credentials?: Record<string, unknown>;
+    };
+    const nextCrmType = body.crmType ?? sub.crmType ?? undefined;
+    const adapter = getCrmAdapter(nextCrmType);
+    if (!adapter) {
+      res
+        .status(400)
+        .json({ error: "unsupported_crm_type", crmType: nextCrmType ?? null });
+      return;
+    }
+    const incoming = body.credentials ?? {};
+    if (typeof incoming !== "object" || Array.isArray(incoming)) {
+      res.status(400).json({ error: "credentials_must_be_object" });
+      return;
+    }
+
+    // Merge with existing decrypted creds so the UI can submit only the
+    // fields it changed (secrets the admin chose not to re-enter remain).
+    const existing = decodeStoredCredentials<Record<string, unknown>>(
+      sub.crmCredentials ?? {},
+    );
+    const merged: Record<string, unknown> = { ...existing };
+    for (const f of adapter.credentialSchema as CredentialFieldSpec[]) {
+      if (Object.prototype.hasOwnProperty.call(incoming, f.key)) {
+        const v = incoming[f.key];
+        if (v === null || v === "") delete merged[f.key];
+        else merged[f.key] = v;
+      }
+    }
+
+    // Validate required fields are present after merge.
+    const missing: string[] = [];
+    for (const f of adapter.credentialSchema as CredentialFieldSpec[]) {
+      if (f.required && (merged[f.key] === undefined || merged[f.key] === "")) {
+        missing.push(f.key);
+      }
+    }
+    if (missing.length > 0) {
+      res
+        .status(400)
+        .json({ error: "missing_required_credentials", fields: missing });
+      return;
+    }
+
+    const encrypted = encryptJson(merged);
+    const [updated] = await db
+      .update(subAccounts)
+      .set({
+        crmType: adapter.type,
+        crmCredentials: encrypted,
+        updatedAt: new Date(),
+      })
+      .where(eq(subAccounts.id, id))
+      .returning();
+
+    // Return the redacted view so the UI can refresh state without exposing secrets.
+    const fields: Record<string, { present: boolean; value: string | null }> = {};
+    for (const f of adapter.credentialSchema as CredentialFieldSpec[]) {
+      const raw = merged[f.key];
+      const present = raw !== undefined && raw !== null && raw !== "";
+      const value = present
+        ? f.secret
+          ? maskSecret(String(raw))
+          : String(raw)
+        : null;
+      fields[f.key] = { present, value };
+    }
+    res.json({
+      subAccountId: updated.id,
+      crmType: updated.crmType,
+      encrypted: true,
+      adapterAvailable: true,
+      schema: adapter.credentialSchema,
+      fields,
+    });
+  },
+);
+
+/**
+ * Wipe a sub-account's stored CRM credentials. Useful for offboarding.
+ */
+router.delete(
+  "/admin/sub-accounts/:id/credentials",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const id = String(req.params.id);
+    const [updated] = await db
+      .update(subAccounts)
+      .set({ crmCredentials: {}, updatedAt: new Date() })
+      .where(eq(subAccounts.id, id))
+      .returning();
+    if (!updated) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    res.json({ subAccountId: updated.id, cleared: true });
+  },
+);
+
+/**
+ * Run the adapter's no-op test against the live CRM and return the
+ * outcome. Used by the "Test connection" button in the admin UI.
+ */
+router.post(
+  "/admin/sub-accounts/:id/credentials/test",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const id = String(req.params.id);
+    const [sub] = await db.select().from(subAccounts).where(eq(subAccounts.id, id)).limit(1);
+    if (!sub) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const adapter = getCrmAdapter(sub.crmType);
+    if (!adapter) {
+      res.status(400).json({
+        ok: false,
+        message: `No adapter for crmType ${sub.crmType ?? "(none)"}`,
+      });
+      return;
+    }
+    const creds = decodeStoredCredentials<Record<string, unknown>>(
+      sub.crmCredentials ?? {},
+    );
+    const result = await adapter.testConnection(creds);
+    res.status(result.ok ? 200 : 400).json(result);
+  },
+);
+
+/**
+ * Lists the credential schema for every supported CRM. Lets the admin UI
+ * render the right form before any sub-account has a CRM type chosen.
+ */
+router.get("/admin/crm-credential-schemas", requirePlatformAdmin, (_req, res) => {
+  const out = listCrmAdapters().map((a) => ({
+    crmType: a.type,
+    fields: a.credentialSchema,
+  }));
+  res.json(out);
 });
 
 router.get("/admin/users", requirePlatformAdmin, async (_req, res) => {

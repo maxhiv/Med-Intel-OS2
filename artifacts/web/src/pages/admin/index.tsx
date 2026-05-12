@@ -1,12 +1,23 @@
 import { useState } from "react";
-import { useGetMe, useAdminPlatformStats, useAdminListAccounts, useAdminListEnrichmentSources, useAdminApproveEnrichmentSource, useAdminSetEnrichmentSourceBudget, useAdminValidationStats } from "@workspace/api-client-react";
+import {
+  useGetMe,
+  useAdminPlatformStats,
+  useAdminListAccounts,
+  useAdminListEnrichmentSources,
+  useAdminApproveEnrichmentSource,
+  useAdminSetEnrichmentSourceBudget,
+  useAdminValidationStats,
+  useAdminListSubAccounts,
+  type SubAccount,
+} from "@workspace/api-client-react";
 import { Redirect } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ShieldAlert, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import { ShieldAlert, Activity, CheckCircle2, XCircle, AlertTriangle, KeyRound } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { SubAccountCredentialsDialog } from "./sub-account-credentials";
 
 function formatUsd(cents: number | null | undefined): string {
   if (cents == null) return "—";
@@ -93,9 +104,12 @@ export default function AdminPage() {
   const { data: accountsRes } = useAdminListAccounts();
   const { data: sources, refetch: refetchSources } = useAdminListEnrichmentSources();
   const { data: validationStats } = useAdminValidationStats();
+  const { data: subAccounts } = useAdminListSubAccounts();
   const accounts = accountsRes ?? [];
   const { toast } = useToast();
-  
+
+  const [credsTarget, setCredsTarget] = useState<SubAccount | null>(null);
+
   const approveSource = useAdminApproveEnrichmentSource();
   const setBudget = useAdminSetEnrichmentSourceBudget();
 
@@ -127,6 +141,8 @@ export default function AdminPage() {
       },
     );
   };
+
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
 
   return (
     <div className="space-y-6">
@@ -161,8 +177,9 @@ export default function AdminPage() {
           <TabsTrigger value="sources">Enrichment Sources</TabsTrigger>
           <TabsTrigger value="accounts">Accounts</TabsTrigger>
           <TabsTrigger value="validators">Validators (30d)</TabsTrigger>
+          <TabsTrigger value="sub-accounts">Sub-Account CRM Credentials</TabsTrigger>
         </TabsList>
-        
+
         <TabsContent value="sources" className="mt-4">
           <Card>
             <CardHeader>
@@ -374,7 +391,67 @@ export default function AdminPage() {
              </CardContent>
           </Card>
         </TabsContent>
+
+        <TabsContent value="sub-accounts" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Sub-Account CRM Credentials</CardTitle>
+              <CardDescription>
+                Set the access tokens used by the push pipeline. Credentials are
+                encrypted at rest with AES-256-GCM and never returned to the
+                browser in plaintext.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {!subAccounts || subAccounts.length === 0 ? (
+                <div className="py-4 text-muted-foreground">No sub-accounts found.</div>
+              ) : (
+                <div className="divide-y border rounded-md">
+                  {subAccounts.map((sub) => {
+                    const acct = accountById.get(sub.accountId);
+                    return (
+                      <div key={sub.id} className="p-4 flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="font-bold flex items-center gap-2">
+                            {sub.name}
+                            <span className="text-xs uppercase bg-secondary px-2 py-0.5 rounded">
+                              {sub.crmType ?? "no crm"}
+                            </span>
+                          </div>
+                          <div className="text-sm text-muted-foreground truncate">
+                            {acct?.name ?? sub.accountId}
+                            {sub.repName ? ` • Rep: ${sub.repName}` : ""}
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          onClick={() => setCredsTarget(sub)}
+                          data-testid={`button-credentials-${sub.id}`}
+                        >
+                          <KeyRound className="h-4 w-4 mr-2" /> Credentials
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                <Activity className="h-3 w-3" />
+                Use “Test connection” inside each editor to verify the token
+                against the live CRM before relying on it for batches.
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
+
+      {credsTarget && (
+        <SubAccountCredentialsDialog
+          subAccount={credsTarget}
+          open={Boolean(credsTarget)}
+          onOpenChange={(o) => !o && setCredsTarget(null)}
+        />
+      )}
     </div>
   );
 }

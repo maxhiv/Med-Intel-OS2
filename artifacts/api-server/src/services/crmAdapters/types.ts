@@ -27,9 +27,36 @@ export interface CrmPushOutcome {
   raw?: unknown;
 }
 
+export interface CrmTestResult {
+  ok: boolean;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * Shape of the credential editor surfaced through the admin API.
+ * `secret: true` fields are masked in GET responses (only the last 4
+ * characters are returned). Non-secret fields are returned in clear.
+ */
+export interface CredentialFieldSpec {
+  key: string;
+  label: string;
+  required: boolean;
+  secret: boolean;
+  placeholder?: string;
+  helpText?: string;
+}
+
 export interface CrmAdapter {
   readonly type: CrmType;
+  /** Field schema rendered by the admin UI for this CRM. */
+  readonly credentialSchema: CredentialFieldSpec[];
   push(input: CrmPushInput): Promise<CrmPushOutcome>;
+  /**
+   * Hit a no-op endpoint on the CRM to confirm credentials are valid.
+   * Receives ALREADY-DECRYPTED credentials.
+   */
+  testConnection(credentials: Record<string, unknown>): Promise<CrmTestResult>;
 }
 
 export class CrmAdapterError extends Error {

@@ -8,8 +8,15 @@
  *   1. Upsert contact by email (search → create or patch).
  *   2. Create a TASK engagement and associate it with the contact.
  */
-import type { CrmAdapter, CrmPushInput, CrmPushOutcome } from "./types";
+import type {
+  CrmAdapter,
+  CrmPushInput,
+  CrmPushOutcome,
+  CrmTestResult,
+  CredentialFieldSpec,
+} from "./types";
 import { CrmAdapterError, isRetryableHttpStatus } from "./types";
+import { decodeStoredCredentials } from "../encryption";
 
 const HUBSPOT_BASE = "https://api.hubapi.com";
 
@@ -76,10 +83,58 @@ function safeJson(text: string): unknown {
   }
 }
 
+const hubspotCredentialSchema: CredentialFieldSpec[] = [
+  {
+    key: "accessToken",
+    label: "Private App Access Token",
+    required: true,
+    secret: true,
+    placeholder: "pat-na1-...",
+    helpText: "Generate in HubSpot → Settings → Integrations → Private Apps.",
+  },
+  {
+    key: "ownerId",
+    label: "Default Owner ID",
+    required: false,
+    secret: false,
+    helpText: "Optional. HubSpot user the rep tasks are assigned to.",
+  },
+];
+
 export const hubspotAdapter: CrmAdapter = {
   type: "hubspot",
+  credentialSchema: hubspotCredentialSchema,
+  async testConnection(credentials): Promise<CrmTestResult> {
+    let creds: HubspotCredentials;
+    try {
+      creds = readCreds(credentials);
+    } catch (err) {
+      return { ok: false, message: (err as Error).message };
+    }
+    try {
+      // Account info endpoint requires only the basic CRM scope and confirms
+      // the token is alive without mutating anything.
+      const res = (await hsFetch(
+        "/account-info/v3/details",
+        { method: "GET" },
+        creds,
+      )) as { portalId?: number; uiDomain?: string };
+      return {
+        ok: true,
+        message: `Connected to HubSpot portal ${res?.portalId ?? "?"}`,
+        details: { portalId: res?.portalId, uiDomain: res?.uiDomain },
+      };
+    } catch (err) {
+      const e = err as CrmAdapterError;
+      return {
+        ok: false,
+        message: e.message,
+        details: { code: e.code, status: e.status ?? null },
+      };
+    }
+  },
   async push({ draft, contact, facility, subAccount }: CrmPushInput): Promise<CrmPushOutcome> {
-    const creds = readCreds(subAccount.crmCredentials);
+    const creds = readCreds(decodeStoredCredentials(subAccount.crmCredentials));
     if (!contact.email) {
       throw new CrmAdapterError({
         code: "hubspot_contact_missing_email",

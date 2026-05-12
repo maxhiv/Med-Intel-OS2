@@ -21,6 +21,7 @@ import type {
   AccountInput,
   AddContactsInput,
   AddContactsResult,
+  AdminClearSubAccountCredentials200,
   AdminListSubAccountsParams,
   ApproveSourceInput,
   BatchRetryResult,
@@ -32,6 +33,8 @@ import type {
   CampaignPatchInput,
   ConflictResponse,
   Contact,
+  CrmCredentialSchema,
+  CrmTestResult,
   DashboardSummary,
   Draft,
   DraftEditInput,
@@ -40,6 +43,7 @@ import type {
   EnrichResult,
   EnrichmentSource,
   Equipment,
+  Error,
   Facility,
   FacilityDetail,
   FacilityListResponse,
@@ -72,6 +76,8 @@ import type {
   SetSourceBudgetInput,
   SignalWithFacility,
   SubAccount,
+  SubAccountCredentialState,
+  SubAccountCredentialUpdate,
   SubAccountInput,
   SyncBatch,
   SyncBatchDetail,
@@ -3744,6 +3750,453 @@ export const useAdminCreateSubAccount = <
   TContext
 > => {
   return useMutation(getAdminCreateSubAccountMutationOptions(options));
+};
+
+/**
+ * @summary List the credential field schema for every supported CRM
+ */
+export const getAdminListCrmCredentialSchemasUrl = () => {
+  return `/api/admin/crm-credential-schemas`;
+};
+
+export const adminListCrmCredentialSchemas = async (
+  options?: RequestInit,
+): Promise<CrmCredentialSchema[]> => {
+  return customFetch<CrmCredentialSchema[]>(
+    getAdminListCrmCredentialSchemasUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getAdminListCrmCredentialSchemasQueryKey = () => {
+  return [`/api/admin/crm-credential-schemas`] as const;
+};
+
+export const getAdminListCrmCredentialSchemasQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminListCrmCredentialSchemas>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListCrmCredentialSchemas>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAdminListCrmCredentialSchemasQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminListCrmCredentialSchemas>>
+  > = ({ signal }) =>
+    adminListCrmCredentialSchemas({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminListCrmCredentialSchemas>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminListCrmCredentialSchemasQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminListCrmCredentialSchemas>>
+>;
+export type AdminListCrmCredentialSchemasQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List the credential field schema for every supported CRM
+ */
+
+export function useAdminListCrmCredentialSchemas<
+  TData = Awaited<ReturnType<typeof adminListCrmCredentialSchemas>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListCrmCredentialSchemas>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminListCrmCredentialSchemasQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Inspect stored CRM credentials (secrets are masked)
+ */
+export const getAdminGetSubAccountCredentialsUrl = (id: string) => {
+  return `/api/admin/sub-accounts/${id}/credentials`;
+};
+
+export const adminGetSubAccountCredentials = async (
+  id: string,
+  options?: RequestInit,
+): Promise<SubAccountCredentialState> => {
+  return customFetch<SubAccountCredentialState>(
+    getAdminGetSubAccountCredentialsUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getAdminGetSubAccountCredentialsQueryKey = (id: string) => {
+  return [`/api/admin/sub-accounts/${id}/credentials`] as const;
+};
+
+export const getAdminGetSubAccountCredentialsQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminGetSubAccountCredentials>>,
+  TError = ErrorType<NotFoundResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminGetSubAccountCredentials>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAdminGetSubAccountCredentialsQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminGetSubAccountCredentials>>
+  > = ({ signal }) =>
+    adminGetSubAccountCredentials(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminGetSubAccountCredentials>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminGetSubAccountCredentialsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminGetSubAccountCredentials>>
+>;
+export type AdminGetSubAccountCredentialsQueryError =
+  ErrorType<NotFoundResponse>;
+
+/**
+ * @summary Inspect stored CRM credentials (secrets are masked)
+ */
+
+export function useAdminGetSubAccountCredentials<
+  TData = Awaited<ReturnType<typeof adminGetSubAccountCredentials>>,
+  TError = ErrorType<NotFoundResponse>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminGetSubAccountCredentials>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminGetSubAccountCredentialsQueryOptions(
+    id,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Replace CRM credentials for a sub-account; encrypted at rest
+ */
+export const getAdminUpdateSubAccountCredentialsUrl = (id: string) => {
+  return `/api/admin/sub-accounts/${id}/credentials`;
+};
+
+export const adminUpdateSubAccountCredentials = async (
+  id: string,
+  subAccountCredentialUpdate: SubAccountCredentialUpdate,
+  options?: RequestInit,
+): Promise<SubAccountCredentialState> => {
+  return customFetch<SubAccountCredentialState>(
+    getAdminUpdateSubAccountCredentialsUrl(id),
+    {
+      ...options,
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(subAccountCredentialUpdate),
+    },
+  );
+};
+
+export const getAdminUpdateSubAccountCredentialsMutationOptions = <
+  TError = ErrorType<Error | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminUpdateSubAccountCredentials>>,
+    TError,
+    { id: string; data: BodyType<SubAccountCredentialUpdate> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminUpdateSubAccountCredentials>>,
+  TError,
+  { id: string; data: BodyType<SubAccountCredentialUpdate> },
+  TContext
+> => {
+  const mutationKey = ["adminUpdateSubAccountCredentials"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminUpdateSubAccountCredentials>>,
+    { id: string; data: BodyType<SubAccountCredentialUpdate> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return adminUpdateSubAccountCredentials(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminUpdateSubAccountCredentialsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminUpdateSubAccountCredentials>>
+>;
+export type AdminUpdateSubAccountCredentialsMutationBody =
+  BodyType<SubAccountCredentialUpdate>;
+export type AdminUpdateSubAccountCredentialsMutationError = ErrorType<
+  Error | NotFoundResponse
+>;
+
+/**
+ * @summary Replace CRM credentials for a sub-account; encrypted at rest
+ */
+export const useAdminUpdateSubAccountCredentials = <
+  TError = ErrorType<Error | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminUpdateSubAccountCredentials>>,
+    TError,
+    { id: string; data: BodyType<SubAccountCredentialUpdate> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminUpdateSubAccountCredentials>>,
+  TError,
+  { id: string; data: BodyType<SubAccountCredentialUpdate> },
+  TContext
+> => {
+  return useMutation(
+    getAdminUpdateSubAccountCredentialsMutationOptions(options),
+  );
+};
+
+/**
+ * @summary Wipe stored CRM credentials for a sub-account
+ */
+export const getAdminClearSubAccountCredentialsUrl = (id: string) => {
+  return `/api/admin/sub-accounts/${id}/credentials`;
+};
+
+export const adminClearSubAccountCredentials = async (
+  id: string,
+  options?: RequestInit,
+): Promise<AdminClearSubAccountCredentials200> => {
+  return customFetch<AdminClearSubAccountCredentials200>(
+    getAdminClearSubAccountCredentialsUrl(id),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getAdminClearSubAccountCredentialsMutationOptions = <
+  TError = ErrorType<NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminClearSubAccountCredentials>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminClearSubAccountCredentials>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["adminClearSubAccountCredentials"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminClearSubAccountCredentials>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return adminClearSubAccountCredentials(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminClearSubAccountCredentialsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminClearSubAccountCredentials>>
+>;
+
+export type AdminClearSubAccountCredentialsMutationError =
+  ErrorType<NotFoundResponse>;
+
+/**
+ * @summary Wipe stored CRM credentials for a sub-account
+ */
+export const useAdminClearSubAccountCredentials = <
+  TError = ErrorType<NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminClearSubAccountCredentials>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminClearSubAccountCredentials>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(
+    getAdminClearSubAccountCredentialsMutationOptions(options),
+  );
+};
+
+/**
+ * @summary Run a no-op call against the CRM to verify credentials
+ */
+export const getAdminTestSubAccountCredentialsUrl = (id: string) => {
+  return `/api/admin/sub-accounts/${id}/credentials/test`;
+};
+
+export const adminTestSubAccountCredentials = async (
+  id: string,
+  options?: RequestInit,
+): Promise<CrmTestResult> => {
+  return customFetch<CrmTestResult>(getAdminTestSubAccountCredentialsUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getAdminTestSubAccountCredentialsMutationOptions = <
+  TError = ErrorType<CrmTestResult | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminTestSubAccountCredentials>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminTestSubAccountCredentials>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["adminTestSubAccountCredentials"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminTestSubAccountCredentials>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return adminTestSubAccountCredentials(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminTestSubAccountCredentialsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminTestSubAccountCredentials>>
+>;
+
+export type AdminTestSubAccountCredentialsMutationError = ErrorType<
+  CrmTestResult | NotFoundResponse
+>;
+
+/**
+ * @summary Run a no-op call against the CRM to verify credentials
+ */
+export const useAdminTestSubAccountCredentials = <
+  TError = ErrorType<CrmTestResult | NotFoundResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminTestSubAccountCredentials>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminTestSubAccountCredentials>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getAdminTestSubAccountCredentialsMutationOptions(options));
 };
 
 export const getAdminListUsersUrl = () => {

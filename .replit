@@ -33,3 +33,8 @@ externalPort = 3000
 
 [nix]
 channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+CRM_ENCRYPTION_KEY = "oWWY+QkPRtRsmm4K8X4guoAZI5dxgPyMIIBb5qW4kmI="

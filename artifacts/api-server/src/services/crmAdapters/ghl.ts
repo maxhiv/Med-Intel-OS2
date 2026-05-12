@@ -7,8 +7,15 @@
  *   1. Upsert the contact in the configured sub-account (location).
  *   2. Create a task on the rep's timeline pointing at the approved draft.
  */
-import type { CrmAdapter, CrmPushInput, CrmPushOutcome } from "./types";
+import type {
+  CrmAdapter,
+  CrmPushInput,
+  CrmPushOutcome,
+  CrmTestResult,
+  CredentialFieldSpec,
+} from "./types";
 import { CrmAdapterError, isRetryableHttpStatus } from "./types";
+import { decodeStoredCredentials } from "../encryption";
 
 const GHL_BASE = "https://services.leadconnectorhq.com";
 const GHL_API_VERSION = "2021-07-28";
@@ -77,10 +84,60 @@ function safeJson(text: string): unknown {
   }
 }
 
+const ghlCredentialSchema: CredentialFieldSpec[] = [
+  {
+    key: "accessToken",
+    label: "Private Integration Token",
+    required: true,
+    secret: true,
+    placeholder: "pit-...",
+    helpText: "Generated in GHL → Settings → Private Integrations.",
+  },
+  {
+    key: "locationId",
+    label: "Location ID",
+    required: true,
+    secret: false,
+    placeholder: "loc_...",
+  },
+];
+
 export const ghlAdapter: CrmAdapter = {
   type: "ghl",
+  credentialSchema: ghlCredentialSchema,
+  async testConnection(credentials): Promise<CrmTestResult> {
+    let creds: GhlCredentials;
+    try {
+      creds = readCreds(credentials);
+    } catch (err) {
+      return {
+        ok: false,
+        message: (err as Error).message,
+      };
+    }
+    try {
+      // GET the configured location — cheap, read-only sanity check.
+      const res = await ghlFetch(
+        `/locations/${encodeURIComponent(creds.locationId)}`,
+        { method: "GET" },
+        creds,
+      );
+      return {
+        ok: true,
+        message: `Connected to GHL location ${creds.locationId}`,
+        details: { location: res },
+      };
+    } catch (err) {
+      const e = err as CrmAdapterError;
+      return {
+        ok: false,
+        message: e.message,
+        details: { code: e.code, status: e.status ?? null },
+      };
+    }
+  },
   async push({ draft, contact, facility, subAccount }: CrmPushInput): Promise<CrmPushOutcome> {
-    const creds = readCreds(subAccount.crmCredentials);
+    const creds = readCreds(decodeStoredCredentials(subAccount.crmCredentials));
 
     // Upsert contact: GHL upsert dedupes by email/phone within the location.
     const upsertBody = {

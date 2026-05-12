@@ -22,5 +22,16 @@ export function getCrmAdapter(crmType: string | null | undefined): CrmAdapter | 
   return null;
 }
 
-export type { CrmAdapter, CrmPushInput, CrmPushOutcome, CrmType } from "./types";
+export type {
+  CrmAdapter,
+  CrmPushInput,
+  CrmPushOutcome,
+  CrmType,
+  CrmTestResult,
+  CredentialFieldSpec,
+} from "./types";
 export { CrmAdapterError } from "./types";
+
+export function listCrmAdapters(): readonly CrmAdapter[] {
+  return Object.values(REGISTRY);
+}
