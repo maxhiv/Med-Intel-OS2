@@ -66,6 +66,16 @@ export const facilities = pgTable(
     index("idx_facilities_state").on(t.state),
     index("idx_facilities_type").on(t.facilityType),
     index("idx_facilities_signal_score").on(t.signalScore),
+    // Trigram GIN indexes power the CON ingestor's candidate-pool ILIKE
+    // probes against name / DBA / system_name. Requires the `pg_trgm`
+    // extension, which is created before schema push by
+    // `lib/db/src/ensure-extensions.ts` (and re-asserted by `seed.ts`).
+    index("idx_facilities_name_trgm")
+      .using("gin", sql`${t.name} gin_trgm_ops`),
+    index("idx_facilities_dba_trgm")
+      .using("gin", sql`${t.doingBusinessAs} gin_trgm_ops`),
+    index("idx_facilities_system_name_trgm")
+      .using("gin", sql`${t.systemName} gin_trgm_ops`),
     check("signal_score_range", sql`${t.signalScore} BETWEEN 0 AND 100`),
   ],
 );
