@@ -1,5 +1,6 @@
-import { Router, type IRouter } from "express";
-import { eq, sql, desc } from "drizzle-orm";
+import crypto from "node:crypto";
+import { Router, type IRouter, type Request } from "express";
+import { eq, sql, desc, and } from "drizzle-orm";
 import {
   db,
   accounts,
@@ -12,6 +13,7 @@ import {
   facilityContacts,
   syncBatches,
   contactValidationLog,
+  replyEvents,
   FREE_ENRICHMENT_SOURCES,
   PAID_ENRICHMENT_SOURCES,
 } from "@workspace/db";
@@ -28,6 +30,25 @@ import {
   listCrmAdapters,
   type CredentialFieldSpec,
 } from "../services/crmAdapters";
+
+const SUPPORTED_WEBHOOK_CRMS = ["ghl", "hubspot", "salesforce"] as const;
+type WebhookCrm = (typeof SUPPORTED_WEBHOOK_CRMS)[number];
+
+function publicBaseUrl(req: Request): string {
+  const envBase = process.env.PUBLIC_API_BASE_URL;
+  if (envBase) return envBase.replace(/\/$/, "");
+  const replitDomain = process.env.REPLIT_DEV_DOMAIN;
+  if (replitDomain) return `https://${replitDomain}`;
+  const proto =
+    (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0] ??
+    req.protocol;
+  const host = (req.headers["x-forwarded-host"] as string | undefined) ?? req.get("host") ?? "";
+  return `${proto}://${host}`;
+}
+
+function buildWebhookUrl(req: Request, crm: WebhookCrm, subAccountId: string): string {
+  return `${publicBaseUrl(req)}/api/webhooks/${crm}/${subAccountId}`;
+}
 
 const ALL_ENRICHMENT_SOURCES = [
   ...FREE_ENRICHMENT_SOURCES,
@@ -576,5 +597,112 @@ router.get("/admin/validation-stats", requirePlatformAdmin, async (_req, res) =>
 
   res.json(Array.from(bySource.values()));
 });
+
+// ── Webhook configuration helpers ─────────────────────────────────────────
+
+router.get(
+  "/admin/sub-accounts/:id/webhook-config",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const id = String(req.params.id);
+    const [sub] = await db
+      .select()
+      .from(subAccounts)
+      .where(eq(subAccounts.id, id))
+      .limit(1);
+    if (!sub) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    const creds = (sub.crmCredentials ?? {}) as { webhookSecret?: string };
+    const secretSet = Boolean(creds.webhookSecret && creds.webhookSecret.length > 0);
+
+    const urls = SUPPORTED_WEBHOOK_CRMS.map((crm) => ({
+      crm,
+      url: buildWebhookUrl(req, crm, sub.id),
+    }));
+
+    // Last received event (any) and last webhook_error for this sub-account's
+    // CRM. We scope by accountId + crmType because reply_events doesn't carry
+    // sub_account_id; the (account, crm) pair is sufficient since each
+    // sub-account owns its own credentials and inbound URL.
+    let lastEvent: typeof replyEvents.$inferSelect | null = null;
+    let lastError: typeof replyEvents.$inferSelect | null = null;
+    if (sub.crmType) {
+      const [latest] = await db
+        .select()
+        .from(replyEvents)
+        .where(
+          and(
+            eq(replyEvents.accountId, sub.accountId),
+            eq(replyEvents.crmType, sub.crmType),
+          ),
+        )
+        .orderBy(desc(replyEvents.receivedAt))
+        .limit(1);
+      lastEvent = latest ?? null;
+
+      const [latestErr] = await db
+        .select()
+        .from(replyEvents)
+        .where(
+          and(
+            eq(replyEvents.accountId, sub.accountId),
+            eq(replyEvents.crmType, sub.crmType),
+            eq(replyEvents.eventType, "webhook_error"),
+          ),
+        )
+        .orderBy(desc(replyEvents.receivedAt))
+        .limit(1);
+      lastError = latestErr ?? null;
+    }
+
+    const lastWasError = lastEvent?.eventType === "webhook_error";
+    let lastErrorReason: string | null = null;
+    if (lastWasError) {
+      const payload = (lastEvent?.rawPayload ?? {}) as { reason?: string };
+      lastErrorReason = payload.reason ?? null;
+    }
+
+    res.json({
+      subAccountId: sub.id,
+      subAccountName: sub.name,
+      crmType: sub.crmType ?? null,
+      webhookUrls: urls,
+      secretSet,
+      lastReceivedAt: lastEvent?.receivedAt ?? null,
+      lastEventType: lastEvent?.eventType ?? null,
+      lastSignatureOk: lastEvent ? !lastWasError : null,
+      lastErrorReason,
+      lastErrorAt: lastError?.receivedAt ?? null,
+    });
+  },
+);
+
+router.post(
+  "/admin/sub-accounts/:id/webhook-secret/rotate",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const id = String(req.params.id);
+    const [sub] = await db
+      .select()
+      .from(subAccounts)
+      .where(eq(subAccounts.id, id))
+      .limit(1);
+    if (!sub) {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    // 32 bytes -> 64 hex chars. Plenty of entropy for HMAC-SHA256 keys.
+    const newSecret = crypto.randomBytes(32).toString("hex");
+    const existing = (sub.crmCredentials ?? {}) as Record<string, unknown>;
+    const merged = { ...existing, webhookSecret: newSecret };
+    await db
+      .update(subAccounts)
+      .set({ crmCredentials: merged, updatedAt: new Date() })
+      .where(eq(subAccounts.id, id));
+    res.json({ webhookSecret: newSecret, rotatedAt: new Date().toISOString() });
+  },
+);
 
 export default router;

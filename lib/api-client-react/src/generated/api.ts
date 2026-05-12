@@ -69,6 +69,7 @@ import type {
   ReportRun,
   ReportTemplate,
   ReportTemplateInput,
+  RotateWebhookSecretResult,
   RunReportInput,
   Sequence,
   SequenceDetail,
@@ -81,6 +82,7 @@ import type {
   SubAccountCredentialState,
   SubAccountCredentialUpdate,
   SubAccountInput,
+  SubAccountWebhookConfig,
   SyncBatch,
   SyncBatchDetail,
   UnauthorizedResponse,
@@ -4293,6 +4295,190 @@ export const useAdminTestSubAccountCredentials = <
   TContext
 > => {
   return useMutation(getAdminTestSubAccountCredentialsMutationOptions(options));
+};
+
+/**
+ * @summary Per-CRM webhook URLs, secret status, and last-event indicator for a sub-account
+ */
+export const getAdminGetSubAccountWebhookConfigUrl = (id: string) => {
+  return `/api/admin/sub-accounts/${id}/webhook-config`;
+};
+
+export const adminGetSubAccountWebhookConfig = async (
+  id: string,
+  options?: RequestInit,
+): Promise<SubAccountWebhookConfig> => {
+  return customFetch<SubAccountWebhookConfig>(
+    getAdminGetSubAccountWebhookConfigUrl(id),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getAdminGetSubAccountWebhookConfigQueryKey = (id: string) => {
+  return [`/api/admin/sub-accounts/${id}/webhook-config`] as const;
+};
+
+export const getAdminGetSubAccountWebhookConfigQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminGetSubAccountWebhookConfig>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminGetSubAccountWebhookConfig>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAdminGetSubAccountWebhookConfigQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminGetSubAccountWebhookConfig>>
+  > = ({ signal }) =>
+    adminGetSubAccountWebhookConfig(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminGetSubAccountWebhookConfig>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminGetSubAccountWebhookConfigQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminGetSubAccountWebhookConfig>>
+>;
+export type AdminGetSubAccountWebhookConfigQueryError = ErrorType<void>;
+
+/**
+ * @summary Per-CRM webhook URLs, secret status, and last-event indicator for a sub-account
+ */
+
+export function useAdminGetSubAccountWebhookConfig<
+  TData = Awaited<ReturnType<typeof adminGetSubAccountWebhookConfig>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminGetSubAccountWebhookConfig>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminGetSubAccountWebhookConfigQueryOptions(
+    id,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Generate and store a new webhook signing secret for a sub-account; returns the plaintext exactly once
+ */
+export const getAdminRotateSubAccountWebhookSecretUrl = (id: string) => {
+  return `/api/admin/sub-accounts/${id}/webhook-secret/rotate`;
+};
+
+export const adminRotateSubAccountWebhookSecret = async (
+  id: string,
+  options?: RequestInit,
+): Promise<RotateWebhookSecretResult> => {
+  return customFetch<RotateWebhookSecretResult>(
+    getAdminRotateSubAccountWebhookSecretUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getAdminRotateSubAccountWebhookSecretMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminRotateSubAccountWebhookSecret>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminRotateSubAccountWebhookSecret>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["adminRotateSubAccountWebhookSecret"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminRotateSubAccountWebhookSecret>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return adminRotateSubAccountWebhookSecret(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminRotateSubAccountWebhookSecretMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminRotateSubAccountWebhookSecret>>
+>;
+
+export type AdminRotateSubAccountWebhookSecretMutationError = ErrorType<void>;
+
+/**
+ * @summary Generate and store a new webhook signing secret for a sub-account; returns the plaintext exactly once
+ */
+export const useAdminRotateSubAccountWebhookSecret = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminRotateSubAccountWebhookSecret>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminRotateSubAccountWebhookSecret>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(
+    getAdminRotateSubAccountWebhookSecretMutationOptions(options),
+  );
 };
 
 export const getAdminListUsersUrl = () => {

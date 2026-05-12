@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { ShieldAlert, Activity, CheckCircle2, XCircle, AlertTriangle, KeyRound } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { SubAccountCredentialsDialog } from "./sub-account-credentials";
+import { WebhookConfigRow } from "@/components/admin/webhook-config-row";
 
 function formatUsd(cents: number | null | undefined): string {
   if (cents == null) return "—";
@@ -102,10 +103,11 @@ export default function AdminPage() {
   const { data: me, isLoading: loadingMe } = useGetMe();
   const { data: stats } = useAdminPlatformStats();
   const { data: accountsRes } = useAdminListAccounts();
+  const { data: subAccountsRes } = useAdminListSubAccounts();
   const { data: sources, refetch: refetchSources } = useAdminListEnrichmentSources();
   const { data: validationStats } = useAdminValidationStats();
-  const { data: subAccounts } = useAdminListSubAccounts();
   const accounts = accountsRes ?? [];
+  const subAccounts = subAccountsRes ?? [];
   const { toast } = useToast();
 
   const [credsTarget, setCredsTarget] = useState<SubAccount | null>(null);
@@ -178,6 +180,7 @@ export default function AdminPage() {
           <TabsTrigger value="accounts">Accounts</TabsTrigger>
           <TabsTrigger value="validators">Validators (30d)</TabsTrigger>
           <TabsTrigger value="sub-accounts">Sub-Account CRM Credentials</TabsTrigger>
+          <TabsTrigger value="webhooks" data-testid="tab-webhooks">CRM Webhooks</TabsTrigger>
         </TabsList>
 
         <TabsContent value="sources" className="mt-4">
@@ -366,6 +369,37 @@ export default function AdminPage() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="webhooks" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>CRM Webhook Setup</CardTitle>
+              <CardDescription>
+                Copy the per-CRM URL and signing secret into each sub-account's
+                CRM. The status indicator shows whether the most recent inbound
+                event verified successfully.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4" data-testid="list-webhook-configs">
+                {!subAccounts || subAccounts.length === 0 ? (
+                  <div className="py-4 text-muted-foreground">
+                    No sub-accounts yet. Create one under the Accounts tab to
+                    wire up a CRM webhook.
+                  </div>
+                ) : (
+                  subAccounts.map((sa) => (
+                    <WebhookConfigRow
+                      key={sa.id}
+                      subAccountId={sa.id}
+                      subAccountName={sa.name}
+                    />
+                  ))
+                )}
               </div>
             </CardContent>
           </Card>

@@ -603,6 +603,29 @@ export interface ApproveSourceInput {
   monthlyBudgetLimit?: number;
 }
 
+export type SubAccountWebhookConfigWebhookUrlsItem = {
+  crm: string;
+  url: string;
+};
+
+export interface SubAccountWebhookConfig {
+  subAccountId: string;
+  subAccountName: string;
+  crmType?: string | null;
+  webhookUrls: SubAccountWebhookConfigWebhookUrlsItem[];
+  secretSet: boolean;
+  lastReceivedAt?: string | null;
+  lastEventType?: string | null;
+  lastSignatureOk?: boolean | null;
+  lastErrorReason?: string | null;
+  lastErrorAt?: string | null;
+}
+
+export interface RotateWebhookSecretResult {
+  webhookSecret: string;
+  rotatedAt?: string;
+}
+
 export interface SetSourceBudgetInput {
   /** Monthly cap in cents. Pass null to clear the cap. */
   monthBudgetCents?: number | null;

@@ -1603,6 +1603,43 @@ export const AdminTestSubAccountCredentialsResponse = zod.object({
   details: zod.record(zod.string(), zod.unknown()).optional(),
 });
 
+/**
+ * @summary Per-CRM webhook URLs, secret status, and last-event indicator for a sub-account
+ */
+export const AdminGetSubAccountWebhookConfigParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const AdminGetSubAccountWebhookConfigResponse = zod.object({
+  subAccountId: zod.string().uuid(),
+  subAccountName: zod.string(),
+  crmType: zod.string().nullish(),
+  webhookUrls: zod.array(
+    zod.object({
+      crm: zod.string(),
+      url: zod.string(),
+    }),
+  ),
+  secretSet: zod.boolean(),
+  lastReceivedAt: zod.coerce.date().nullish(),
+  lastEventType: zod.string().nullish(),
+  lastSignatureOk: zod.boolean().nullish(),
+  lastErrorReason: zod.string().nullish(),
+  lastErrorAt: zod.coerce.date().nullish(),
+});
+
+/**
+ * @summary Generate and store a new webhook signing secret for a sub-account; returns the plaintext exactly once
+ */
+export const AdminRotateSubAccountWebhookSecretParams = zod.object({
+  id: zod.coerce.string().uuid(),
+});
+
+export const AdminRotateSubAccountWebhookSecretResponse = zod.object({
+  webhookSecret: zod.string(),
+  rotatedAt: zod.coerce.date().optional(),
+});
+
 export const AdminListUsersResponseItem = zod.object({
   id: zod.string().uuid(),
   email: zod.string(),
@@ -1757,6 +1794,12 @@ export const AdminResetEnrichmentSourceSpendResponse = zod.object({
   envEnabled: zod.boolean().optional(),
   envKeyPresent: zod.boolean().optional(),
   isFreeSource: zod.boolean(),
+  autoPaused: zod
+    .boolean()
+    .optional()
+    .describe(
+      "True when the source is currently skipped because month-to-date spend has hit the configured monthly cap.",
+    ),
 });
 
 export const AdminPlatformStatsResponse = zod.object({

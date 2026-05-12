@@ -646,6 +646,36 @@ paths:
         "400": { description: Failed, content: { application/json: { schema: { $ref: "#/components/schemas/CrmTestResult" } } } }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /admin/sub-accounts/{id}/webhook-config:
+    get:
+      operationId: adminGetSubAccountWebhookConfig
+      tags: [admin]
+      summary: Per-CRM webhook URLs, secret status, and last-event indicator for a sub-account
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubAccountWebhookConfig" }
+        "404": { description: Not found }
+
+  /admin/sub-accounts/{id}/webhook-secret/rotate:
+    post:
+      operationId: adminRotateSubAccountWebhookSecret
+      tags: [admin]
+      summary: Generate and store a new webhook signing secret for a sub-account; returns the plaintext exactly once
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RotateWebhookSecretResult" }
+        "404": { description: Not found }
+
   /admin/users:
     get:
       operationId: adminListUsers
@@ -1409,6 +1439,35 @@ components:
       properties:
         notes: { type: string }
         monthlyBudgetLimit: { type: integer }
+
+    SubAccountWebhookConfig:
+      type: object
+      required: [subAccountId, subAccountName, webhookUrls, secretSet]
+      properties:
+        subAccountId: { type: string, format: uuid }
+        subAccountName: { type: string }
+        crmType: { type: string, nullable: true }
+        webhookUrls:
+          type: array
+          items:
+            type: object
+            required: [crm, url]
+            properties:
+              crm: { type: string }
+              url: { type: string }
+        secretSet: { type: boolean }
+        lastReceivedAt: { type: string, format: date-time, nullable: true }
+        lastEventType: { type: string, nullable: true }
+        lastSignatureOk: { type: boolean, nullable: true }
+        lastErrorReason: { type: string, nullable: true }
+        lastErrorAt: { type: string, format: date-time, nullable: true }
+
+    RotateWebhookSecretResult:
+      type: object
+      required: [webhookSecret]
+      properties:
+        webhookSecret: { type: string }
+        rotatedAt: { type: string, format: date-time }
 
     SetSourceBudgetInput:
       type: object
