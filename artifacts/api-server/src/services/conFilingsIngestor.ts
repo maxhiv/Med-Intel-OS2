@@ -89,7 +89,7 @@ const MODALITY_KEYWORDS: { re: RegExp; modality: string }[] = [
   { re: /cardiac cath/i, modality: "CATH" },
 ];
 
-function inferModality(text: string | undefined | null): string | undefined {
+export function inferModality(text: string | undefined | null): string | undefined {
   if (!text) return undefined;
   for (const { re, modality } of MODALITY_KEYWORDS) {
     if (re.test(text)) return modality;
@@ -97,7 +97,7 @@ function inferModality(text: string | undefined | null): string | undefined {
   return undefined;
 }
 
-function looksApproved(status: string | undefined | null): boolean {
+export function looksApproved(status: string | undefined | null): boolean {
   if (!status) return false;
   return /approv|grant(ed)?|issued/i.test(status);
 }
@@ -123,7 +123,7 @@ function stripHtml(s: string): string {
 }
 
 /** Tiny RSS 2.0 / Atom item extractor. Good enough for portal feeds. */
-function parseRssItems(xml: string): {
+export function parseRssItems(xml: string): {
   title: string;
   link: string;
   pubDate?: string;
@@ -217,7 +217,7 @@ function rssAdapter(state: string, defaultUrl: string, envKey: string): StateAda
  * to title items like "Saint Mary's Hospital — CON #24-001 — MRI replacement",
  * so we take the chunk before the first separator.
  */
-function extractApplicant(title: string): string {
+export function extractApplicant(title: string): string {
   const cut = title.split(/\s[—–-]\s|:\s/, 1)[0] ?? title;
   return cut.trim().slice(0, 250);
 }
