@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useGetMe, useAdminPlatformStats, useAdminListAccounts, useAdminListEnrichmentSources, useAdminApproveEnrichmentSource, useAdminSetEnrichmentSourceBudget } from "@workspace/api-client-react";
+import { useGetMe, useAdminPlatformStats, useAdminListAccounts, useAdminListEnrichmentSources, useAdminApproveEnrichmentSource, useAdminSetEnrichmentSourceBudget, useAdminValidationStats } from "@workspace/api-client-react";
 import { Redirect } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -92,6 +92,7 @@ export default function AdminPage() {
   const { data: stats } = useAdminPlatformStats();
   const { data: accountsRes } = useAdminListAccounts();
   const { data: sources, refetch: refetchSources } = useAdminListEnrichmentSources();
+  const { data: validationStats } = useAdminValidationStats();
   const accounts = accountsRes ?? [];
   const { toast } = useToast();
   
@@ -159,6 +160,7 @@ export default function AdminPage() {
         <TabsList>
           <TabsTrigger value="sources">Enrichment Sources</TabsTrigger>
           <TabsTrigger value="accounts">Accounts</TabsTrigger>
+          <TabsTrigger value="validators">Validators (30d)</TabsTrigger>
         </TabsList>
         
         <TabsContent value="sources" className="mt-4">
@@ -300,6 +302,53 @@ export default function AdminPage() {
                 ) : (
                   <div className="py-4 text-muted-foreground">No sources configured.</div>
                 )}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="validators" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Validator Outcomes (last 30 days)</CardTitle>
+              <CardDescription>
+                How each email validator has been performing — useful for comparing accuracy and spotting silent errors.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border">
+                <table className="w-full text-sm" data-testid="table-validator-stats">
+                  <thead>
+                    <tr className="border-b bg-muted/50 text-muted-foreground">
+                      <th className="h-10 px-4 text-left font-medium">Validator</th>
+                      <th className="h-10 px-4 text-right font-medium">Verified</th>
+                      <th className="h-10 px-4 text-right font-medium">Bounced</th>
+                      <th className="h-10 px-4 text-right font-medium">Errors</th>
+                      <th className="h-10 px-4 text-right font-medium">Other</th>
+                      <th className="h-10 px-4 text-right font-medium">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {validationStats && validationStats.length > 0 ? (
+                      validationStats.map((row) => (
+                        <tr key={row.source} className="border-b last:border-0" data-testid={`row-validator-${row.source}`}>
+                          <td className="p-4 font-medium capitalize">{row.source}</td>
+                          <td className="p-4 text-right text-green-500" data-testid={`text-validator-${row.source}-verified`}>{row.verified}</td>
+                          <td className="p-4 text-right text-red-500" data-testid={`text-validator-${row.source}-bounced`}>{row.bounced}</td>
+                          <td className="p-4 text-right text-amber-500" data-testid={`text-validator-${row.source}-error`}>{row.error}</td>
+                          <td className="p-4 text-right text-muted-foreground">{row.other}</td>
+                          <td className="p-4 text-right font-semibold">{row.total}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={6} className="p-6 text-center text-muted-foreground">
+                          No validator activity in the last 30 days.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </CardContent>
           </Card>

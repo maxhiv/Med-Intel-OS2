@@ -11,6 +11,7 @@ import {
   outreachDrafts,
   facilityContacts,
   syncBatches,
+  contactValidationLog,
   FREE_ENRICHMENT_SOURCES,
   PAID_ENRICHMENT_SOURCES,
 } from "@workspace/db";
@@ -270,6 +271,52 @@ router.get("/admin/platform-stats", requirePlatformAdmin, async (_req, res) => {
     activeSignals: sigCount.c,
     batchesToday: batchesTodayCount.c,
   });
+});
+
+// Per-validator outcome counts over the last 30 days. Useful for ops to
+// compare ZeroBounce vs Bouncer accuracy and spot validators that are
+// silently erroring out.
+router.get("/admin/validation-stats", requirePlatformAdmin, async (_req, res) => {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const rows = await db
+    .select({
+      source: contactValidationLog.checkType,
+      result: contactValidationLog.result,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(contactValidationLog)
+    .where(
+      sql`${contactValidationLog.checkedAt} >= ${thirtyDaysAgo} AND ${contactValidationLog.checkType} IN ('zerobounce', 'bouncer')`,
+    )
+    .groupBy(contactValidationLog.checkType, contactValidationLog.result);
+
+  // Make sure both validators always show up so the UI can render zero-state
+  // rows instead of just hiding inactive providers.
+  const bySource = new Map<
+    string,
+    { source: string; verified: number; bounced: number; error: number; other: number; total: number }
+  >();
+  for (const v of ["zerobounce", "bouncer"]) {
+    bySource.set(v, { source: v, verified: 0, bounced: 0, error: 0, other: 0, total: 0 });
+  }
+  for (const r of rows) {
+    const entry = bySource.get(r.source) ?? {
+      source: r.source,
+      verified: 0,
+      bounced: 0,
+      error: 0,
+      other: 0,
+      total: 0,
+    };
+    if (r.result === "verified") entry.verified += r.count;
+    else if (r.result === "bounced") entry.bounced += r.count;
+    else if (r.result === "error") entry.error += r.count;
+    else entry.other += r.count;
+    entry.total += r.count;
+    bySource.set(r.source, entry);
+  }
+
+  res.json(Array.from(bySource.values()));
 });
 
 export default router;

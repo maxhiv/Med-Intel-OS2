@@ -296,6 +296,21 @@ export const GetFacilityResponse = zod
             confidenceScore: zod.number().optional(),
             buyingAuthorityScore: zod.number().optional(),
             lastEnrichedAt: zod.coerce.date().nullish(),
+            lastValidation: zod
+              .object({
+                source: zod
+                  .string()
+                  .describe(
+                    "Validator that produced the most recent verdict (e.g. zerobounce, bouncer)",
+                  ),
+                result: zod
+                  .string()
+                  .describe(
+                    "Verdict recorded by that validator (verified, bounced, error, ok, unknown)",
+                  ),
+                checkedAt: zod.coerce.date(),
+              })
+              .nullish(),
           }),
         )
         .optional(),
@@ -372,6 +387,21 @@ export const GetFacilityContactsResponseItem = zod.object({
   confidenceScore: zod.number().optional(),
   buyingAuthorityScore: zod.number().optional(),
   lastEnrichedAt: zod.coerce.date().nullish(),
+  lastValidation: zod
+    .object({
+      source: zod
+        .string()
+        .describe(
+          "Validator that produced the most recent verdict (e.g. zerobounce, bouncer)",
+        ),
+      result: zod
+        .string()
+        .describe(
+          "Verdict recorded by that validator (verified, bounced, error, ok, unknown)",
+        ),
+      checkedAt: zod.coerce.date(),
+    })
+    .nullish(),
 });
 export const GetFacilityContactsResponse = zod.array(
   GetFacilityContactsResponseItem,
@@ -567,6 +597,21 @@ export const ListCampaignContactsResponseItem = zod.object({
       confidenceScore: zod.number().optional(),
       buyingAuthorityScore: zod.number().optional(),
       lastEnrichedAt: zod.coerce.date().nullish(),
+      lastValidation: zod
+        .object({
+          source: zod
+            .string()
+            .describe(
+              "Validator that produced the most recent verdict (e.g. zerobounce, bouncer)",
+            ),
+          result: zod
+            .string()
+            .describe(
+              "Verdict recorded by that validator (verified, bounced, error, ok, unknown)",
+            ),
+          checkedAt: zod.coerce.date(),
+        })
+        .nullish(),
     })
     .optional(),
   facility: zod
@@ -731,6 +776,21 @@ export const ListDraftsResponse = zod.object({
           confidenceScore: zod.number().optional(),
           buyingAuthorityScore: zod.number().optional(),
           lastEnrichedAt: zod.coerce.date().nullish(),
+          lastValidation: zod
+            .object({
+              source: zod
+                .string()
+                .describe(
+                  "Validator that produced the most recent verdict (e.g. zerobounce, bouncer)",
+                ),
+              result: zod
+                .string()
+                .describe(
+                  "Verdict recorded by that validator (verified, bounced, error, ok, unknown)",
+                ),
+              checkedAt: zod.coerce.date(),
+            })
+            .nullish(),
         })
         .optional(),
       facility: zod
@@ -797,6 +857,21 @@ export const GetDraftResponse = zod.object({
       confidenceScore: zod.number().optional(),
       buyingAuthorityScore: zod.number().optional(),
       lastEnrichedAt: zod.coerce.date().nullish(),
+      lastValidation: zod
+        .object({
+          source: zod
+            .string()
+            .describe(
+              "Validator that produced the most recent verdict (e.g. zerobounce, bouncer)",
+            ),
+          result: zod
+            .string()
+            .describe(
+              "Verdict recorded by that validator (verified, bounced, error, ok, unknown)",
+            ),
+          checkedAt: zod.coerce.date(),
+        })
+        .nullish(),
     })
     .optional(),
   facility: zod
@@ -868,6 +943,21 @@ export const UpdateDraftResponse = zod.object({
       confidenceScore: zod.number().optional(),
       buyingAuthorityScore: zod.number().optional(),
       lastEnrichedAt: zod.coerce.date().nullish(),
+      lastValidation: zod
+        .object({
+          source: zod
+            .string()
+            .describe(
+              "Validator that produced the most recent verdict (e.g. zerobounce, bouncer)",
+            ),
+          result: zod
+            .string()
+            .describe(
+              "Verdict recorded by that validator (verified, bounced, error, ok, unknown)",
+            ),
+          checkedAt: zod.coerce.date(),
+        })
+        .nullish(),
     })
     .optional(),
   facility: zod
@@ -931,6 +1021,21 @@ export const ApproveDraftResponse = zod.object({
       confidenceScore: zod.number().optional(),
       buyingAuthorityScore: zod.number().optional(),
       lastEnrichedAt: zod.coerce.date().nullish(),
+      lastValidation: zod
+        .object({
+          source: zod
+            .string()
+            .describe(
+              "Validator that produced the most recent verdict (e.g. zerobounce, bouncer)",
+            ),
+          result: zod
+            .string()
+            .describe(
+              "Verdict recorded by that validator (verified, bounced, error, ok, unknown)",
+            ),
+          checkedAt: zod.coerce.date(),
+        })
+        .nullish(),
     })
     .optional(),
   facility: zod
@@ -998,6 +1103,21 @@ export const RejectDraftResponse = zod.object({
       confidenceScore: zod.number().optional(),
       buyingAuthorityScore: zod.number().optional(),
       lastEnrichedAt: zod.coerce.date().nullish(),
+      lastValidation: zod
+        .object({
+          source: zod
+            .string()
+            .describe(
+              "Validator that produced the most recent verdict (e.g. zerobounce, bouncer)",
+            ),
+          result: zod
+            .string()
+            .describe(
+              "Verdict recorded by that validator (verified, bounced, error, ok, unknown)",
+            ),
+          checkedAt: zod.coerce.date(),
+        })
+        .nullish(),
     })
     .optional(),
   facility: zod
@@ -1444,3 +1564,18 @@ export const AdminPlatformStatsResponse = zod.object({
   activeSignals: zod.number().optional(),
   batchesToday: zod.number().optional(),
 });
+
+/**
+ * @summary Per-validator counts (verified / bounced / error) over the last 30 days
+ */
+export const AdminValidationStatsResponseItem = zod.object({
+  source: zod.string(),
+  verified: zod.number(),
+  bounced: zod.number(),
+  error: zod.number(),
+  other: zod.number().describe("Other verdicts (ok \/ unknown)"),
+  total: zod.number(),
+});
+export const AdminValidationStatsResponse = zod.array(
+  AdminValidationStatsResponseItem,
+);

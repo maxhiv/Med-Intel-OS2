@@ -5,6 +5,7 @@
  * MedIntel OS API — multi-tenant medical equipment sales intelligence
  * OpenAPI spec version: 0.1.0
  */
+import type { ContactLastValidation } from "./contactLastValidation";
 
 export interface Contact {
   id: string;
@@ -20,4 +21,5 @@ export interface Contact {
   confidenceScore?: number;
   buyingAuthorityScore?: number;
   lastEnrichedAt?: Date | null;
+  lastValidation?: ContactLastValidation;
 }

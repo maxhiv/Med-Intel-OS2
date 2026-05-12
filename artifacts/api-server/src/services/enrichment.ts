@@ -384,10 +384,21 @@ export async function enrichContact(
     if (run.newEmailStatus) finalEmailStatus = run.newEmailStatus;
 
     if (!opts.dryRun) {
+      // Persist a meaningful verdict so the UI / admin reports can show
+      // per-validator outcomes without re-parsing the raw response.
+      const verdict = run.isErrorEnvelope
+        ? "error"
+        : run.newEmailStatus === "verified"
+          ? "verified"
+          : run.newEmailStatus === "bounced"
+            ? "bounced"
+            : run.ok
+              ? "ok"
+              : "unknown";
       await db.insert(contactValidationLog).values({
         contactId,
         checkType: s.source,
-        result: run.ok ? "ok" : "fail",
+        result: verdict,
         confidenceDelta: run.delta,
         rawResponse: run.raw as object,
         costMicros: run.costMicros,

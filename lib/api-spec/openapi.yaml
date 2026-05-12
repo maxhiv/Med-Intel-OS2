@@ -626,6 +626,20 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PlatformStats" } } } }
 
+  /admin/validation-stats:
+    get:
+      operationId: adminValidationStats
+      tags: [admin]
+      summary: Per-validator counts (verified / bounced / error) over the last 30 days
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ValidatorStats" }
+
 components:
   responses:
     Unauthorized:
@@ -823,6 +837,14 @@ components:
         confidenceScore: { type: integer }
         buyingAuthorityScore: { type: integer }
         lastEnrichedAt: { type: string, format: date-time, nullable: true }
+        lastValidation:
+          nullable: true
+          type: object
+          required: [source, result, checkedAt]
+          properties:
+            source: { type: string, description: "Validator that produced the most recent verdict (e.g. zerobounce, bouncer)" }
+            result: { type: string, description: "Verdict recorded by that validator (verified, bounced, error, ok, unknown)" }
+            checkedAt: { type: string, format: date-time }
 
     Equipment:
       type: object
@@ -1211,6 +1233,17 @@ components:
         pendingDrafts: { type: integer }
         activeSignals: { type: integer }
         batchesToday: { type: integer }
+
+    ValidatorStats:
+      type: object
+      required: [source, verified, bounced, error, other, total]
+      properties:
+        source: { type: string }
+        verified: { type: integer }
+        bounced: { type: integer }
+        error: { type: integer }
+        other: { type: integer, description: "Other verdicts (ok / unknown)" }
+        total: { type: integer }
 
     RecomputeResult:
       type: object

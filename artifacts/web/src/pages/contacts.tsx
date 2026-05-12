@@ -3,7 +3,7 @@ import { useListFacilities, useGetFacilityContacts, useEnrichContact } from "@wo
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Building2, Users, Mail, Phone, ShieldCheck, Activity } from "lucide-react";
+import { Building2, Users, Mail, Phone, ShieldCheck, Activity, ShieldX, AlertTriangle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
@@ -127,6 +127,31 @@ export default function ContactsPage() {
                               <Phone className="h-3 w-3" /> {contact.phone}
                             </div>
                           )}
+                          {contact.lastValidation ? (
+                            <div
+                              className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                              title={`Verified by ${contact.lastValidation.source} on ${new Date(contact.lastValidation.checkedAt).toLocaleString()}`}
+                              data-testid={`text-validator-${contact.id}`}
+                            >
+                              {contact.lastValidation.result === 'verified' ? (
+                                <ShieldCheck className="h-3 w-3 text-green-500" />
+                              ) : contact.lastValidation.result === 'bounced' ? (
+                                <ShieldX className="h-3 w-3 text-red-500" />
+                              ) : contact.lastValidation.result === 'error' ? (
+                                <AlertTriangle className="h-3 w-3 text-amber-500" />
+                              ) : (
+                                <ShieldCheck className="h-3 w-3 text-muted-foreground" />
+                              )}
+                              <span className="font-medium capitalize">{contact.lastValidation.source}</span>
+                              <span>·</span>
+                              <span className="capitalize">{contact.lastValidation.result}</span>
+                              <span className="opacity-70">
+                                · {new Date(contact.lastValidation.checkedAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                          ) : contact.email ? (
+                            <div className="text-xs text-muted-foreground italic">Not yet validated</div>
+                          ) : null}
                         </div>
                       </td>
                       <td className="p-4 text-right">

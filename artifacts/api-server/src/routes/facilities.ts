@@ -16,6 +16,7 @@ import {
   facilityContacts,
   equipmentRecords,
   accountFacilities,
+  contactValidationLog,
 } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
 import { validateBody } from "../middlewares/validate";
@@ -217,7 +218,49 @@ router.get("/facilities/:id/contacts", requireAccount, async (req, res) => {
     .from(facilityContacts)
     .where(eq(facilityContacts.facilityId, id))
     .orderBy(desc(facilityContacts.confidenceScore));
-  res.json(rows);
+
+  // Attach the most recent validation entry (validator + verdict + timestamp)
+  // so the contacts UI can show at a glance who verified each contact. We
+  // limit to email validators (zerobounce / bouncer) to stay focused on the
+  // verdict ops actually care about for debugging accuracy.
+  const contactIds = rows.map((r) => r.id);
+  const lastByContact = new Map<
+    string,
+    { source: string; result: string; checkedAt: Date }
+  >();
+  if (contactIds.length > 0) {
+    const logs = await db
+      .select({
+        contactId: contactValidationLog.contactId,
+        source: contactValidationLog.checkType,
+        result: contactValidationLog.result,
+        checkedAt: contactValidationLog.checkedAt,
+      })
+      .from(contactValidationLog)
+      .where(
+        and(
+          inArray(contactValidationLog.contactId, contactIds),
+          inArray(contactValidationLog.checkType, ["zerobounce", "bouncer"]),
+        ),
+      )
+      .orderBy(desc(contactValidationLog.checkedAt));
+    for (const l of logs) {
+      if (!lastByContact.has(l.contactId) && l.checkedAt) {
+        lastByContact.set(l.contactId, {
+          source: l.source,
+          result: l.result,
+          checkedAt: l.checkedAt,
+        });
+      }
+    }
+  }
+
+  res.json(
+    rows.map((r) => ({
+      ...r,
+      lastValidation: lastByContact.get(r.id) ?? null,
+    })),
+  );
 });
 
 router.get("/facilities/:id/equipment", requireAccount, async (req, res) => {

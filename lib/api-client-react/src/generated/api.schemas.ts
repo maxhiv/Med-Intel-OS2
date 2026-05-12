@@ -126,6 +126,14 @@ export interface Equipment {
   estReplacementYear?: number | null;
 }
 
+export type ContactLastValidation = {
+  /** Validator that produced the most recent verdict (e.g. zerobounce, bouncer) */
+  source: string;
+  /** Verdict recorded by that validator (verified, bounced, error, ok, unknown) */
+  result: string;
+  checkedAt: string;
+} | null;
+
 export interface Contact {
   id: string;
   facilityId: string;
@@ -140,6 +148,7 @@ export interface Contact {
   confidenceScore?: number;
   buyingAuthorityScore?: number;
   lastEnrichedAt?: string | null;
+  lastValidation?: ContactLastValidation;
 }
 
 export type FacilityDetail = Facility & {
@@ -516,6 +525,16 @@ export interface PlatformStats {
   pendingDrafts?: number;
   activeSignals?: number;
   batchesToday?: number;
+}
+
+export interface ValidatorStats {
+  source: string;
+  verified: number;
+  bounced: number;
+  error: number;
+  /** Other verdicts (ok / unknown) */
+  other: number;
+  total: number;
 }
 
 export interface RecomputeResult {

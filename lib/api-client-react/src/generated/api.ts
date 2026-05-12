@@ -77,6 +77,7 @@ import type {
   SyncBatchDetail,
   UnauthorizedResponse,
   User,
+  ValidatorStats,
   WebhookEvent,
 } from "./api.schemas";
 
@@ -4206,6 +4207,81 @@ export function useAdminPlatformStats<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getAdminPlatformStatsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Per-validator counts (verified / bounced / error) over the last 30 days
+ */
+export const getAdminValidationStatsUrl = () => {
+  return `/api/admin/validation-stats`;
+};
+
+export const adminValidationStats = async (
+  options?: RequestInit,
+): Promise<ValidatorStats[]> => {
+  return customFetch<ValidatorStats[]>(getAdminValidationStatsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getAdminValidationStatsQueryKey = () => {
+  return [`/api/admin/validation-stats`] as const;
+};
+
+export const getAdminValidationStatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminValidationStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminValidationStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getAdminValidationStatsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminValidationStats>>
+  > = ({ signal }) => adminValidationStats({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminValidationStats>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminValidationStatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminValidationStats>>
+>;
+export type AdminValidationStatsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Per-validator counts (verified / bounced / error) over the last 30 days
+ */
+
+export function useAdminValidationStats<
+  TData = Awaited<ReturnType<typeof adminValidationStats>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminValidationStats>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminValidationStatsQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
