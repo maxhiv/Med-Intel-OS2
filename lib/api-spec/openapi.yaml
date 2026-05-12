@@ -1,36 +1,1084 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: MedIntel OS API — multi-tenant medical equipment sales intelligence
 servers:
   - url: /api
     description: Base API path
+
 tags:
   - name: health
-    description: Health operations
+  - name: auth
+  - name: facilities
+  - name: signals
+  - name: contacts
+  - name: campaigns
+  - name: sequences
+  - name: drafts
+  - name: batches
+  - name: reports
+  - name: admin
+  - name: dashboard
+  - name: ingestion
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
           content:
             application/json:
+              schema: { $ref: "#/components/schemas/HealthStatus" }
+
+  /me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Current authenticated user with account context
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Dashboard ────────────────────────────────────────────────
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: High-level KPI summary for the current account
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DashboardSummary" } } } }
+
+  /dashboard/recent-signals:
+    get:
+      operationId: getRecentSignals
+      tags: [dashboard]
+      summary: Recent purchase signals across the platform
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
               schema:
-                $ref: "#/components/schemas/HealthStatus"
+                type: array
+                items: { $ref: "#/components/schemas/SignalWithFacility" }
+
+  /dashboard/top-facilities:
+    get:
+      operationId: getTopFacilities
+      tags: [dashboard]
+      summary: Top facilities by signal score
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 10, maximum: 50 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Facility" }
+
+  # ── Facilities ───────────────────────────────────────────────
+  /facilities:
+    get:
+      operationId: listFacilities
+      tags: [facilities]
+      summary: List facilities with filters
+      parameters:
+        - { name: state, in: query, schema: { type: string, minLength: 2, maxLength: 2 } }
+        - { name: facilityType, in: query, schema: { type: string } }
+        - { name: minScore, in: query, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FacilityListResponse" } } } }
+    post:
+      operationId: createFacilityFromNpi
+      tags: [facilities]
+      summary: Create a new facility by NPI lookup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FacilityNpiInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Facility" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /facilities/{id}:
+    get:
+      operationId: getFacility
+      tags: [facilities]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FacilityDetail" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateFacility
+      tags: [facilities]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FacilityUpdateInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Facility" } } } }
+
+  /facilities/{id}/signals:
+    get:
+      operationId: getFacilitySignals
+      tags: [facilities]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/PurchaseSignal" } }
+
+  /facilities/{id}/contacts:
+    get:
+      operationId: getFacilityContacts
+      tags: [facilities]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Contact" } }
+
+  /facilities/{id}/equipment:
+    get:
+      operationId: getFacilityEquipment
+      tags: [facilities]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Equipment" } }
+
+  /facilities/sync-from-npi/{npi}:
+    post:
+      operationId: syncFacilityFromNpi
+      tags: [ingestion]
+      parameters:
+        - { name: npi, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Facility" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ── Signals ──────────────────────────────────────────────────
+  /signals/recompute:
+    post:
+      operationId: recomputeSignalScores
+      tags: [signals, admin]
+      summary: Recompute composite signal scores for all facilities (platform admin)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RecomputeResult" } } } }
+
+  # ── Contacts ─────────────────────────────────────────────────
+  /contacts/{id}/enrich:
+    post:
+      operationId: enrichContact
+      tags: [contacts]
+      summary: Run the enrichment waterfall for a contact
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnrichInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EnrichResult" } } } }
+
+  # ── Campaigns ────────────────────────────────────────────────
+  /campaigns:
+    get:
+      operationId: listCampaigns
+      tags: [campaigns]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Campaign" } }
+    post:
+      operationId: createCampaign
+      tags: [campaigns]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CampaignInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Campaign" } } } }
+
+  /campaigns/{id}:
+    get:
+      operationId: getCampaign
+      tags: [campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CampaignDetail" } } } }
+    patch:
+      operationId: updateCampaign
+      tags: [campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CampaignInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Campaign" } } } }
+
+  /campaigns/{id}/contacts:
+    get:
+      operationId: listCampaignContacts
+      tags: [campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/CampaignContact" } }
+    post:
+      operationId: addCampaignContacts
+      tags: [campaigns]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddContactsInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/AddContactsResult" } } } }
+
+  /campaigns/{id}/generate-drafts:
+    post:
+      operationId: generateCampaignDrafts
+      tags: [drafts]
+      summary: Generate AI outreach drafts for enrolled contacts
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/GenerateDraftsResult" } } } }
+
+  # ── Sequences ────────────────────────────────────────────────
+  /sequences:
+    get:
+      operationId: listSequences
+      tags: [sequences]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Sequence" } }
+    post:
+      operationId: createSequence
+      tags: [sequences]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SequenceInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Sequence" } } } }
+
+  /sequences/{id}:
+    get:
+      operationId: getSequence
+      tags: [sequences]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SequenceDetail" } } } }
+
+  /sequences/{id}/steps:
+    post:
+      operationId: addSequenceStep
+      tags: [sequences]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SequenceStepInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SequenceStep" } } } }
+
+  # ── Drafts ───────────────────────────────────────────────────
+  /drafts:
+    get:
+      operationId: listDrafts
+      tags: [drafts]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, approved, sent, skipped, rejected] } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/DraftListResponse" } } } }
+
+  /drafts/{id}:
+    get:
+      operationId: getDraft
+      tags: [drafts]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Draft" } } } }
+    patch:
+      operationId: updateDraft
+      tags: [drafts]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DraftEditInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Draft" } } } }
+
+  /drafts/{id}/approve:
+    post:
+      operationId: approveDraft
+      tags: [drafts]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Draft" } } } }
+
+  /drafts/{id}/reject:
+    post:
+      operationId: rejectDraft
+      tags: [drafts]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RejectDraftInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Draft" } } } }
+
+  # ── Batches ──────────────────────────────────────────────────
+  /batches:
+    get:
+      operationId: listBatches
+      tags: [batches]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 30 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/SyncBatch" } }
+
+  /batches/run:
+    post:
+      operationId: runBatches
+      tags: [batches]
+      summary: Manually trigger the daily batch run for all sub-accounts
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BatchRunResult" } } } }
+
+  # ── Reports ──────────────────────────────────────────────────
+  /reports/templates:
+    get:
+      operationId: listReportTemplates
+      tags: [reports]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ReportTemplate" } }
+    post:
+      operationId: createReportTemplate
+      tags: [reports]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportTemplateInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ReportTemplate" } } } }
+
+  /reports/run:
+    post:
+      operationId: runReport
+      tags: [reports]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RunReportInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ReportRun" } } } }
+
+  /reports/runs:
+    get:
+      operationId: listReportRuns
+      tags: [reports]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ReportRun" } }
+
+  # ── Admin ────────────────────────────────────────────────────
+  /admin/accounts:
+    get:
+      operationId: adminListAccounts
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Account" } }
+    post:
+      operationId: adminCreateAccount
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AccountInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+
+  /admin/accounts/{id}:
+    patch:
+      operationId: adminUpdateAccount
+      tags: [admin]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AccountInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Account" } } } }
+
+  /admin/sub-accounts:
+    get:
+      operationId: adminListSubAccounts
+      tags: [admin]
+      parameters:
+        - { name: accountId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/SubAccount" } }
+    post:
+      operationId: adminCreateSubAccount
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubAccountInput" }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SubAccount" } } } }
+
+  /admin/users:
+    get:
+      operationId: adminListUsers
+      tags: [admin]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/User" } }
+
+  /admin/enrichment-sources:
+    get:
+      operationId: adminListEnrichmentSources
+      tags: [admin]
+      summary: List all enrichment sources with approval and env-flag status
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/EnrichmentSource" } }
+
+  /admin/enrichment-sources/{source}/approve:
+    post:
+      operationId: adminApproveEnrichmentSource
+      tags: [admin]
+      parameters:
+        - { name: source, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApproveSourceInput" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EnrichmentSource" } } } }
+
+  /admin/enrichment-sources/{source}/revoke:
+    post:
+      operationId: adminRevokeEnrichmentSource
+      tags: [admin]
+      parameters:
+        - { name: source, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EnrichmentSource" } } } }
+
+  /admin/platform-stats:
+    get:
+      operationId: adminPlatformStats
+      tags: [admin]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PlatformStats" } } } }
+
 components:
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Not found
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Conflict:
+      description: Conflict
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: Forbidden
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
   schemas:
     HealthStatus:
       type: object
-      properties:
-        status:
-          type: string
-      required:
-        - status
+      required: [status]
+      properties: { status: { type: string } }
 
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+
+    Me:
+      type: object
+      required: [user]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        account: { $ref: "#/components/schemas/Account" }
+        isPlatformAdmin: { type: boolean }
+
+    User:
+      type: object
+      required: [id, email, role]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        firstName: { type: string, nullable: true }
+        lastName: { type: string, nullable: true }
+        role: { type: string }
+        accountId: { type: string, format: uuid, nullable: true }
+        isActive: { type: boolean }
+        clerkUserId: { type: string, nullable: true }
+
+    Account:
+      type: object
+      required: [id, name, slug]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        planTier: { type: string }
+        defaultCrm: { type: string }
+        batchLimitDaily: { type: integer }
+        status: { type: string }
+        subAccountCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    AccountInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        planTier: { type: string }
+        defaultCrm: { type: string }
+        status: { type: string }
+
+    SubAccount:
+      type: object
+      required: [id, accountId, name]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        name: { type: string }
+        crmType: { type: string, nullable: true }
+        batchSizeDaily: { type: integer }
+        repName: { type: string, nullable: true }
+        repEmail: { type: string, nullable: true }
+        timezone: { type: string }
+        isActive: { type: boolean }
+
+    SubAccountInput:
+      type: object
+      required: [accountId, name]
+      properties:
+        accountId: { type: string, format: uuid }
+        name: { type: string }
+        crmType: { type: string }
+        batchSizeDaily: { type: integer }
+        repName: { type: string }
+        repEmail: { type: string }
+        timezone: { type: string }
+
+    Facility:
+      type: object
+      required: [id, npi, name, facilityType]
+      properties:
+        id: { type: string, format: uuid }
+        npi: { type: string }
+        name: { type: string }
+        facilityType: { type: string }
+        beds: { type: integer, nullable: true }
+        ownership: { type: string, nullable: true }
+        systemName: { type: string, nullable: true }
+        address1: { type: string, nullable: true }
+        city: { type: string, nullable: true }
+        state: { type: string, nullable: true }
+        zip: { type: string, nullable: true }
+        website: { type: string, nullable: true }
+        cahDesignation: { type: boolean, nullable: true }
+        teachingHospital: { type: boolean, nullable: true }
+        signalScore: { type: integer }
+        contactCount: { type: integer }
+        signalCount: { type: integer }
+        lastEnrichedAt: { type: string, format: date-time, nullable: true }
+
+    FacilityListResponse:
+      type: object
+      required: [data, total]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Facility" }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    FacilityDetail:
+      allOf:
+        - $ref: "#/components/schemas/Facility"
+        - type: object
+          properties:
+            signals: { type: array, items: { $ref: "#/components/schemas/PurchaseSignal" } }
+            equipment: { type: array, items: { $ref: "#/components/schemas/Equipment" } }
+            contacts: { type: array, items: { $ref: "#/components/schemas/Contact" } }
+            financials: { type: array, items: { type: object, additionalProperties: true } }
+
+    FacilityNpiInput:
+      type: object
+      required: [npi]
+      properties: { npi: { type: string, minLength: 10, maxLength: 10 } }
+
+    FacilityUpdateInput:
+      type: object
+      properties:
+        name: { type: string }
+        beds: { type: integer }
+        website: { type: string }
+        ownership: { type: string }
+        systemName: { type: string }
+
+    PurchaseSignal:
+      type: object
+      required: [id, facilityId, signalType, source]
+      properties:
+        id: { type: string, format: uuid }
+        facilityId: { type: string, format: uuid }
+        signalType: { type: string }
+        signalValue: { type: string, nullable: true }
+        confidence: { type: integer }
+        source: { type: string }
+        detectedAt: { type: string, format: date-time }
+        isActive: { type: boolean }
+
+    SignalWithFacility:
+      allOf:
+        - $ref: "#/components/schemas/PurchaseSignal"
+        - type: object
+          properties:
+            facilityName: { type: string }
+            facilityState: { type: string, nullable: true }
+
+    Contact:
+      type: object
+      required: [id, facilityId]
+      properties:
+        id: { type: string, format: uuid }
+        facilityId: { type: string, format: uuid }
+        firstName: { type: string, nullable: true }
+        lastName: { type: string, nullable: true }
+        title: { type: string, nullable: true }
+        department: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        emailStatus: { type: string }
+        phone: { type: string, nullable: true }
+        linkedinUrl: { type: string, nullable: true }
+        confidenceScore: { type: integer }
+        buyingAuthorityScore: { type: integer }
+        lastEnrichedAt: { type: string, format: date-time, nullable: true }
+
+    Equipment:
+      type: object
+      required: [id, facilityId, modality]
+      properties:
+        id: { type: string, format: uuid }
+        facilityId: { type: string, format: uuid }
+        modality: { type: string }
+        manufacturer: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        installYear: { type: integer, nullable: true }
+        pctDepreciated: { type: number, nullable: true }
+        urgencyTier: { type: string, nullable: true }
+        estReplacementYear: { type: integer, nullable: true }
+
+    DashboardSummary:
+      type: object
+      properties:
+        totalFacilities: { type: integer }
+        totalContacts: { type: integer }
+        verifiedContacts: { type: integer }
+        activeSignals: { type: integer }
+        pendingDrafts: { type: integer }
+        approvedDrafts: { type: integer }
+        batchesToday: { type: integer }
+        myCampaigns: { type: integer }
+        avgSignalScore: { type: number }
+        signalsByType: { type: array, items: { type: object, properties: { signalType: { type: string }, count: { type: integer } } } }
+
+    EnrichInput:
+      type: object
+      properties:
+        dryRun: { type: boolean, default: false }
+
+    EnrichResult:
+      type: object
+      properties:
+        contactId: { type: string, format: uuid }
+        sourcesRun: { type: array, items: { type: string } }
+        sourcesSkipped: { type: array, items: { type: object, additionalProperties: true } }
+        confidenceBefore: { type: integer }
+        confidenceAfter: { type: integer }
+
+    Campaign:
+      type: object
+      required: [id, name, accountId, subAccountId, status]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        subAccountId: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        filterCriteria: { type: object, additionalProperties: true }
+        status: { type: string }
+        batchSizeDaily: { type: integer }
+        contactCount: { type: integer }
+        draftsPending: { type: integer }
+        startDate: { type: string, nullable: true }
+        endDate: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    CampaignDetail:
+      allOf:
+        - $ref: "#/components/schemas/Campaign"
+        - type: object
+          properties:
+            sequences: { type: array, items: { $ref: "#/components/schemas/Sequence" } }
+
+    CampaignInput:
+      type: object
+      required: [name, subAccountId]
+      properties:
+        name: { type: string }
+        subAccountId: { type: string, format: uuid }
+        description: { type: string }
+        filterCriteria: { type: object, additionalProperties: true }
+        status: { type: string }
+        batchSizeDaily: { type: integer }
+
+    CampaignContact:
+      type: object
+      required: [id, campaignId, contactId, status]
+      properties:
+        id: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid }
+        contactId: { type: string, format: uuid }
+        status: { type: string }
+        score: { type: integer }
+        contact: { $ref: "#/components/schemas/Contact" }
+        facility: { $ref: "#/components/schemas/Facility" }
+        enrolledAt: { type: string, format: date-time, nullable: true }
+
+    AddContactsInput:
+      type: object
+      required: [contactIds]
+      properties:
+        contactIds: { type: array, items: { type: string, format: uuid } }
+        sequenceId: { type: string, format: uuid }
+
+    AddContactsResult:
+      type: object
+      properties:
+        added: { type: integer }
+        skipped: { type: integer }
+
+    GenerateDraftsResult:
+      type: object
+      properties:
+        queued: { type: integer }
+        generated: { type: integer }
+        skipped: { type: integer }
+
+    Sequence:
+      type: object
+      required: [id, name, accountId]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        channel: { type: string }
+        totalSteps: { type: integer }
+        isAiGenerated: { type: boolean }
+        isActive: { type: boolean }
+
+    SequenceDetail:
+      allOf:
+        - $ref: "#/components/schemas/Sequence"
+        - type: object
+          properties:
+            steps: { type: array, items: { $ref: "#/components/schemas/SequenceStep" } }
+
+    SequenceInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        channel: { type: string }
+        campaignId: { type: string, format: uuid }
+
+    SequenceStep:
+      type: object
+      required: [id, sequenceId, stepNum]
+      properties:
+        id: { type: string, format: uuid }
+        sequenceId: { type: string, format: uuid }
+        stepNum: { type: integer }
+        channel: { type: string }
+        delayDays: { type: integer }
+        subjectLine: { type: string, nullable: true }
+        bodyTemplate: { type: string, nullable: true }
+        linkedinNote: { type: string, nullable: true }
+        linkedinMessage: { type: string, nullable: true }
+        variant: { type: string }
+
+    SequenceStepInput:
+      type: object
+      required: [stepNum]
+      properties:
+        stepNum: { type: integer }
+        channel: { type: string }
+        delayDays: { type: integer }
+        subjectLine: { type: string }
+        bodyTemplate: { type: string }
+        linkedinNote: { type: string }
+        linkedinMessage: { type: string }
+        variant: { type: string }
+
+    Draft:
+      type: object
+      required: [id, accountId, contactId, facilityId, body, status]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        contactId: { type: string, format: uuid }
+        facilityId: { type: string, format: uuid }
+        channel: { type: string }
+        subject: { type: string, nullable: true }
+        body: { type: string }
+        linkedinNote: { type: string, nullable: true }
+        linkedinMessage: { type: string, nullable: true }
+        personalizationApplied: { type: object, additionalProperties: true }
+        status: { type: string }
+        rejectionReason: { type: string, nullable: true }
+        contact: { $ref: "#/components/schemas/Contact" }
+        facility: { $ref: "#/components/schemas/Facility" }
+        generatedAt: { type: string, format: date-time }
+        crmSyncedAt: { type: string, format: date-time, nullable: true }
+
+    DraftListResponse:
+      type: object
+      required: [data, total]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Draft" } }
+        total: { type: integer }
+
+    DraftEditInput:
+      type: object
+      properties:
+        subject: { type: string }
+        body: { type: string }
+        linkedinNote: { type: string }
+        linkedinMessage: { type: string }
+        editReason: { type: string }
+
+    RejectDraftInput:
+      type: object
+      properties:
+        reason: { type: string }
+
+    SyncBatch:
+      type: object
+      required: [id, accountId, batchDate, status]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        subAccountId: { type: string, format: uuid }
+        crmType: { type: string }
+        batchDate: { type: string }
+        status: { type: string }
+        targetCount: { type: integer }
+        pushedCount: { type: integer }
+        failedCount: { type: integer }
+        startedAt: { type: string, format: date-time, nullable: true }
+        completedAt: { type: string, format: date-time, nullable: true }
+
+    BatchRunResult:
+      type: object
+      properties:
+        totalPushed: { type: integer }
+        totalFailed: { type: integer }
+        batches: { type: array, items: { $ref: "#/components/schemas/SyncBatch" } }
+
+    ReportTemplate:
+      type: object
+      required: [id, name, dataSources]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid, nullable: true }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        category: { type: string, nullable: true }
+        dataSources: { type: array, items: { type: string } }
+        fieldConfig: { type: array, items: { type: object, additionalProperties: true } }
+        filterConfig: { type: array, items: { type: object, additionalProperties: true } }
+        vizType: { type: string }
+        isSystemTemplate: { type: boolean }
+        isActive: { type: boolean }
+
+    ReportTemplateInput:
+      type: object
+      required: [name, dataSources]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        category: { type: string }
+        dataSources: { type: array, items: { type: string } }
+        fieldConfig: { type: array, items: { type: object, additionalProperties: true } }
+        filterConfig: { type: array, items: { type: object, additionalProperties: true } }
+        vizType: { type: string }
+
+    RunReportInput:
+      type: object
+      required: [templateId]
+      properties:
+        templateId: { type: string, format: uuid }
+        runtimeFilters: { type: object, additionalProperties: true }
+
+    ReportRun:
+      type: object
+      required: [id, templateId, accountId, status]
+      properties:
+        id: { type: string, format: uuid }
+        templateId: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        triggeredBy: { type: string }
+        runtimeFilters: { type: object, additionalProperties: true }
+        status: { type: string }
+        rowCount: { type: integer, nullable: true }
+        durationMs: { type: integer, nullable: true }
+        errorMessage: { type: string, nullable: true }
+        rows: { type: array, items: { type: object, additionalProperties: true } }
+        queuedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+
+    EnrichmentSource:
+      type: object
+      required: [source, approved, isFreeSource]
+      properties:
+        source: { type: string }
+        approved: { type: boolean }
+        notes: { type: string, nullable: true }
+        monthlyBudgetLimit: { type: integer, nullable: true }
+        currentMonthSpend: { type: integer }
+        approvedAt: { type: string, format: date-time, nullable: true }
+        envEnabled: { type: boolean }
+        envKeyPresent: { type: boolean }
+        isFreeSource: { type: boolean }
+
+    ApproveSourceInput:
+      type: object
+      properties:
+        notes: { type: string }
+        monthlyBudgetLimit: { type: integer }
+
+    PlatformStats:
+      type: object
+      properties:
+        totalFacilities: { type: integer }
+        totalContacts: { type: integer }
+        verifiedContacts: { type: integer }
+        activeAccounts: { type: integer }
+        pendingDrafts: { type: integer }
+        activeSignals: { type: integer }
+        batchesToday: { type: integer }
+
+    RecomputeResult:
+      type: object
+      properties:
+        updated: { type: integer }

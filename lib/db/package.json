@@ -9,12 +9,14 @@
   },
   "scripts": {
     "push": "drizzle-kit push --config ./drizzle.config.ts",
+    "seed": "tsx src/seed.ts",
     "push-force": "drizzle-kit push --force --config ./drizzle.config.ts"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",
     "drizzle-zod": "^0.8.3",
     "pg": "^8.20.0",
+    "tsx": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
