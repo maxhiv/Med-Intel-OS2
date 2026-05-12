@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { eq, desc, and, asc } from "drizzle-orm";
-import { db, syncBatches, syncItems } from "@workspace/db";
+import { eq, desc, and, asc, sql } from "drizzle-orm";
+import { db, syncBatches, syncItems, replyEvents } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
 import {
   runDailyBatchesForAccount,
@@ -55,6 +55,21 @@ router.post("/batches/:id/retry", requireAccount, async (req, res) => {
     }
     res.status(400).json({ error: msg });
   }
+});
+
+router.get("/webhook-events", requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+  const limit = Math.min(Number(req.query.limit) || 20, 100);
+  const errorsOnly = req.query.errorsOnly === "true" || req.query.errorsOnly === "1";
+  const conds = [eq(replyEvents.accountId, accountId)];
+  if (errorsOnly) conds.push(sql`${replyEvents.eventType} = 'webhook_error'`);
+  const rows = await db
+    .select()
+    .from(replyEvents)
+    .where(and(...conds))
+    .orderBy(desc(replyEvents.receivedAt))
+    .limit(limit);
+  res.json(rows);
 });
 
 router.post("/batches/run", requireAccount, async (req, res) => {

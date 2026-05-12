@@ -77,7 +77,16 @@ app.use(
     },
   }),
 );
-app.use(express.json({ limit: "1mb" }));
+// Capture the raw request body alongside JSON parsing so webhook handlers
+// can verify HMAC signatures over the exact bytes the vendor signed.
+app.use(
+  express.json({
+    limit: "1mb",
+    verify: (req, _res, buf) => {
+      (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  }),
+);
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 app.use(

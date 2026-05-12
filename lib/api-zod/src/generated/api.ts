@@ -757,6 +757,9 @@ export const ListDraftsResponse = zod.object({
         .optional(),
       generatedAt: zod.coerce.date().optional(),
       crmSyncedAt: zod.coerce.date().nullish(),
+      openedAt: zod.coerce.date().nullish(),
+      repliedAt: zod.coerce.date().nullish(),
+      bouncedAt: zod.coerce.date().nullish(),
     }),
   ),
   total: zod.number(),
@@ -820,6 +823,9 @@ export const GetDraftResponse = zod.object({
     .optional(),
   generatedAt: zod.coerce.date().optional(),
   crmSyncedAt: zod.coerce.date().nullish(),
+  openedAt: zod.coerce.date().nullish(),
+  repliedAt: zod.coerce.date().nullish(),
+  bouncedAt: zod.coerce.date().nullish(),
 });
 
 export const UpdateDraftParams = zod.object({
@@ -888,6 +894,9 @@ export const UpdateDraftResponse = zod.object({
     .optional(),
   generatedAt: zod.coerce.date().optional(),
   crmSyncedAt: zod.coerce.date().nullish(),
+  openedAt: zod.coerce.date().nullish(),
+  repliedAt: zod.coerce.date().nullish(),
+  bouncedAt: zod.coerce.date().nullish(),
 });
 
 export const ApproveDraftParams = zod.object({
@@ -948,6 +957,9 @@ export const ApproveDraftResponse = zod.object({
     .optional(),
   generatedAt: zod.coerce.date().optional(),
   crmSyncedAt: zod.coerce.date().nullish(),
+  openedAt: zod.coerce.date().nullish(),
+  repliedAt: zod.coerce.date().nullish(),
+  bouncedAt: zod.coerce.date().nullish(),
 });
 
 export const RejectDraftParams = zod.object({
@@ -1012,6 +1024,9 @@ export const RejectDraftResponse = zod.object({
     .optional(),
   generatedAt: zod.coerce.date().optional(),
   crmSyncedAt: zod.coerce.date().nullish(),
+  openedAt: zod.coerce.date().nullish(),
+  repliedAt: zod.coerce.date().nullish(),
+  bouncedAt: zod.coerce.date().nullish(),
 });
 
 export const listBatchesQueryLimitDefault = 30;
@@ -1085,6 +1100,38 @@ export const RetryBatchResponse = zod.object({
   pushed: zod.number().optional(),
   failed: zod.number().optional(),
 });
+
+/**
+ * @summary Recent inbound CRM webhook events for the current tenant (most recent first)
+ */
+export const listWebhookEventsQueryLimitDefault = 20;
+export const listWebhookEventsQueryLimitMax = 100;
+
+export const listWebhookEventsQueryErrorsOnlyDefault = false;
+
+export const ListWebhookEventsQueryParams = zod.object({
+  limit: zod.coerce
+    .number()
+    .max(listWebhookEventsQueryLimitMax)
+    .default(listWebhookEventsQueryLimitDefault),
+  errorsOnly: zod.coerce
+    .boolean()
+    .default(listWebhookEventsQueryErrorsOnlyDefault),
+});
+
+export const ListWebhookEventsResponseItem = zod.object({
+  id: zod.string().uuid(),
+  accountId: zod.string().uuid(),
+  draftId: zod.string().uuid().nullish(),
+  crmType: zod.string().nullish(),
+  crmContactId: zod.string().nullish(),
+  eventType: zod.string(),
+  rawPayload: zod.record(zod.string(), zod.unknown()).nullish(),
+  receivedAt: zod.coerce.date(),
+});
+export const ListWebhookEventsResponse = zod.array(
+  ListWebhookEventsResponseItem,
+);
 
 /**
  * @summary Manually trigger the daily batch run for all sub-accounts

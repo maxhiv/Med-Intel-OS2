@@ -337,6 +337,9 @@ export interface Draft {
   facility?: Facility;
   generatedAt?: string;
   crmSyncedAt?: string | null;
+  openedAt?: string | null;
+  repliedAt?: string | null;
+  bouncedAt?: string | null;
 }
 
 export interface DraftListResponse {
@@ -399,6 +402,19 @@ export interface BatchRetryResult {
   retried?: number;
   pushed?: number;
   failed?: number;
+}
+
+export type WebhookEventRawPayload = { [key: string]: unknown } | null;
+
+export interface WebhookEvent {
+  id: string;
+  accountId: string;
+  draftId?: string | null;
+  crmType?: string | null;
+  crmContactId?: string | null;
+  eventType: string;
+  rawPayload?: WebhookEventRawPayload;
+  receivedAt: string;
 }
 
 export interface BatchRunResult {
@@ -582,6 +598,14 @@ export const ListDraftsStatus = {
 
 export type ListBatchesParams = {
   limit?: number;
+};
+
+export type ListWebhookEventsParams = {
+  /**
+   * @maximum 100
+   */
+  limit?: number;
+  errorsOnly?: boolean;
 };
 
 export type ListReportRunsParams = {

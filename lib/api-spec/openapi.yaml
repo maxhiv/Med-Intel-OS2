@@ -430,6 +430,21 @@ paths:
               schema: { $ref: "#/components/schemas/BatchRetryResult" }
         "404": { description: Not found }
 
+  /webhook-events:
+    get:
+      operationId: listWebhookEvents
+      tags: [batches]
+      summary: Recent inbound CRM webhook events for the current tenant (most recent first)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: errorsOnly, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/WebhookEvent" } }
+
   /batches/run:
     post:
       operationId: runBatches
@@ -1006,6 +1021,9 @@ components:
         facility: { $ref: "#/components/schemas/Facility" }
         generatedAt: { type: string, format: date-time }
         crmSyncedAt: { type: string, format: date-time, nullable: true }
+        openedAt: { type: string, format: date-time, nullable: true }
+        repliedAt: { type: string, format: date-time, nullable: true }
+        bouncedAt: { type: string, format: date-time, nullable: true }
 
     DraftListResponse:
       type: object
@@ -1078,6 +1096,19 @@ components:
         retried: { type: integer }
         pushed: { type: integer }
         failed: { type: integer }
+
+    WebhookEvent:
+      type: object
+      required: [id, accountId, eventType, receivedAt]
+      properties:
+        id: { type: string, format: uuid }
+        accountId: { type: string, format: uuid }
+        draftId: { type: string, format: uuid, nullable: true }
+        crmType: { type: string, nullable: true }
+        crmContactId: { type: string, nullable: true }
+        eventType: { type: string }
+        rawPayload: { type: object, additionalProperties: true, nullable: true }
+        receivedAt: { type: string, format: date-time }
 
     BatchRunResult:
       type: object

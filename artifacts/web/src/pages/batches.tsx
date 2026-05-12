@@ -3,6 +3,7 @@ import {
   useListBatches,
   useRunBatches,
   useGetBatch,
+  useListWebhookEvents,
   retryBatch,
 } from "@workspace/api-client-react";
 import {
@@ -43,6 +44,10 @@ function statusBadge(status: string): string {
 export default function BatchesPage() {
   const { data: batchesRes, isLoading, refetch } = useListBatches();
   const batches = batchesRes ?? [];
+  const { data: webhookEvents } = useListWebhookEvents({ limit: 20 });
+  const webhookErrors = (webhookEvents ?? []).filter(
+    (e) => e.eventType === "webhook_error",
+  );
   const { toast } = useToast();
   const runBatches = useRunBatches();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -197,6 +202,86 @@ export default function BatchesPage() {
               </tbody>
             </table>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Inbound CRM Webhooks</CardTitle>
+          <CardDescription>
+            Replies, opens, and bounces flowing back from connected CRMs.
+            Signature failures or unknown contacts surface here.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {webhookErrors.length > 0 && (
+            <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/5 p-3">
+              <div className="flex items-center text-sm font-medium text-red-500 mb-2">
+                <AlertTriangle className="h-4 w-4 mr-1" />
+                {webhookErrors.length} ingest error
+                {webhookErrors.length === 1 ? "" : "s"} in the last 20 events
+              </div>
+              <ul className="space-y-1 text-xs text-muted-foreground">
+                {webhookErrors.slice(0, 5).map((e) => {
+                  const reason =
+                    (e.rawPayload as { reason?: string } | null | undefined)
+                      ?.reason ?? "unknown";
+                  return (
+                    <li key={e.id} className="flex justify-between">
+                      <span className="font-mono">
+                        {(e.crmType ?? "?").toUpperCase()} · {reason}
+                      </span>
+                      <span>{new Date(e.receivedAt).toLocaleString()}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+          {(webhookEvents ?? []).length === 0 ? (
+            <div className="text-sm text-muted-foreground py-6 text-center">
+              No webhook events received yet.
+            </div>
+          ) : (
+            <div className="rounded-md border border-border max-h-72 overflow-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/50 text-muted-foreground sticky top-0">
+                  <tr>
+                    <th className="h-9 px-3 text-left font-medium">Received</th>
+                    <th className="h-9 px-3 text-left font-medium">CRM</th>
+                    <th className="h-9 px-3 text-left font-medium">Event</th>
+                    <th className="h-9 px-3 text-left font-medium">Contact</th>
+                    <th className="h-9 px-3 text-left font-medium">Draft</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(webhookEvents ?? []).map((e) => (
+                    <tr key={e.id} className="border-t border-border align-top">
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {new Date(e.receivedAt).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 uppercase text-muted-foreground">
+                        {e.crmType ?? "—"}
+                      </td>
+                      <td
+                        className={`px-3 py-2 font-mono ${
+                          e.eventType === "webhook_error" ? "text-red-500" : ""
+                        }`}
+                      >
+                        {e.eventType}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-[11px]">
+                        {e.crmContactId ?? "—"}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-[11px]">
+                        {e.draftId ? `${e.draftId.slice(0, 8)}…` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
 

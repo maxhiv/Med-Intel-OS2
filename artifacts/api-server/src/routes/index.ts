@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { userContext } from "../middlewares/auth";
 import healthRouter from "./health";
+import webhooksRouter from "./webhooks";
 import meRouter from "./me";
 import dashboardRouter from "./dashboard";
 import facilitiesRouter from "./facilities";
@@ -16,6 +17,10 @@ import adminRouter from "./admin";
 const router: IRouter = Router();
 
 router.use(healthRouter);
+
+// Inbound CRM webhooks are unauthenticated (vendor-signed). Mount before
+// userContext so we don't run a Clerk lookup on every webhook hit.
+router.use(webhooksRouter);
 
 // All routes below need user context.
 router.use(userContext);

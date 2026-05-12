@@ -53,6 +53,7 @@ import type {
   ListDraftsParams,
   ListFacilitiesParams,
   ListReportRunsParams,
+  ListWebhookEventsParams,
   Me,
   NotFoundResponse,
   PlatformStats,
@@ -76,6 +77,7 @@ import type {
   SyncBatchDetail,
   UnauthorizedResponse,
   User,
+  WebhookEvent,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -2847,6 +2849,103 @@ export const useRetryBatch = <
 > => {
   return useMutation(getRetryBatchMutationOptions(options));
 };
+
+/**
+ * @summary Recent inbound CRM webhook events for the current tenant (most recent first)
+ */
+export const getListWebhookEventsUrl = (params?: ListWebhookEventsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/webhook-events?${stringifiedParams}`
+    : `/api/webhook-events`;
+};
+
+export const listWebhookEvents = async (
+  params?: ListWebhookEventsParams,
+  options?: RequestInit,
+): Promise<WebhookEvent[]> => {
+  return customFetch<WebhookEvent[]>(getListWebhookEventsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListWebhookEventsQueryKey = (
+  params?: ListWebhookEventsParams,
+) => {
+  return [`/api/webhook-events`, ...(params ? [params] : [])] as const;
+};
+
+export const getListWebhookEventsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listWebhookEvents>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListWebhookEventsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listWebhookEvents>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListWebhookEventsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listWebhookEvents>>
+  > = ({ signal }) => listWebhookEvents(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listWebhookEvents>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListWebhookEventsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listWebhookEvents>>
+>;
+export type ListWebhookEventsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Recent inbound CRM webhook events for the current tenant (most recent first)
+ */
+
+export function useListWebhookEvents<
+  TData = Awaited<ReturnType<typeof listWebhookEvents>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListWebhookEventsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listWebhookEvents>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListWebhookEventsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Manually trigger the daily batch run for all sub-accounts

@@ -3,7 +3,7 @@ import { useListDrafts, useApproveDraft, useRejectDraft } from "@workspace/api-c
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { FileText, Check, X, RefreshCw } from "lucide-react";
+import { FileText, Check, X, RefreshCw, Eye, Reply, AlertOctagon } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 
@@ -105,6 +105,28 @@ export default function DraftsPage() {
                       <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Body</div>
                       <div className="text-sm whitespace-pre-wrap border rounded px-3 py-2 bg-background font-mono leading-relaxed">{draft.body}</div>
                     </div>
+                    {(draft.openedAt || draft.repliedAt || draft.bouncedAt) && (
+                      <div className="flex flex-wrap gap-3 text-xs pt-2 border-t">
+                        {draft.openedAt && (
+                          <span className="inline-flex items-center px-2 py-1 rounded bg-blue-500/10 text-blue-600">
+                            <Eye className="h-3 w-3 mr-1" />
+                            Opened {new Date(draft.openedAt).toLocaleString()}
+                          </span>
+                        )}
+                        {draft.repliedAt && (
+                          <span className="inline-flex items-center px-2 py-1 rounded bg-green-500/10 text-green-600">
+                            <Reply className="h-3 w-3 mr-1" />
+                            Replied {new Date(draft.repliedAt).toLocaleString()}
+                          </span>
+                        )}
+                        {draft.bouncedAt && (
+                          <span className="inline-flex items-center px-2 py-1 rounded bg-red-500/10 text-red-600">
+                            <AlertOctagon className="h-3 w-3 mr-1" />
+                            Bounced {new Date(draft.bouncedAt).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>

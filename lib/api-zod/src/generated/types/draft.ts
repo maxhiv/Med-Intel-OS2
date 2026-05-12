@@ -26,4 +26,7 @@ export interface Draft {
   facility?: Facility;
   generatedAt?: Date;
   crmSyncedAt?: Date | null;
+  openedAt?: Date | null;
+  repliedAt?: Date | null;
+  bouncedAt?: Date | null;
 }
