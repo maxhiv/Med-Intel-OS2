@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { useGetMe } from "@workspace/api-client-react";
 import { UserButton } from "@clerk/react";
-import { Activity, LayoutDashboard, Building2, Radio, Users, Target, Layers, FileText, Settings, ShieldAlert, CheckCircle2 } from "lucide-react";
+import { Activity, LayoutDashboard, Building2, Radio, Users, Target, Layers, FileText, Settings, ShieldAlert, CheckCircle2, FileSignature } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -17,6 +17,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { name: "Facilities", href: "/facilities", icon: Building2 },
     { name: "Signals", href: "/signals", icon: Radio },
+    { name: "CON Filings", href: "/con-filings", icon: FileSignature },
     { name: "Contacts", href: "/contacts", icon: Users },
     { name: "Campaigns", href: "/campaigns", icon: Target },
     { name: "Sequences", href: "/sequences", icon: Layers },

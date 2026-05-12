@@ -1,10 +1,104 @@
 import { Router, type IRouter } from "express";
-import { requirePlatformAdmin } from "../middlewares/auth";
+import { sql, desc, eq, and, type SQL } from "drizzle-orm";
+import { db, conFilings, facilities, accountFacilities } from "@workspace/db";
+import { requirePlatformAdmin, requireAccount } from "../middlewares/auth";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
 import { ingestConFilings } from "../services/conFilingsIngestor";
 
 const router: IRouter = Router();
+
+// List recent CON filings, optionally filtered by state and approved-vs-filed
+// status. Returned to any account user — CON data is public, not tenant-scoped.
+// Mirrors `looksApproved()` in conFilingsIngestor.ts at the SQL level. Some
+// adapters store normalized values ("approved"/"filed") while others persist
+// raw source text (e.g. "Approved with conditions", "Application received"),
+// so filtering and badge logic must match against the keyword pattern instead
+// of an exact string.
+const NORMALIZED_STATUS_SQL = sql<"approved" | "filed" | null>`
+  CASE
+    WHEN ${conFilings.status} IS NULL THEN NULL
+    WHEN ${conFilings.status} ~* 'approv|grant(ed)?|issued' THEN 'approved'
+    ELSE 'filed'
+  END
+`;
+
+router.get("/signals/con-filings", requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+  const stateRaw = typeof req.query.state === "string" ? req.query.state.trim().toUpperCase() : "";
+  const statusRaw = typeof req.query.status === "string" ? req.query.status.trim().toLowerCase() : "";
+
+  const filters: SQL[] = [];
+  if (stateRaw.length === 2) {
+    filters.push(eq(conFilings.state, stateRaw));
+  }
+  if (statusRaw === "approved") {
+    filters.push(sql`${conFilings.status} ~* 'approv|grant(ed)?|issued'`);
+  } else if (statusRaw === "filed") {
+    filters.push(
+      sql`${conFilings.status} IS NOT NULL AND ${conFilings.status} !~* 'approv|grant(ed)?|issued'`,
+    );
+  }
+  const whereClause = filters.length > 0 ? and(...filters) : undefined;
+
+  // CON filings come from public state regulators and aren't tenant-owned, so
+  // every account user sees the full feed. To avoid dead facility links we
+  // mark each row's matched facility as accessible only when it's in the
+  // current account's facility set.
+  const ownedRows = await db
+    .select({ id: accountFacilities.facilityId })
+    .from(accountFacilities)
+    .where(eq(accountFacilities.accountId, accountId));
+  const ownedSet = new Set(ownedRows.map((r) => r.id));
+
+  const rows = await db
+    .select({
+      id: conFilings.id,
+      facilityId: conFilings.facilityId,
+      facilityName: facilities.name,
+      state: conFilings.state,
+      filingDate: conFilings.filingDate,
+      decisionDate: conFilings.decisionDate,
+      equipmentType: conFilings.equipmentType,
+      modality: conFilings.modality,
+      requestedAmount: conFilings.requestedAmount,
+      approvedAmount: conFilings.approvedAmount,
+      status: conFilings.status,
+      statusNormalized: NORMALIZED_STATUS_SQL,
+      applicantName: conFilings.applicantName,
+      filingUrl: conFilings.filingUrl,
+      notes: conFilings.notes,
+      createdAt: conFilings.createdAt,
+    })
+    .from(conFilings)
+    .leftJoin(facilities, eq(facilities.id, conFilings.facilityId))
+    .where(whereClause)
+    .orderBy(
+      desc(sql`COALESCE(${conFilings.filingDate}, ${conFilings.createdAt}::date)`),
+    )
+    .limit(limit)
+    .offset(offset);
+
+  const data = rows.map((r) => ({
+    ...r,
+    facilityAccessible: r.facilityId ? ownedSet.has(r.facilityId) : false,
+  }));
+
+  const [{ c: total }] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(conFilings)
+    .where(whereClause);
+
+  const stateRows = await db
+    .selectDistinct({ state: conFilings.state })
+    .from(conFilings)
+    .orderBy(conFilings.state);
+  const states = stateRows.map((r) => r.state).filter((s): s is string => !!s);
+
+  res.json({ data, total, limit, offset, states });
+});
 
 router.post("/signals/recompute", requirePlatformAdmin, async (_req, res) => {
   const result = await recomputeAllScores();

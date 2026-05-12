@@ -31,6 +31,7 @@ import type {
   CampaignDetail,
   CampaignInput,
   CampaignPatchInput,
+  ConFilingListResponse,
   ConflictResponse,
   Contact,
   CrmCredentialSchema,
@@ -54,6 +55,7 @@ import type {
   GetTopFacilitiesParams,
   HealthStatus,
   ListBatchesParams,
+  ListConFilingsParams,
   ListDraftsParams,
   ListFacilitiesParams,
   ListReportRunsParams,
@@ -1251,6 +1253,100 @@ export const useRecomputeSignalScores = <
 > => {
   return useMutation(getRecomputeSignalScoresMutationOptions(options));
 };
+
+/**
+ * @summary List recent Certificate-of-Need filings detected by the CON ingestor
+ */
+export const getListConFilingsUrl = (params?: ListConFilingsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/signals/con-filings?${stringifiedParams}`
+    : `/api/signals/con-filings`;
+};
+
+export const listConFilings = async (
+  params?: ListConFilingsParams,
+  options?: RequestInit,
+): Promise<ConFilingListResponse> => {
+  return customFetch<ConFilingListResponse>(getListConFilingsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListConFilingsQueryKey = (params?: ListConFilingsParams) => {
+  return [`/api/signals/con-filings`, ...(params ? [params] : [])] as const;
+};
+
+export const getListConFilingsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listConFilings>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListConFilingsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listConFilings>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListConFilingsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listConFilings>>> = ({
+    signal,
+  }) => listConFilings(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listConFilings>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListConFilingsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listConFilings>>
+>;
+export type ListConFilingsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List recent Certificate-of-Need filings detected by the CON ingestor
+ */
+
+export function useListConFilings<
+  TData = Awaited<ReturnType<typeof listConFilings>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListConFilingsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listConFilings>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListConFilingsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Run the enrichment waterfall for a contact

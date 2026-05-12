@@ -16,6 +16,7 @@ import DashboardPage from "@/pages/dashboard";
 import FacilitiesPage from "@/pages/facilities/index";
 import FacilityDetailPage from "@/pages/facilities/detail";
 import SignalsPage from "@/pages/signals";
+import ConFilingsPage from "@/pages/con-filings";
 import ContactsPage from "@/pages/contacts";
 import CampaignsPage from "@/pages/campaigns/index";
 import CampaignDetailPage from "@/pages/campaigns/detail";
@@ -45,6 +46,7 @@ function Router() {
               <Route path="/facilities" component={FacilitiesPage} />
               <Route path="/facilities/:id" component={FacilityDetailPage} />
               <Route path="/signals" component={SignalsPage} />
+              <Route path="/con-filings" component={ConFilingsPage} />
               <Route path="/contacts" component={ContactsPage} />
               <Route path="/campaigns" component={CampaignsPage} />
               <Route path="/campaigns/:id" component={CampaignDetailPage} />

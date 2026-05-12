@@ -226,6 +226,50 @@ export type SignalWithFacility = PurchaseSignal & {
   facilityState?: string | null;
 };
 
+/**
+ * Normalized binary status for filtering and badges; null when source status is unknown.
+ */
+export type ConFilingStatusNormalized =
+  | (typeof ConFilingStatusNormalized)[keyof typeof ConFilingStatusNormalized]
+  | null;
+
+export const ConFilingStatusNormalized = {
+  approved: "approved",
+  filed: "filed",
+} as const;
+
+export interface ConFiling {
+  id: string;
+  facilityId?: string | null;
+  facilityName?: string | null;
+  /** True when the matched facility belongs to the current account and the detail page is reachable. */
+  facilityAccessible: boolean;
+  state: string;
+  filingDate?: string | null;
+  decisionDate?: string | null;
+  equipmentType?: string | null;
+  modality?: string | null;
+  requestedAmount?: number | null;
+  approvedAmount?: number | null;
+  /** Raw status text as published by the source regulator. */
+  status?: string | null;
+  /** Normalized binary status for filtering and badges; null when source status is unknown. */
+  statusNormalized?: ConFilingStatusNormalized;
+  applicantName?: string | null;
+  filingUrl?: string | null;
+  notes?: string | null;
+  createdAt?: string | null;
+}
+
+export interface ConFilingListResponse {
+  data: ConFiling[];
+  total: number;
+  limit?: number;
+  offset?: number;
+  /** Distinct state codes present in the con_filings table, for populating the state filter UI. */
+  states: string[];
+}
+
 export type DashboardSummarySignalsByTypeItem = {
   signalType?: string;
   count?: number;
@@ -641,6 +685,28 @@ export type ListFacilitiesParams = {
   limit?: number;
   offset?: number;
 };
+
+export type ListConFilingsParams = {
+  /**
+   * @minLength 2
+   * @maxLength 2
+   */
+  state?: string;
+  status?: ListConFilingsStatus;
+  /**
+   * @maximum 200
+   */
+  limit?: number;
+  offset?: number;
+};
+
+export type ListConFilingsStatus =
+  (typeof ListConFilingsStatus)[keyof typeof ListConFilingsStatus];
+
+export const ListConFilingsStatus = {
+  approved: "approved",
+  filed: "filed",
+} as const;
 
 export type ListDraftsParams = {
   status?: ListDraftsStatus;

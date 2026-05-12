@@ -194,6 +194,23 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RecomputeResult" } } } }
 
+  /signals/con-filings:
+    get:
+      operationId: listConFilings
+      tags: [signals]
+      summary: List recent Certificate-of-Need filings detected by the CON ingestor
+      parameters:
+        - { name: state, in: query, schema: { type: string, minLength: 2, maxLength: 2 } }
+        - { name: status, in: query, schema: { type: string, enum: [approved, filed] } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConFilingListResponse" }
+
   # ── Contacts ─────────────────────────────────────────────────
   /contacts/{id}/enrich:
     post:
@@ -960,6 +977,43 @@ components:
           properties:
             facilityName: { type: string }
             facilityState: { type: string, nullable: true }
+
+    ConFiling:
+      type: object
+      required: [id, state, facilityAccessible]
+      properties:
+        id: { type: string, format: uuid }
+        facilityId: { type: string, format: uuid, nullable: true }
+        facilityName: { type: string, nullable: true }
+        facilityAccessible: { type: boolean, description: "True when the matched facility belongs to the current account and the detail page is reachable." }
+        state: { type: string }
+        filingDate: { type: string, format: date, nullable: true }
+        decisionDate: { type: string, format: date, nullable: true }
+        equipmentType: { type: string, nullable: true }
+        modality: { type: string, nullable: true }
+        requestedAmount: { type: integer, nullable: true }
+        approvedAmount: { type: integer, nullable: true }
+        status: { type: string, nullable: true, description: "Raw status text as published by the source regulator." }
+        statusNormalized: { type: string, nullable: true, enum: [approved, filed], description: "Normalized binary status for filtering and badges; null when source status is unknown." }
+        applicantName: { type: string, nullable: true }
+        filingUrl: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time, nullable: true }
+
+    ConFilingListResponse:
+      type: object
+      required: [data, total, states]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ConFiling" }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+        states:
+          type: array
+          description: Distinct state codes present in the con_filings table, for populating the state filter UI.
+          items: { type: string }
 
     Contact:
       type: object

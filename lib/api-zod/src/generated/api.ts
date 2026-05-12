@@ -459,6 +459,75 @@ export const RecomputeSignalScoresResponse = zod.object({
 });
 
 /**
+ * @summary List recent Certificate-of-Need filings detected by the CON ingestor
+ */
+export const listConFilingsQueryStateMin = 2;
+export const listConFilingsQueryStateMax = 2;
+
+export const listConFilingsQueryLimitDefault = 50;
+export const listConFilingsQueryLimitMax = 200;
+
+export const listConFilingsQueryOffsetDefault = 0;
+
+export const ListConFilingsQueryParams = zod.object({
+  state: zod.coerce
+    .string()
+    .min(listConFilingsQueryStateMin)
+    .max(listConFilingsQueryStateMax)
+    .optional(),
+  status: zod.enum(["approved", "filed"]).optional(),
+  limit: zod.coerce
+    .number()
+    .max(listConFilingsQueryLimitMax)
+    .default(listConFilingsQueryLimitDefault),
+  offset: zod.coerce.number().default(listConFilingsQueryOffsetDefault),
+});
+
+export const ListConFilingsResponse = zod.object({
+  data: zod.array(
+    zod.object({
+      id: zod.string().uuid(),
+      facilityId: zod.string().uuid().nullish(),
+      facilityName: zod.string().nullish(),
+      facilityAccessible: zod
+        .boolean()
+        .describe(
+          "True when the matched facility belongs to the current account and the detail page is reachable.",
+        ),
+      state: zod.string(),
+      filingDate: zod.coerce.date().nullish(),
+      decisionDate: zod.coerce.date().nullish(),
+      equipmentType: zod.string().nullish(),
+      modality: zod.string().nullish(),
+      requestedAmount: zod.number().nullish(),
+      approvedAmount: zod.number().nullish(),
+      status: zod
+        .string()
+        .nullish()
+        .describe("Raw status text as published by the source regulator."),
+      statusNormalized: zod
+        .enum(["approved", "filed"])
+        .nullish()
+        .describe(
+          "Normalized binary status for filtering and badges; null when source status is unknown.",
+        ),
+      applicantName: zod.string().nullish(),
+      filingUrl: zod.string().nullish(),
+      notes: zod.string().nullish(),
+      createdAt: zod.coerce.date().nullish(),
+    }),
+  ),
+  total: zod.number(),
+  limit: zod.number().optional(),
+  offset: zod.number().optional(),
+  states: zod
+    .array(zod.string())
+    .describe(
+      "Distinct state codes present in the con_filings table, for populating the state filter UI.",
+    ),
+});
+
+/**
  * @summary Run the enrichment waterfall for a contact
  */
 export const EnrichContactParams = zod.object({
