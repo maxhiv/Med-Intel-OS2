@@ -9,6 +9,8 @@ import {
   facilities,
   purchaseSignals,
   outreachDrafts,
+  facilityContacts,
+  syncBatches,
   FREE_ENRICHMENT_SOURCES,
   PAID_ENRICHMENT_SOURCES,
 } from "@workspace/db";
@@ -185,29 +187,46 @@ router.post(
 );
 
 router.get("/admin/platform-stats", requirePlatformAdmin, async (_req, res) => {
+  // Note: users field intentionally not in PlatformStats schema
+  void users;
   const [acctCount] = await db
-    .select({ c: sql<number>`count(*)::int` })
+    .select({
+      c: sql<number>`count(*) FILTER (WHERE ${accounts.status} = 'active')::int`,
+    })
     .from(accounts);
-  const [userCount] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(users);
   const [facCount] = await db
     .select({ c: sql<number>`count(*)::int` })
     .from(facilities);
+  const [contactCount] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(facilityContacts);
+  const [verifiedContactCount] = await db
+    .select({
+      c: sql<number>`count(*) FILTER (WHERE ${facilityContacts.emailStatus} = 'verified' OR ${facilityContacts.humanVerified} = true)::int`,
+    })
+    .from(facilityContacts);
   const [sigCount] = await db
     .select({ c: sql<number>`count(*)::int` })
     .from(purchaseSignals)
     .where(eq(purchaseSignals.isActive, true));
-  const [draftCount] = await db
+  const [pendingDraftCount] = await db
     .select({ c: sql<number>`count(*)::int` })
-    .from(outreachDrafts);
+    .from(outreachDrafts)
+    .where(eq(outreachDrafts.status, "pending"));
+  const [batchesTodayCount] = await db
+    .select({
+      c: sql<number>`count(*) FILTER (WHERE ${syncBatches.batchDate} = CURRENT_DATE)::int`,
+    })
+    .from(syncBatches);
 
   res.json({
-    accounts: acctCount.c,
-    users: userCount.c,
-    facilities: facCount.c,
+    activeAccounts: acctCount.c,
+    totalFacilities: facCount.c,
+    totalContacts: contactCount.c,
+    verifiedContacts: verifiedContactCount.c,
+    pendingDrafts: pendingDraftCount.c,
     activeSignals: sigCount.c,
-    drafts: draftCount.c,
+    batchesToday: batchesTodayCount.c,
   });
 });
 

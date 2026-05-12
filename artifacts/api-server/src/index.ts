@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { startCron } from "./cron/dailyBatch";
+import { startCron } from "./cron";
 
 const rawPort = process.env["PORT"];
 

@@ -2,6 +2,8 @@ import { Router, type IRouter } from "express";
 import { eq, and, desc, sql, type SQL } from "drizzle-orm";
 import { db, outreachDrafts, draftEdits, type OutreachDraft } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
+import { pushApprovedDraftToCrm } from "../services/crmPush";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -118,7 +120,30 @@ router.post("/drafts/:id/approve", requireAccount, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  res.json(updated);
+
+  // Trust-critical: at approval time, immediately push the draft to the
+  // configured CRM as a pending artifact (stubbed adapter). The draft stays
+  // "approved" until the rep actually sends it from the CRM. We swallow
+  // CRM errors so the approval itself is durable; the daily batch will retry.
+  let crmDraftId: string | null = null;
+  let crmSyncedAt: Date | null = null;
+  try {
+    const r = await pushApprovedDraftToCrm(updated);
+    crmDraftId = r.crmDraftId;
+    crmSyncedAt = r.syncedAt;
+    // Audit the push as a draft edit
+    await db.insert(draftEdits).values({
+      draftId: id,
+      editedBy: req.currentUser?.id ?? null,
+      fieldChanged: "crmSyncedAt",
+      originalValue: null,
+      newValue: r.syncedAt.toISOString(),
+    });
+  } catch (err) {
+    logger.warn({ err, draftId: id }, "CRM push at approval failed; will retry in batch");
+  }
+
+  res.json({ ...updated, crmDraftId: crmDraftId ?? updated.crmDraftId, crmSyncedAt: crmSyncedAt ?? updated.crmSyncedAt });
 });
 
 router.post("/drafts/:id/reject", requireAccount, async (req, res) => {
