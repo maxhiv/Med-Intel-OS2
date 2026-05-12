@@ -1667,6 +1667,29 @@ export const AdminSetEnrichmentSourceBudgetResponse = zod.object({
     ),
 });
 
+/**
+ * @summary Reset month-to-date spend counter for a paid enrichment source (use at the start of a new billing month)
+ */
+export const AdminResetEnrichmentSourceSpendParams = zod.object({
+  source: zod.coerce.string(),
+});
+
+export const AdminResetEnrichmentSourceSpendResponse = zod.object({
+  source: zod.string(),
+  approved: zod.boolean(),
+  notes: zod.string().nullish(),
+  monthBudgetCents: zod
+    .number()
+    .nullish()
+    .describe("Monthly cap in cents (null = no cap)"),
+  monthSpendCents: zod.number().describe("Month-to-date spend in cents"),
+  approvedAt: zod.coerce.date().nullish(),
+  approvedBy: zod.string().nullish(),
+  envEnabled: zod.boolean().optional(),
+  envKeyPresent: zod.boolean().optional(),
+  isFreeSource: zod.boolean(),
+});
+
 export const AdminPlatformStatsResponse = zod.object({
   totalFacilities: zod.number().optional(),
   totalContacts: zod.number().optional(),

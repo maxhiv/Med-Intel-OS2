@@ -71,8 +71,13 @@ export interface SourceStatus {
   monthSpendCents: number;
   /** Hard monthly budget cap in cents (null = no cap configured). */
   monthBudgetCents: number | null;
-  /** Raw micros values used for precise budget gating. */
+  /**
+   * Raw month-to-date spend in micros (1 cent = 10,000 micros). This is
+   * the source of truth used for budget enforcement; the cents fields
+   * above are rounded for display/API and must NOT be used for gating.
+   */
   monthSpendMicros: number;
+  /** Raw monthly budget cap in micros (null = no cap configured). */
   monthBudgetMicros: number | null;
   /**
    * True when this paid source has hit or exceeded its configured monthly

@@ -4600,6 +4600,95 @@ export const useAdminSetEnrichmentSourceBudget = <
   return useMutation(getAdminSetEnrichmentSourceBudgetMutationOptions(options));
 };
 
+/**
+ * @summary Reset month-to-date spend counter for a paid enrichment source (use at the start of a new billing month)
+ */
+export const getAdminResetEnrichmentSourceSpendUrl = (source: string) => {
+  return `/api/admin/enrichment-sources/${source}/reset-spend`;
+};
+
+export const adminResetEnrichmentSourceSpend = async (
+  source: string,
+  options?: RequestInit,
+): Promise<EnrichmentSource> => {
+  return customFetch<EnrichmentSource>(
+    getAdminResetEnrichmentSourceSpendUrl(source),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getAdminResetEnrichmentSourceSpendMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminResetEnrichmentSourceSpend>>,
+    TError,
+    { source: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminResetEnrichmentSourceSpend>>,
+  TError,
+  { source: string },
+  TContext
+> => {
+  const mutationKey = ["adminResetEnrichmentSourceSpend"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminResetEnrichmentSourceSpend>>,
+    { source: string }
+  > = (props) => {
+    const { source } = props ?? {};
+
+    return adminResetEnrichmentSourceSpend(source, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminResetEnrichmentSourceSpendMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminResetEnrichmentSourceSpend>>
+>;
+
+export type AdminResetEnrichmentSourceSpendMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Reset month-to-date spend counter for a paid enrichment source (use at the start of a new billing month)
+ */
+export const useAdminResetEnrichmentSourceSpend = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminResetEnrichmentSourceSpend>>,
+    TError,
+    { source: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminResetEnrichmentSourceSpend>>,
+  TError,
+  { source: string },
+  TContext
+> => {
+  return useMutation(
+    getAdminResetEnrichmentSourceSpendMutationOptions(options),
+  );
+};
+
 export const getAdminPlatformStatsUrl = () => {
   return `/api/admin/platform-stats`;
 };

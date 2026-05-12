@@ -689,6 +689,16 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EnrichmentSource" } } } }
 
+  /admin/enrichment-sources/{source}/reset-spend:
+    post:
+      operationId: adminResetEnrichmentSourceSpend
+      tags: [admin]
+      summary: Reset month-to-date spend counter for a paid enrichment source (use at the start of a new billing month)
+      parameters:
+        - { name: source, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EnrichmentSource" } } } }
+
   /admin/platform-stats:
     get:
       operationId: adminPlatformStats

@@ -452,6 +452,41 @@ router.patch(
   },
 );
 
+router.post(
+  "/admin/enrichment-sources/:source/reset-spend",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const source = parseSource(String(req.params.source));
+    if (!source) {
+      res.status(400).json({ error: "invalid_source" });
+      return;
+    }
+    if ((FREE_ENRICHMENT_SOURCES as readonly string[]).includes(source)) {
+      res.status(400).json({ error: "free_source_has_no_spend" });
+      return;
+    }
+    const now = new Date();
+    await db
+      .insert(enrichmentSourceApprovals)
+      .values({
+        source,
+        approved: false,
+        currentMonthSpend: 0,
+        lastResetAt: now,
+      })
+      .onConflictDoUpdate({
+        target: enrichmentSourceApprovals.source,
+        set: {
+          currentMonthSpend: 0,
+          lastResetAt: now,
+          updatedAt: now,
+        },
+      });
+    const found = (await listAllSources()).find((s) => s.source === source);
+    res.json(found);
+  },
+);
+
 router.get("/admin/platform-stats", requirePlatformAdmin, async (_req, res) => {
   // Note: users field intentionally not in PlatformStats schema
   void users;
