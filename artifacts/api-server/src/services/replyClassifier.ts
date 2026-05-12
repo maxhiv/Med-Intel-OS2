@@ -18,6 +18,7 @@ import {
   replyEvents,
   outreachDrafts,
   contactEnrollments,
+  withRLS,
 } from "@workspace/db";
 import { ai, ANTHROPIC_MODEL } from "../lib/anthropic";
 import { logger } from "../lib/logger";
@@ -137,22 +138,97 @@ export interface ClassifyResult {
 }
 
 /**
- * Classify up to `limit` un-classified reply events.
- * Safe to run repeatedly; rows are filtered by `aiClassification IS NULL`.
+ * Classify up to `limit` un-classified reply events for a single account.
+ * All database work runs inside `withRLS(accountId, ...)` so unfiltered
+ * reads/writes against `reply_events`, `outreach_drafts`, and
+ * `contact_enrollments` cannot leak into another tenant's rows. Re-entrant
+ * under an existing RLS scope (e.g. when invoked from an authenticated
+ * request that the middleware already wrapped).
+ */
+export async function classifyPendingRepliesForAccount(
+  accountId: string,
+  limit = 25,
+): Promise<ClassifyResult> {
+  return withRLS(accountId, async () => {
+    // Filter to reply-shaped event types in SQL so opens / bounces / task
+    // events (which also live in `reply_events` with a null
+    // `aiClassification`) can never starve real replies out of the
+    // processing window.
+    const replies = await db
+      .select({
+        id: replyEvents.id,
+        draftId: replyEvents.draftId,
+        eventType: replyEvents.eventType,
+        rawPayload: replyEvents.rawPayload,
+      })
+      .from(replyEvents)
+      .where(
+        and(
+          isNull(replyEvents.aiClassification),
+          isNotNull(replyEvents.draftId),
+          or(
+            ilike(replyEvents.eventType, "%reply%"),
+            ilike(replyEvents.eventType, "%inboundmessage%"),
+            ilike(replyEvents.eventType, "%inbound_message%"),
+          ),
+        ),
+      )
+      .orderBy(desc(replyEvents.receivedAt))
+      .limit(limit);
+    let classified = 0;
+    let stopped = 0;
+    let failed = 0;
+
+    for (const row of replies) {
+      const body = extractBody(row.rawPayload);
+      if (!body) {
+        await db
+          .update(replyEvents)
+          .set({ aiClassification: "unknown" })
+          .where(eq(replyEvents.id, row.id));
+        classified += 1;
+        continue;
+      }
+      try {
+        const cls = await classifyReplyText(body);
+        await db
+          .update(replyEvents)
+          .set({ aiClassification: cls })
+          .where(eq(replyEvents.id, row.id));
+        classified += 1;
+        if (row.draftId && STOP_CLASSES.has(cls)) {
+          await applyStopAction(row.draftId, cls);
+          stopped += 1;
+        }
+      } catch (err) {
+        failed += 1;
+        logger.warn(
+          { err, replyEventId: row.id },
+          "reply classification failed",
+        );
+      }
+    }
+
+    return { examined: replies.length, classified, stopped, failed };
+  });
+}
+
+/**
+ * Cross-account fan-out for the reply-classifier cron job. Enumerates the
+ * distinct accounts with un-classified reply events and opens one
+ * RLS-scoped transaction per account via `classifyPendingRepliesForAccount`
+ * — never one global cross-tenant transaction. The discovery query reads
+ * `reply_events.account_id` directly (not RLS-scoped from outside, but
+ * only the id list is exposed; per-account work is what gates content).
+ *
+ * `limit` is interpreted as a per-account cap so a single noisy tenant
+ * cannot starve the others out of a tick.
  */
 export async function classifyPendingReplies(
   limit = 25,
 ): Promise<ClassifyResult> {
-  // Filter to reply-shaped event types in SQL so opens / bounces / task
-  // events (which also live in `reply_events` with a null `aiClassification`)
-  // can never starve real replies out of the processing window.
-  const replies = await db
-    .select({
-      id: replyEvents.id,
-      draftId: replyEvents.draftId,
-      eventType: replyEvents.eventType,
-      rawPayload: replyEvents.rawPayload,
-    })
+  const accountRows = await db
+    .selectDistinct({ accountId: replyEvents.accountId })
     .from(replyEvents)
     .where(
       and(
@@ -164,45 +240,23 @@ export async function classifyPendingReplies(
           ilike(replyEvents.eventType, "%inbound_message%"),
         ),
       ),
-    )
-    .orderBy(desc(replyEvents.receivedAt))
-    .limit(limit);
-  let classified = 0;
-  let stopped = 0;
-  let failed = 0;
+    );
 
-  for (const row of replies) {
-    const body = extractBody(row.rawPayload);
-    if (!body) {
-      // Mark as unknown so we don't re-examine forever.
-      await db
-        .update(replyEvents)
-        .set({ aiClassification: "unknown" })
-        .where(eq(replyEvents.id, row.id));
-      classified += 1;
-      continue;
-    }
-    try {
-      const cls = await classifyReplyText(body);
-      await db
-        .update(replyEvents)
-        .set({ aiClassification: cls })
-        .where(eq(replyEvents.id, row.id));
-      classified += 1;
-      if (row.draftId && STOP_CLASSES.has(cls)) {
-        await applyStopAction(row.draftId, cls);
-        stopped += 1;
-      }
-    } catch (err) {
-      failed += 1;
-      logger.warn(
-        { err, replyEventId: row.id },
-        "reply classification failed",
-      );
-    }
+  const totals: ClassifyResult = {
+    examined: 0,
+    classified: 0,
+    stopped: 0,
+    failed: 0,
+  };
+  for (const { accountId } of accountRows) {
+    if (!accountId) continue;
+    const r = await classifyPendingRepliesForAccount(accountId, limit);
+    totals.examined += r.examined;
+    totals.classified += r.classified;
+    totals.stopped += r.stopped;
+    totals.failed += r.failed;
   }
-
-  return { examined: replies.length, classified, stopped, failed };
+  return totals;
 }
 
 /**

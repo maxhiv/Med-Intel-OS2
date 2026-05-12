@@ -25,7 +25,7 @@ import {
 import { logger } from "../lib/logger";
 import { parseEvents, verifySignature } from "../services/webhookParsers";
 import type { CrmType } from "../services/crmAdapters";
-import { classifyPendingReplies } from "../services/replyClassifier";
+import { classifyPendingRepliesForAccount } from "../services/replyClassifier";
 import { recomputeEngagementForAccountFacility } from "../services/signalScorer";
 
 const router: IRouter = Router();
@@ -158,7 +158,7 @@ router.post("/webhooks/:crm/:subAccountId", async (req: WithRawBody, res) => {
   // on the Drafts page without waiting for the next cron tick. The cron job
   // remains the source of truth — failures here are logged and ignored.
   if (processed > 0) {
-    void classifyPendingReplies(10).catch((err) =>
+    void classifyPendingRepliesForAccount(sub.accountId, 10).catch((err) =>
       logger.warn({ err }, "post-webhook reply classification failed"),
     );
   }

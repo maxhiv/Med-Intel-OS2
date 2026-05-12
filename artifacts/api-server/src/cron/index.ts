@@ -2,6 +2,22 @@
  * Schedule registry. Each job runs guarded by a simple in-process lock so a
  * long-running run can't double-fire. Cron jobs are skipped entirely when
  * DISABLE_CRON=true (useful for tests and CI).
+ *
+ * Tenant safety: jobs that touch RLS-protected tables (sync_batches,
+ * outreach_drafts, contact_enrollments, …) MUST run their per-account work
+ * inside `withRLS(accountId, …)` so a forgotten `WHERE account_id` filter
+ * cannot leak across tenants. The per-account services here
+ * (`runDailyBatchesForAccount`, `retryFailedItemsInBatch`,
+ * `generateDraftsForCampaign`) wrap themselves; the cross-account
+ * `runAllAccounts` fans out one RLS-scoped transaction per account rather
+ * than running globally.
+ *
+ * The remaining jobs registered below (`recomputeAllScores`,
+ * `ingestClinicalTrials`, `ingestConFilings`, `rolloverSpendCounters`,
+ * `enrichmentTick`) only read/write shared, non-RLS tables (facilities,
+ * purchase_signals, equipment_records, con_filings,
+ * enrichment_source_approvals, contact_validation_log) so there is no
+ * tenant-scope to engage — wrapping them in withRLS would be a no-op.
  */
 import cron from "node-cron";
 import { logger } from "../lib/logger";

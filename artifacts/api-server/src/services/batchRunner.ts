@@ -14,6 +14,7 @@ import {
   contactEnrollments,
   campaignContacts,
   campaigns,
+  withRLS,
   type SubAccount,
 } from "@workspace/db";
 import { pushDraftWithinBatch } from "./crmPush";
@@ -118,23 +119,32 @@ async function runBatchForSub(
 export async function runDailyBatchesForAccount(
   accountId: string,
 ): Promise<{ batches: number; pushed: number; failed: number }> {
-  const subs = await db
-    .select()
-    .from(subAccounts)
-    .where(
-      and(eq(subAccounts.accountId, accountId), eq(subAccounts.isActive, true)),
-    );
+  // All work runs inside a per-account RLS transaction so a forgotten
+  // `WHERE account_id` filter inside the runner cannot leak into another
+  // tenant's batches/drafts. Re-entrant when the API middleware already
+  // opened an RLS scope for the same account.
+  return withRLS(accountId, async () => {
+    const subs = await db
+      .select()
+      .from(subAccounts)
+      .where(
+        and(
+          eq(subAccounts.accountId, accountId),
+          eq(subAccounts.isActive, true),
+        ),
+      );
 
-  let batches = 0;
-  let pushed = 0;
-  let failed = 0;
-  for (const sub of subs) {
-    const r = await runBatchForSub(accountId, sub);
-    if (r.batchId) batches += 1;
-    pushed += r.pushed;
-    failed += r.failed;
-  }
-  return { batches, pushed, failed };
+    let batches = 0;
+    let pushed = 0;
+    let failed = 0;
+    for (const sub of subs) {
+      const r = await runBatchForSub(accountId, sub);
+      if (r.batchId) batches += 1;
+      pushed += r.pushed;
+      failed += r.failed;
+    }
+    return { batches, pushed, failed };
+  });
 }
 
 export async function runAllAccounts(): Promise<{
@@ -143,6 +153,10 @@ export async function runAllAccounts(): Promise<{
   pushed: number;
   failed: number;
 }> {
+  // Discovery query reads `sub_accounts`, which is not RLS-scoped, so we
+  // run it without an RLS context. Each per-account batch then opens its
+  // own `withRLS` scope (via runDailyBatchesForAccount) — no global
+  // cross-tenant transaction.
   const accountIds = await db
     .select({ accountId: subAccounts.accountId })
     .from(subAccounts)
@@ -170,6 +184,10 @@ export async function retryFailedItemsInBatch(
   accountId: string,
   batchId: string,
 ): Promise<{ retried: number; pushed: number; failed: number }> {
+  // Wrap in withRLS so even when invoked outside the API request lifecycle
+  // (cron, scripts, future background workers) the unfiltered sync_items
+  // and outreach_drafts queries below can only see this account's rows.
+  return withRLS(accountId, async () => {
   const [batch] = await db
     .select()
     .from(syncBatches)
@@ -263,6 +281,7 @@ export async function retryFailedItemsInBatch(
     "batch retry complete",
   );
   return { retried: failedItems.length, pushed: pushedDelta, failed: stillFailed };
+  });
 }
 
 export { sql };

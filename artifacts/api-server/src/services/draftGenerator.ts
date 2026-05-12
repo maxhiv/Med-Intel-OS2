@@ -10,6 +10,7 @@ import {
   contactEnrollments,
   outreachDrafts,
   purchaseSignals,
+  withRLS,
 } from "@workspace/db";
 import { ai, ANTHROPIC_MODEL, ANTHROPIC_MAX_TOKENS } from "../lib/anthropic";
 
@@ -17,6 +18,11 @@ export async function generateDraftsForCampaign(
   campaignId: string,
   accountId: string,
 ): Promise<{ generated: number; skipped: number }> {
+  // Wrap in withRLS so the unfiltered enrollment / draft inserts and the
+  // sequence/contact lookups below cannot mix tenants if a future caller
+  // forgets a `WHERE account_id` clause. Re-entrant under the API
+  // middleware's RLS scope.
+  return withRLS(accountId, async () => {
   const [campaign] = await db
     .select()
     .from(campaigns)
@@ -176,4 +182,5 @@ Write a single short email (subject + 4-6 sentence body) referencing the most re
   }
 
   return { generated, skipped };
+  });
 }
