@@ -47,3 +47,4 @@ packages = ["wget"]
 
 [userenv.shared]
 CRM_ENCRYPTION_KEY = "oWWY+QkPRtRsmm4K8X4guoAZI5dxgPyMIIBb5qW4kmI="
+PLATFORM_ADMIN_EMAIL = "maxhanseniv@gmail.com"
