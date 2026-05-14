@@ -155,15 +155,28 @@ function StateMultiSelect({
 interface PipelineModalProps {
   filingId: string;
   filingName: string;
-  subAccounts: Array<{ id: string; name: string; crmType: string | null }>;
   onClose: () => void;
 }
 
-function PipelineModal({ filingId, filingName, subAccounts, onClose }: PipelineModalProps) {
+function PipelineModal({ filingId, filingName, onClose }: PipelineModalProps) {
   const { toast } = useToast();
-  const [selectedSubAccount, setSelectedSubAccount] = useState(subAccounts[0]?.id ?? "");
+  const [subAccounts, setSubAccounts] = useState<Array<{ id: string; name: string; crmType: string | null }>>([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [selectedSubAccount, setSelectedSubAccount] = useState("");
   const [isPushing, setIsPushing] = useState(false);
   const [pushed, setPushed] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/me/sub-accounts", { credentials: "include" })
+      .then((r) => r.json())
+      .then((body: { data?: Array<{ id: string; name: string; crmType: string | null }> }) => {
+        const list = body.data ?? [];
+        setSubAccounts(list);
+        if (list.length > 0) setSelectedSubAccount(list[0].id);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingAccounts(false));
+  }, []);
 
   const handlePush = async () => {
     if (!selectedSubAccount) return;
@@ -180,8 +193,8 @@ function PipelineModal({ filingId, filingName, subAccounts, onClose }: PipelineM
         throw new Error(body.error ?? `HTTP ${res.status}`);
       }
       setPushed(true);
-      const saName = subAccounts.find((sa) => sa.id === selectedSubAccount)?.name ?? "CRM";
-      toast({ title: "Added to Pipeline", description: `CON filing pushed to ${saName} as an opportunity.` });
+      const saName = subAccounts.find((sa) => sa.id === selectedSubAccount)?.name ?? "GHL";
+      toast({ title: "Added to Pipeline", description: `Added to ${saName} GHL pipeline.` });
       setTimeout(onClose, 1200);
     } catch (err) {
       toast({ title: "Push failed", description: String(err), variant: "destructive" });
@@ -205,7 +218,11 @@ function PipelineModal({ filingId, filingName, subAccounts, onClose }: PipelineM
             <div className="font-medium">{filingName}</div>
           </div>
 
-          {subAccounts.length === 0 ? (
+          {loadingAccounts ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading sub-accounts…
+            </div>
+          ) : subAccounts.length === 0 ? (
             <div className="text-sm text-muted-foreground bg-yellow-500/10 border border-yellow-200 rounded-md p-3">
               No sub-accounts configured. Ask your admin to set up a sub-account with CRM credentials.
             </div>
@@ -232,7 +249,7 @@ function PipelineModal({ filingId, filingName, subAccounts, onClose }: PipelineM
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button
             onClick={handlePush}
-            disabled={isPushing || pushed || !selectedSubAccount || subAccounts.length === 0}
+            disabled={isPushing || pushed || !selectedSubAccount || subAccounts.length === 0 || loadingAccounts}
           >
             {isPushing ? "Pushing…" : pushed ? "Pushed!" : "Add to Pipeline"}
           </Button>
@@ -309,7 +326,6 @@ export default function ConMonitorPage() {
   }, [searchString]);
 
   const { data: me } = useGetMe();
-  const subAccounts = me?.subAccounts ?? [];
   const isAdmin = me?.isPlatformAdmin ?? false;
 
   const stateParam = selectedStates.length === 1 ? selectedStates[0] : undefined;
@@ -335,18 +351,18 @@ export default function ConMonitorPage() {
     !!fromDate ||
     !!toDate;
 
-  const triggerIngest = async (label: string) => {
+  const triggerIngest = async (label: string, stateCode?: string) => {
     setRunningIngest(label);
     try {
-      const res = await fetch("/api/signals/ingest/con-filings", {
-        method: "POST",
-        credentials: "include",
-      });
+      const url = stateCode
+        ? `/api/signals/ingest/con-filings?state=${encodeURIComponent(stateCode)}`
+        : "/api/signals/ingest/con-filings";
+      const res = await fetch(url, { method: "POST", credentials: "include" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.json() as { inserted?: number; updated?: number };
+      const body = await res.json() as { filingsInserted?: number; inserted?: number };
       toast({
         title: `${label} refresh complete`,
-        description: `Ingested ${body.inserted ?? 0} new filing(s).`,
+        description: `Ingested ${body.filingsInserted ?? body.inserted ?? 0} new filing(s).`,
       });
       refetch();
     } catch (err) {
@@ -374,7 +390,7 @@ export default function ConMonitorPage() {
                 key={stateCode}
                 variant="outline"
                 size="sm"
-                onClick={() => triggerIngest(`${stateCode} filings`)}
+                onClick={() => triggerIngest(`${stateCode} filings`, stateCode)}
                 disabled={!!runningIngest}
                 className="text-xs"
               >
@@ -625,7 +641,6 @@ export default function ConMonitorPage() {
         <PipelineModal
           filingId={pipelineModal.id}
           filingName={pipelineModal.name}
-          subAccounts={subAccounts.map((sa) => ({ id: sa.id, name: sa.name, crmType: sa.crmType ?? null }))}
           onClose={() => setPipelineModal(null)}
         />
       )}

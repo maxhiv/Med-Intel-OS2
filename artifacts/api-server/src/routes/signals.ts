@@ -6,7 +6,7 @@ import { decodeStoredCredentials } from "../services/encryption";
 import { logger } from "../lib/logger";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
-import { ingestConFilings } from "../services/conFilingsIngestor";
+import { ingestConFilings, buildAdapters } from "../services/conFilingsIngestor";
 import { ingestNppes } from "../services/nppesIngestor";
 import { ingestFda510k } from "../services/fda510kIngestor";
 import { ingestFdaRecalls } from "../services/fdaRecallsIngestor";
@@ -347,12 +347,33 @@ router.post(
   },
 );
 
-// Manually trigger the state CON-filings ingestor. Useful for ops + tests.
+// Manually trigger the state CON-filings ingestor.
+// Optional ?state=XX runs only the adapter for that state (case-insensitive).
+// Omit for a full Tier-A batch across all configured adapters.
 router.post(
   "/signals/ingest/con-filings",
   requirePlatformAdmin,
-  async (_req, res) => {
-    const result = await ingestConFilings();
+  async (req, res) => {
+    const stateParam =
+      typeof req.query.state === "string" ? req.query.state.trim().toUpperCase() : "";
+
+    const allAdapters = buildAdapters();
+
+    const adapters =
+      stateParam.length === 2
+        ? allAdapters.filter((a) => a.state === stateParam)
+        : allAdapters;
+
+    if (stateParam && adapters.length === 0) {
+      res.status(404).json({
+        error: "no_adapter_for_state",
+        state: stateParam,
+        available: [...new Set(allAdapters.map((a) => a.state))],
+      });
+      return;
+    }
+
+    const result = await ingestConFilings({ adapters });
     res.json(result);
   },
 );

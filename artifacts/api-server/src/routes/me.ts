@@ -33,6 +33,22 @@ router.get("/me", requireAuth, async (req, res) => {
   });
 });
 
+// Dedicated sub-accounts listing for the current account.
+// Used by UI components (e.g. Pipeline modal) that need a fresh fetch rather
+// than relying on the cached /me payload.
+router.get("/me/sub-accounts", requireAuth, requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+  const subs = await db
+    .select({
+      id: subAccounts.id,
+      name: subAccounts.name,
+      crmType: subAccounts.crmType,
+    })
+    .from(subAccounts)
+    .where(and(eq(subAccounts.accountId, accountId), eq(subAccounts.isActive, true)));
+  res.json({ data: subs });
+});
+
 // ---------------------------------------------------------------------------
 // Account settings (stored in accounts.settings JSONB)
 // ---------------------------------------------------------------------------

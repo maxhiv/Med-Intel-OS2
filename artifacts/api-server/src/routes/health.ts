@@ -55,41 +55,22 @@ router.get("/health", async (_req, res) => {
 
   const disableCron = process.env.DISABLE_CRON === "true";
 
-  const ingestorStatus = (key?: string) => ({
-    lastRun: null as string | null,
-    status: (key && !process.env[key]) ? "disabled_no_key" : "scheduled",
-  });
-
   res.json({
     status: dbStatus === "ok" ? "ok" : "degraded",
     uptime: uptimeSeconds,
     db: dbStatus,
     cronStatus: {
-      enabled: !disableCron,
       nextRun: disableCron ? null : "~04:30 UTC daily",
     },
     ingestors: {
-      clinicalTrials:     ingestorStatus(),
-      conFilings:         ingestorStatus(),
-      nppes:              ingestorStatus(),
-      fda510k:            ingestorStatus(),
-      fdaRecalls:         ingestorStatus(),
-      fdaMaude:           ingestorStatus(),
-      fdaClassification:  ingestorStatus(),
-      propublica990:      ingestorStatus(),
-      cmsData:            ingestorStatus(),
-      secEdgar:           ingestorStatus(),
-      usaSpending:        ingestorStatus(),
-      samGov:             ingestorStatus("SAM_GOV_API_KEY"),
-      emmaBonds:          ingestorStatus(),
-      hcris:              ingestorStatus(),
-      hrsa:               ingestorStatus(),
-      usda:               ingestorStatus(),
-      medicareUtil:       ingestorStatus(),
+      lastRun: null as string | null,
+      status: disableCron ? "disabled" : "scheduled",
     },
-    facilitiesCount,
-    accountFacilitiesLinked,
-    conFilingsCount,
+    counts: {
+      facilities: facilitiesCount,
+      accountFacilitiesLinked,
+      conFilings: conFilingsCount,
+    },
   });
 });
 
