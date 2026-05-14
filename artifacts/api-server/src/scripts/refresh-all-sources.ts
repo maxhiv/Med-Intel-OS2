@@ -1,135 +1,154 @@
 /**
- * One-shot script: trigger every live ingestor and print a results table.
- * Run with: pnpm --filter @workspace/api-server exec tsx src/scripts/refresh-all-sources.ts
+ * One-shot script: trigger every live ingestor via the existing manual API
+ * endpoints and print a results table.
+ *
+ * Prerequisites:
+ *   - INTERNAL_ADMIN_KEY env var must be set (used to authenticate)
+ *   - PORT env var must be set (API server port, e.g. 8080)
+ *
+ * Run with:
+ *   pnpm --filter @workspace/api-server exec tsx src/scripts/refresh-all-sources.ts
  */
-import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor.js";
-import { ingestConFilings } from "../services/conFilingsIngestor.js";
-import { ingestNppes } from "../services/nppesIngestor.js";
-import { ingestFda510k } from "../services/fda510kIngestor.js";
-import { ingestFdaRecalls } from "../services/fdaRecallsIngestor.js";
-import { ingestFdaMaude } from "../services/fdaMaudeIngestor.js";
-import { ingestFdaClassification } from "../services/fdaClassificationIngestor.js";
-import { ingestPropublica990 } from "../services/propublica990Ingestor.js";
-import { ingestCmsData } from "../services/cmsDataIngestor.js";
-import { ingestSecEdgar } from "../services/secEdgarIngestor.js";
-import { ingestUsaSpending } from "../services/usaSpendingIngestor.js";
-import { ingestSamGov } from "../services/samGovIngestor.js";
-import { ingestEmma } from "../services/emmaIngestor.js";
-import { ingestHcris } from "../services/hcrisIngestor.js";
-import { ingestHrsa } from "../services/hrsaIngestor.js";
-import { ingestUsda } from "../services/usdaIngestor.js";
-import { ingestMedicareUtil } from "../services/medicareUtilIngestor.js";
-import { recomputeAllScores } from "../services/signalScorer.js";
 
-interface IngestResult {
+export {};
+
+const internalKey = process.env.INTERNAL_ADMIN_KEY;
+if (!internalKey) {
+  console.error("ERROR: INTERNAL_ADMIN_KEY env var is required");
+  process.exit(1);
+}
+
+const port = process.env.PORT ?? "8080";
+const BASE = `http://localhost:${port}/api`;
+const headers = {
+  "Content-Type": "application/json",
+  "x-internal-admin-key": internalKey,
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+interface RunResult {
   source: string;
   status: "ok" | "error";
-  signalsInserted?: number;
-  errors?: number;
-  extra?: Record<string, unknown>;
+  body?: Record<string, unknown>;
+  httpStatus?: number;
   errorMsg?: string;
   durationMs: number;
 }
 
-async function run(
-  label: string,
-  fn: () => Promise<Record<string, unknown>>,
-): Promise<IngestResult> {
+async function post(label: string, path: string): Promise<RunResult> {
   const t0 = Date.now();
   try {
-    const r = await fn();
-    return {
-      source: label,
-      status: "ok",
-      signalsInserted: (r.signalsInserted as number | undefined) ?? (r.inserted as number | undefined),
-      errors: (r.errors as number | undefined),
-      extra: Object.fromEntries(
-        Object.entries(r).filter(([k]) => !["signalsInserted", "inserted", "errors"].includes(k)),
-      ),
-      durationMs: Date.now() - t0,
-    };
+    const res = await fetch(`${BASE}${path}`, { method: "POST", headers });
+    const durationMs = Date.now() - t0;
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { source: label, status: "error", httpStatus: res.status, errorMsg: text.slice(0, 120), durationMs };
+    }
+    const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+    return { source: label, status: "ok", httpStatus: res.status, body, durationMs };
   } catch (err) {
-    return {
-      source: label,
-      status: "error",
-      errorMsg: err instanceof Error ? err.message : String(err),
-      durationMs: Date.now() - t0,
-    };
+    return { source: label, status: "error", errorMsg: String(err), durationMs: Date.now() - t0 };
   }
 }
 
-const total0 = Date.now();
-console.log("\n🔄  MedIntel OS — Refreshing all live data sources\n");
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
-// ── Run ingestors in parallel batches ──────────────────────────────────────
-// Batch 1: CON filings + ClinicalTrials (independent of free APIs)
-console.log("Batch 1: CON Filings + Clinical Trials…");
-const [conResult, ctResult] = await Promise.all([
-  run("CON Filings (all states)", () => ingestConFilings() as Promise<Record<string, unknown>>),
-  run("Clinical Trials", () => ingestClinicalTrials({ limit: 100 }) as Promise<Record<string, unknown>>),
+const total0 = Date.now();
+console.log("\n🔄  MedIntel OS — Refreshing all live data sources via API\n");
+
+// Batch 1: CON Filings (all states) + ClinicalTrials — run in parallel
+console.log("Batch 1: CON Filings (all states) + Clinical Trials…");
+const [conAll, ct] = await Promise.all([
+  post("CON Filings (all states)", "/signals/ingest/con-filings"),
+  post("Clinical Trials",          "/signals/ingest/clinicaltrials"),
 ]);
 
 // Batch 2: All 15 free-API sources in parallel
-console.log("Batch 2: Free API sources (15 sources in parallel)…");
-const freeApiResults = await Promise.all([
-  run("NPPES",           () => ingestNppes({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("FDA 510(k)",      () => ingestFda510k({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("FDA Recalls",     () => ingestFdaRecalls({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("FDA MAUDE",       () => ingestFdaMaude({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("FDA Classification", () => ingestFdaClassification({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("ProPublica 990",  () => ingestPropublica990({ limit: 40 }) as Promise<Record<string, unknown>>),
-  run("CMS Data",        () => ingestCmsData({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("SEC EDGAR",       () => ingestSecEdgar({ limit: 40 }) as Promise<Record<string, unknown>>),
-  run("USA Spending",    () => ingestUsaSpending({ limit: 40 }) as Promise<Record<string, unknown>>),
-  run("SAM.gov",         () => ingestSamGov({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("EMMA Bonds",      () => ingestEmma({ limit: 30 }) as Promise<Record<string, unknown>>),
-  run("HCRIS",           () => ingestHcris({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("HRSA",            () => ingestHrsa({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("USDA",            () => ingestUsda({ limit: 50 }) as Promise<Record<string, unknown>>),
-  run("Medicare Util",   () => ingestMedicareUtil({ limit: 50 }) as Promise<Record<string, unknown>>),
-]);
+console.log("Batch 2: 15 free API sources in parallel…");
+const FREE_SOURCES = [
+  "nppes", "fda_510k", "fda_recalls", "fda_maude", "fda_class",
+  "propublica_990", "cms_data", "sec_edgar", "usa_spending",
+  "sam_gov", "emma_bonds", "hcris", "hrsa", "usda", "medicare_util",
+] as const;
 
-// Batch 3: Recompute scores after fresh data
-console.log("Batch 3: Recomputing signal scores…");
-const scoreResult = await run(
-  "Signal Score Recompute",
-  () => recomputeAllScores() as Promise<Record<string, unknown>>,
+const freeResults = await Promise.all(
+  FREE_SOURCES.map((src) =>
+    post(src, `/signals/ingest/free-apis?source=${src}`),
+  ),
 );
 
-// ── Print results table ────────────────────────────────────────────────────
-const allResults: IngestResult[] = [conResult, ctResult, ...freeApiResults, scoreResult];
+// Batch 3: Recompute composite scores
+console.log("Batch 3: Recomputing signal scores…");
+const scoreResult = await post("Signal Score Recompute", "/signals/recompute");
 
-const ok = allResults.filter((r) => r.status === "ok");
-const failed = allResults.filter((r) => r.status === "error");
-const totalSignals = ok.reduce((n, r) => n + (r.signalsInserted ?? 0), 0);
+// ─── Report ───────────────────────────────────────────────────────────────────
 
-console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+const allResults: RunResult[] = [conAll, ct, ...freeResults, scoreResult];
+const ok      = allResults.filter((r) => r.status === "ok");
+const failed  = allResults.filter((r) => r.status === "error");
+
+// Count total new signals across all results
+function signalsFrom(r: RunResult): number {
+  if (!r.body) return 0;
+  const b = r.body as Record<string, unknown>;
+  // Top-level response
+  if (typeof b.signalsInserted === "number") return b.signalsInserted;
+  // free-apis endpoint wraps results per-source
+  return Object.values(b).reduce<number>((n, v) => {
+    if (v && typeof (v as Record<string, unknown>).signalsInserted === "number") {
+      return n + ((v as Record<string, unknown>).signalsInserted as number);
+    }
+    return n;
+  }, 0);
+}
+
+const totalSignals = ok.reduce((n, r) => n + signalsFrom(r), 0);
+
+console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 console.log("  RESULTS");
-console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
 for (const r of allResults) {
-  const icon = r.status === "ok" ? "✅" : "❌";
-  const sig = r.signalsInserted != null ? `  +${r.signalsInserted} signals` : "";
-  const err = r.errors ? `  ⚠ ${r.errors} partial errors` : "";
-  const ms  = `  (${(r.durationMs / 1000).toFixed(1)}s)`;
+  const icon   = r.status === "ok" ? "✅" : "❌";
+  const ms     = `(${(r.durationMs / 1000).toFixed(1)}s)`;
+  const sigs   = signalsFrom(r);
+  const sigStr = sigs > 0 ? `  +${sigs} signals` : "";
+
   if (r.status === "ok") {
-    const extraKeys = Object.keys(r.extra ?? {});
-    const extraStr = extraKeys.length
-      ? "  " + extraKeys.map((k) => `${k}=${(r.extra as Record<string, unknown>)[k]}`).join(", ")
-      : "";
-    console.log(`${icon}  ${r.source}${sig}${err}${extraStr}${ms}`);
+    const b = r.body ?? {};
+    // For con-filings, show per-state breakdown if available
+    if (b.perState && typeof b.perState === "object") {
+      const perState = b.perState as Record<string, { fetched: number; inserted: number; signals: number }>;
+      const stateLines = Object.entries(perState)
+        .filter(([, v]) => v.fetched > 0)
+        .map(([st, v]) => `${st}: ${v.fetched} fetched, ${v.signals} signals`)
+        .join(" | ");
+      const noData = Object.entries(perState).filter(([, v]) => v.fetched === 0).map(([s]) => s).join(", ");
+      console.log(`${icon}  ${r.source}${sigStr}  ${ms}`);
+      if (stateLines)  console.log(`     Active:  ${stateLines}`);
+      if (noData)      console.log(`     No data: ${noData}`);
+    } else if (typeof b === "object" && !Array.isArray(b) && Object.keys(b).length > 0) {
+      // For free-apis single-source results, show errors count if any
+      const errCnt = typeof b.errors === "number" ? b.errors : 0;
+      const errStr = errCnt > 0 ? `  ⚠ ${errCnt} partial errors` : "";
+      console.log(`${icon}  ${r.source}${sigStr}${errStr}  ${ms}`);
+    } else {
+      console.log(`${icon}  ${r.source}${sigStr}  ${ms}`);
+    }
   } else {
-    console.log(`${icon}  ${r.source}  — ${r.errorMsg}${ms}`);
+    const code = r.httpStatus ? ` HTTP ${r.httpStatus}` : "";
+    console.log(`${icon}  ${r.source}${code}  — ${r.errorMsg ?? "unknown error"}  ${ms}`);
   }
 }
 
-console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+console.log(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
 console.log(`  ${ok.length}/${allResults.length} sources succeeded`);
-console.log(`  ${totalSignals} total new signals inserted`);
+console.log(`  ~${totalSignals} total new signals inserted`);
 if (failed.length > 0) {
   console.log(`  ${failed.length} failed: ${failed.map((r) => r.source).join(", ")}`);
 }
 console.log(`  Total elapsed: ${((Date.now() - total0) / 1000).toFixed(1)}s`);
-console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
 process.exit(failed.length > 0 ? 1 : 0);

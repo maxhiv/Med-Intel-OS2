@@ -186,6 +186,14 @@ export const requireSubAccountAccess: RequestHandler = async (req, res, next) =>
 };
 
 export const requirePlatformAdmin: RequestHandler = (req, res, next) => {
+  // Allow internal service calls (e.g. the refresh-all-sources script) to
+  // bypass Clerk auth when an INTERNAL_ADMIN_KEY is configured and the
+  // caller presents a matching X-Internal-Admin-Key header.
+  const internalKey = process.env.INTERNAL_ADMIN_KEY;
+  if (internalKey && req.headers["x-internal-admin-key"] === internalKey) {
+    next();
+    return;
+  }
   if (!req.currentUser) {
     res.status(401).json({ error: "unauthenticated" });
     return;
