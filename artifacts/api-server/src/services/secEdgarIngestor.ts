@@ -49,7 +49,10 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function searchEdgar(term: string, maxHits = 5): Promise<string[]> {
+async function searchEdgar(
+  term: string,
+  maxHits = 5,
+): Promise<{ accessions: string[]; httpError: boolean }> {
   const params = new URLSearchParams({
     q: `"${term}"`,
     forms: EDGAR_FORMS,
@@ -60,13 +63,16 @@ async function searchEdgar(term: string, maxHits = 5): Promise<string[]> {
   const res = await fetch(`${EDGAR_SEARCH}?${params}`, {
     headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
   });
-  if (!res.ok) return [];
+  if (!res.ok) {
+    return { accessions: [], httpError: res.status !== 404 };
+  }
   const json = (await res.json()) as EdgarResponse;
   const hits = json.hits?.hits ?? [];
-  return hits
+  const accessions = hits
     .slice(0, maxHits)
     .map((h) => h._source?.accession_no ?? "")
     .filter(Boolean);
+  return { accessions, httpError: false };
 }
 
 export interface IngestResult {
@@ -99,7 +105,9 @@ export async function ingestSecEdgar(
     try {
       // Search by facility's own name.
       const facilityTerm = f.name.split(/[,\-]/)[0].trim();
-      const directAccessions = new Set(await searchEdgar(facilityTerm, 5));
+      const { accessions: directList, httpError: directErr } = await searchEdgar(facilityTerm, 5);
+      if (directErr) result.errors += 1;
+      const directAccessions = new Set(directList);
 
       // Search by parent health system name when parentSystemId is populated.
       let parentOnlyAccessions: string[] = [];
@@ -118,28 +126,36 @@ export async function ingestSecEdgar(
           const parentTerm = parentName.split(/[,\-]/)[0].trim();
           if (parentTerm.toLowerCase() !== facilityTerm.toLowerCase()) {
             await sleep(DELAY_MS);
-            const all = await searchEdgar(parentTerm, 5);
-            parentOnlyAccessions = all.filter((a) => !directAccessions.has(a));
+            const { accessions: pList, httpError: pErr } = await searchEdgar(parentTerm, 5);
+            if (pErr) result.errors += 1;
+            parentOnlyAccessions = pList.filter((a) => !directAccessions.has(a));
           }
         }
       }
 
-      // Upsert: direct accessions at confidence 72, parent-system accessions at 85.
-      // source = 'sec_edgar_parent' encodes matchedVia = 'parent_system'.
-      const toInsert: Array<{ accession: string; confidence: number; source: string }> = [
+      // Upsert: direct accessions at confidence 72; parent-system accessions at
+      // confidence 85 with metadata.matchedVia = 'parent_system'.
+      const toInsert: Array<{
+        accession: string;
+        confidence: number;
+        source: string;
+        metadata: Record<string, string> | null;
+      }> = [
         ...[...directAccessions].slice(0, 3).map((a) => ({
           accession: a,
           confidence: 72,
           source: "sec_edgar",
+          metadata: null,
         })),
         ...parentOnlyAccessions.slice(0, 3).map((a) => ({
           accession: a,
           confidence: 85,
-          source: "sec_edgar_parent",
+          source: "sec_edgar",
+          metadata: { matchedVia: "parent_system" },
         })),
       ];
 
-      for (const { accession, confidence, source } of toInsert) {
+      for (const { accession, confidence, source, metadata } of toInsert) {
         const [exists] = await db
           .select({ id: purchaseSignals.id })
           .from(purchaseSignals)
@@ -159,6 +175,7 @@ export async function ingestSecEdgar(
           signalValue: accession,
           confidence,
           source,
+          metadata,
           isActive: true,
         });
         result.signalsInserted += 1;

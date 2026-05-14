@@ -182,6 +182,7 @@ export const purchaseSignals = pgTable(
     confidence: smallint("confidence").default(50),
     source: text("source").notNull(),
     sourceId: uuid("source_id"),
+    metadata: jsonb("metadata"),
     detectedAt: timestamp("detected_at", { withTimezone: true }).defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     isActive: boolean("is_active").default(true),

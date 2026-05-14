@@ -1,0 +1,1 @@
+ALTER TABLE "purchase_signals" ADD COLUMN "metadata" jsonb;
