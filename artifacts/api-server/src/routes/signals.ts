@@ -32,11 +32,13 @@ const router: IRouter = Router();
 // raw source text (e.g. "Approved with conditions", "Application received"),
 // so filtering and badge logic must match against the keyword pattern instead
 // of an exact string.
-const NORMALIZED_STATUS_SQL = sql<"approved" | "filed" | null>`
+const NORMALIZED_STATUS_SQL = sql<"approved" | "denied" | "under_review" | "pending" | null>`
   CASE
     WHEN ${conFilings.status} IS NULL THEN NULL
-    WHEN ${conFilings.status} ~* 'approv|grant(ed)?|issued' THEN 'approved'
-    ELSE 'filed'
+    WHEN ${conFilings.status} ~* 'approv|grant(ed)?|issued|cleared' THEN 'approved'
+    WHEN ${conFilings.status} ~* 'deni|disapprov|reject|withdr|not approv|void|revok' THEN 'denied'
+    WHEN ${conFilings.status} ~* 'review|under.?review|in.?review|pending review' THEN 'under_review'
+    ELSE 'pending'
   END
 `;
 
@@ -55,10 +57,19 @@ router.get("/signals/con-filings", requireAccount, async (req, res) => {
     filters.push(eq(conFilings.state, stateRaw));
   }
   if (statusRaw === "approved") {
-    filters.push(sql`${conFilings.status} ~* 'approv|grant(ed)?|issued'`);
-  } else if (statusRaw === "filed") {
+    filters.push(sql`${conFilings.status} ~* 'approv|grant(ed)?|issued|cleared'`);
+  } else if (statusRaw === "denied") {
+    filters.push(sql`${conFilings.status} ~* 'deni|disapprov|reject|withdr|not approv|void|revok'`);
+  } else if (statusRaw === "under_review") {
+    filters.push(sql`${conFilings.status} ~* 'review|under.?review|in.?review|pending review'`);
+  } else if (statusRaw === "pending") {
     filters.push(
-      sql`${conFilings.status} IS NOT NULL AND ${conFilings.status} !~* 'approv|grant(ed)?|issued'`,
+      sql`${conFilings.status} IS NOT NULL AND ${conFilings.status} !~* 'approv|grant(ed)?|issued|cleared|deni|disapprov|reject|withdr|void|revok|review|under.?review|in.?review'`,
+    );
+  } else if (statusRaw === "filed") {
+    // Legacy alias: anything non-approved
+    filters.push(
+      sql`${conFilings.status} IS NOT NULL AND ${conFilings.status} !~* 'approv|grant(ed)?|issued|cleared'`,
     );
   }
   if (equipmentTypeRaw) {
@@ -216,16 +227,42 @@ async function handlePushToCrm(req: import("express").Request, res: import("expr
       return;
     }
 
+    const ghlHeaders = {
+      Authorization: `Bearer ${creds.accessToken}`,
+      Version: "2021-07-28",
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+
     try {
-      // Upsert a contact from the filing applicant
+      // Step 1: find the "CON Pre-Qualified" pipeline stage in GHL.
+      let targetPipelineId: string | null = null;
+      let targetStageId: string | null = null;
+      try {
+        const pipelinesRes = await fetch(
+          `https://services.leadconnectorhq.com/opportunities/pipelines?locationId=${encodeURIComponent(creds.locationId!)}`,
+          { headers: ghlHeaders },
+        );
+        if (pipelinesRes.ok) {
+          const pb = await pipelinesRes.json() as { pipelines?: Array<{ id: string; stages?: Array<{ id: string; name: string }> }> };
+          for (const pipeline of pb.pipelines ?? []) {
+            const stage = pipeline.stages?.find((s) => /con.?pre.?qual/i.test(s.name));
+            if (stage) { targetPipelineId = pipeline.id; targetStageId = stage.id; break; }
+          }
+          // Fall back to first pipeline if no matching stage found.
+          if (!targetPipelineId && pb.pipelines?.[0]) {
+            targetPipelineId = pb.pipelines[0].id;
+            targetStageId = pb.pipelines[0].stages?.[0]?.id ?? null;
+          }
+        }
+      } catch (err) {
+        logger.warn({ err }, "signals: GHL pipeline lookup failed, proceeding without stage");
+      }
+
+      // Step 2: Upsert a contact from the filing applicant.
       const upsertRes = await fetch("https://services.leadconnectorhq.com/contacts/upsert", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${creds.accessToken}`,
-          Version: "2021-07-28",
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: ghlHeaders,
         body: JSON.stringify({
           locationId: creds.locationId,
           companyName: filing.applicantName || "Unknown applicant",
@@ -233,38 +270,47 @@ async function handlePushToCrm(req: import("express").Request, res: import("expr
           tags: ["medintel-con", `state-${filing.state}`, `status-${filing.status?.toLowerCase().replace(/\s/g, "-") ?? "unknown"}`],
         }),
       });
+      if (!upsertRes.ok) {
+        const errText = await upsertRes.text().catch(() => "");
+        logger.warn({ status: upsertRes.status, body: errText, filingId }, "signals: GHL contact upsert failed");
+        res.status(502).json({ ok: false, error: "ghl_contact_upsert_failed", ghlStatus: upsertRes.status });
+        return;
+      }
       const upsertBody = await upsertRes.json().catch(() => ({})) as { contact?: { id?: string }; id?: string };
       const crmContactId = upsertBody?.contact?.id ?? (upsertBody as { id?: string }).id ?? null;
 
-      // Create a pipeline opportunity
+      // Step 3: Create the opportunity in the CON Pre-Qualified pipeline stage.
       const oppRes = await fetch("https://services.leadconnectorhq.com/opportunities/", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${creds.accessToken}`,
-          Version: "2021-07-28",
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
+        headers: ghlHeaders,
         body: JSON.stringify({
-          pipelineId: null,
+          pipelineId: targetPipelineId,
+          ...(targetStageId ? { pipelineStageId: targetStageId } : {}),
           locationId: creds.locationId,
           name: opportunityName,
           monetaryValue,
           status: "open",
           ...(crmContactId ? { contactId: crmContactId } : {}),
           customFields: [
-            { key: "con_state", field_value: filing.state },
+            { key: "con_state",      field_value: filing.state },
             { key: "equipment_type", field_value: filing.equipmentType || filing.modality || "" },
-            { key: "filing_date", field_value: filing.filingDate ?? "" },
+            { key: "filing_date",    field_value: filing.filingDate ?? "" },
+            { key: "con_filing_id",  field_value: filingId },
           ],
         }),
       });
+      if (!oppRes.ok) {
+        const errText = await oppRes.text().catch(() => "");
+        logger.warn({ status: oppRes.status, body: errText, filingId }, "signals: GHL opportunity create failed");
+        res.status(502).json({ ok: false, error: "ghl_opportunity_create_failed", ghlStatus: oppRes.status });
+        return;
+      }
       const oppBody = await oppRes.json().catch(() => ({})) as { opportunity?: { id?: string }; id?: string };
       const opportunityId = (oppBody as { opportunity?: { id?: string } })?.opportunity?.id ?? (oppBody as { id?: string }).id ?? null;
 
-      logger.info({ filingId, subAccountId }, "signals: CON filing pushed to GHL as opportunity");
+      logger.info({ filingId, subAccountId, targetPipelineId, targetStageId }, "signals: CON filing pushed to GHL as opportunity");
 
-      res.json({ ok: true, crmContactId, opportunityId, opportunityName, monetaryValue });
+      res.json({ ok: true, crmContactId, opportunityId, opportunityName, monetaryValue, pipelineId: targetPipelineId, stageId: targetStageId });
     } catch (err) {
       logger.warn({ err, filingId, subAccountId }, "signals: push-to-crm failed");
       res.status(502).json({ ok: false, error: "push_failed", message: String(err) });

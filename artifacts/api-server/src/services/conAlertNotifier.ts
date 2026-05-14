@@ -41,6 +41,19 @@ export interface ConAlertNotifyResult {
 const SLACK_MIN_INTERVAL_MS = 30_000;
 const slackLastSent = new Map<string, number>();
 
+const STATUS_EMOJI: Record<string, string> = {
+  approved:     "✅",
+  denied:       "🚫",
+  under_review: "🔍",
+  pending:      "📋",
+};
+const STATUS_LABEL: Record<string, string> = {
+  approved:     "Approved",
+  denied:       "Denied",
+  under_review: "Under Review",
+  pending:      "Pending",
+};
+
 async function maybeSendSlack(
   accountId: string,
   webhookUrl: string,
@@ -49,18 +62,20 @@ async function maybeSendSlack(
     applicantName: string | null;
     equipmentType: string | null;
     modality: string | null;
-    statusNormalized: "approved" | "filed" | null;
+    statusNormalized: NormalizedStatus;
   },
 ): Promise<boolean> {
   const now = Date.now();
   const last = slackLastSent.get(accountId) ?? 0;
   if (now - last < SLACK_MIN_INTERVAL_MS) {
+    logger.debug({ accountId }, "conAlertNotifier: slack rate-limited, skipping");
     return false;
   }
   slackLastSent.set(accountId, now);
 
-  const statusEmoji = filing.statusNormalized === "approved" ? "✅" : "📋";
-  const label = filing.statusNormalized === "approved" ? "Approved" : "Filed";
+  const sn = filing.statusNormalized ?? "pending";
+  const statusEmoji = STATUS_EMOJI[sn] ?? "📋";
+  const label = STATUS_LABEL[sn] ?? sn;
   const equipment = filing.equipmentType || filing.modality || "Equipment";
 
   const text =
@@ -107,11 +122,15 @@ async function getSlackWebhookUrl(accountId: string): Promise<string | null> {
   }
 }
 
-function normalizeStatus(raw: string | null | undefined): "approved" | "filed" | null {
+type NormalizedStatus = "approved" | "denied" | "under_review" | "pending" | null;
+
+function normalizeStatus(raw: string | null | undefined): NormalizedStatus {
   if (!raw) return null;
-  // Reuse the ingestor's `looksApproved` so we share the same negative-aware
-  // semantics (disapproved / denied / withdrawn / not approved → false).
-  return looksApproved(raw) ? "approved" : "filed";
+  const s = raw.toLowerCase();
+  if (looksApproved(raw)) return "approved";
+  if (/deni|disapprov|reject|withdr|not approv|void|revok/.test(s)) return "denied";
+  if (/review|under.?review|in.?review|pending review/.test(s)) return "under_review";
+  return "pending";
 }
 
 function matches(
@@ -119,7 +138,7 @@ function matches(
   filing: {
     state: string;
     modality: string | null;
-    statusNormalized: "approved" | "filed" | null;
+    statusNormalized: NormalizedStatus;
   },
 ): boolean {
   if (sub.states.length > 0 && !sub.states.includes(filing.state)) return false;
@@ -128,12 +147,14 @@ function matches(
       return false;
     }
   }
-  if (sub.statusFilter === "approved" && filing.statusNormalized !== "approved") {
-    return false;
-  }
-  if (sub.statusFilter === "filed" && filing.statusNormalized !== "filed") {
-    return false;
-  }
+  // Map legacy statusFilter values as well as the new four-way taxonomy.
+  const sf = sub.statusFilter;
+  if (sf === "approved" && filing.statusNormalized !== "approved") return false;
+  if (sf === "denied" && filing.statusNormalized !== "denied") return false;
+  if (sf === "under_review" && filing.statusNormalized !== "under_review") return false;
+  if (sf === "pending" && filing.statusNormalized !== "pending") return false;
+  // Legacy: "filed" covers anything that isn't approved.
+  if (sf === "filed" && filing.statusNormalized === "approved") return false;
   return true;
 }
 
@@ -238,10 +259,25 @@ export async function notifyConAlerts(): Promise<ConAlertNotifyResult> {
           result.notificationsCreated += inserted.length;
 
           // Send a rate-limited Slack notification for the first match per batch.
-          if (webhookUrl && inserted.length > 0) {
+          // Per-account webhook fires for any subscribed status; platform env
+          // webhook (SLACK_CON_WEBHOOK_URL) fires specifically for pending and
+          // under_review filings to surface early-stage opportunities.
+          if (inserted.length > 0) {
             const firstMatch = candidates[0];
-            const sent = await maybeSendSlack(sub.accountId, webhookUrl, firstMatch);
-            if (sent) result.slackMessagesSent += 1;
+            if (webhookUrl) {
+              const sent = await maybeSendSlack(sub.accountId, webhookUrl, firstMatch);
+              if (sent) result.slackMessagesSent += 1;
+            }
+            // Platform-level alert for pending/under_review regardless of subscription.
+            const envWebhook = process.env.SLACK_CON_WEBHOOK_URL?.trim();
+            if (
+              envWebhook &&
+              envWebhook.startsWith("https://hooks.slack.com/") &&
+              (firstMatch.statusNormalized === "pending" || firstMatch.statusNormalized === "under_review")
+            ) {
+              const sent = await maybeSendSlack("__platform__", envWebhook, firstMatch);
+              if (sent) result.slackMessagesSent += 1;
+            }
           }
         }
 
@@ -289,4 +325,4 @@ export async function unreadConAlertCount(userId: string): Promise<number> {
   return c ?? 0;
 }
 
-export const __testables = { matches, normalizeStatus };
+export const __testables = { matches, normalizeStatus, STATUS_EMOJI, STATUS_LABEL };

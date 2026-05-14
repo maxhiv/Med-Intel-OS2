@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Database, CheckCircle2, AlertTriangle, Clock, ChevronDown, ChevronRight } from "lucide-react";
 
 type SourceStatus = "Live" | "Partial" | "Pending";
-type Tier = "A" | "B" | "C";
+type Tier = "1" | "2" | "Ref";
 type AccessType = "Public API" | "Requires Key" | "OAuth";
 
 interface DataSource {
@@ -26,7 +26,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "State CON Filings",
     description: "Certificate-of-Need applications across 22 active CON states — highest-intent equipment signal. Data is scraped directly from each state regulatory portal daily.",
     category: "State Regulatory",
-    tier: "A",
+    tier: "1",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Daily at 05:00",
@@ -36,7 +36,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "ClinicalTrials.gov",
     description: "Active clinical trials for new equipment and procedures at enrolled facilities. Indicates near-term procurement of trial-specific devices.",
     category: "Federal",
-    tier: "A",
+    tier: "1",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Daily at 04:30",
@@ -46,7 +46,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "FDA 510(k) Clearances",
     description: "Pre-market notification clearances showing recently approved medical devices. Drives replacement purchase cycles as facilities upgrade to cleared devices.",
     category: "FDA",
-    tier: "A",
+    tier: "1",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Daily",
@@ -56,7 +56,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "FDA Device Recalls",
     description: "Active equipment recall notices that drive accelerated replacement cycles. A recall against an installed device is a near-term purchase signal.",
     category: "FDA",
-    tier: "A",
+    tier: "1",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Daily",
@@ -66,7 +66,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "FDA MAUDE Adverse Events",
     description: "Medical device malfunction and adverse event reports indicating equipment failure patterns. Repeated failures predict replacement demand.",
     category: "FDA",
-    tier: "A",
+    tier: "1",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Daily",
@@ -76,7 +76,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "HCRIS Cost Reports",
     description: "Hospital Cost Report Information System — depreciation spikes and asset replacement signals. High depreciation on a specific asset class predicts near-term capital spend.",
     category: "Federal",
-    tier: "A",
+    tier: "1",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Quarterly",
@@ -106,7 +106,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "USASpending.gov",
     description: "Federal contract and grant award data surfacing government-funded equipment purchases. Indicates equipment procurement at VA hospitals, military health, and federally funded clinics.",
     category: "Federal",
-    tier: "B",
+    tier: "2",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Daily",
@@ -116,7 +116,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "NPPES / NPI Registry",
     description: "National Provider Identifier registry for facility contact and taxonomy enrichment. Used to match CON applicants to facility records and enrich contact data.",
     category: "Federal",
-    tier: "B",
+    tier: "2",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Weekly",
@@ -126,7 +126,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "CMS Open Payments / IPPS",
     description: "Centers for Medicare & Medicaid Services data including cost report and utilization signals. High procedure volume on aging equipment predicts replacement demand.",
     category: "Federal",
-    tier: "B",
+    tier: "2",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Weekly",
@@ -136,7 +136,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "FDA Device Classification",
     description: "Regulatory device class database used to enrich equipment type signals. Maps unstructured equipment descriptions to standard device categories.",
     category: "FDA",
-    tier: "B",
+    tier: "2",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Weekly",
@@ -146,7 +146,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "ProPublica 990 Filings",
     description: "Non-profit hospital 990 filings for capital expenditure and financial health signals. Schedule B and property schedules reveal planned equipment spend.",
     category: "Non-Profit",
-    tier: "B",
+    tier: "2",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Weekly",
@@ -156,7 +156,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "HRSA Grant Awards",
     description: "Health Resources & Services Administration grants for facility upgrades and equipment. Equipment grants are direct purchase intent signals.",
     category: "Federal",
-    tier: "B",
+    tier: "2",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Weekly",
@@ -166,7 +166,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "USDA Rural Development",
     description: "Rural hospital and clinic grants indicating equipment purchase intent. USDA Community Facilities grants directly fund equipment at rural critical-access hospitals.",
     category: "Federal",
-    tier: "B",
+    tier: "2",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Weekly",
@@ -176,7 +176,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "Medicare Utilization",
     description: "Procedure-level Medicare utilization data surfacing high-volume equipment demand signals. Tracks procedure growth rates that predict capacity-driven equipment upgrades.",
     category: "Federal",
-    tier: "B",
+    tier: "2",
     accessType: "Public API",
     status: "Live",
     refreshCadence: "Monthly",
@@ -186,7 +186,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "SAM.gov / FedBizOpps",
     description: "Federal acquisition opportunities and RFPs for medical equipment. Direct procurement signals when federal agencies post solicitations for imaging, lab, or surgical equipment.",
     category: "Federal",
-    tier: "B",
+    tier: "2",
     accessType: "Requires Key",
     status: "Partial",
     refreshCadence: "Daily",
@@ -196,7 +196,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "GoHighLevel CRM",
     description: "Sub-account CRM integration for opportunity creation and outreach task management. CON filings and signals are pushed as pipeline opportunities via direct GHL API.",
     category: "CRM",
-    tier: "B",
+    tier: "2",
     accessType: "Requires Key",
     status: "Live",
     refreshCadence: "On push",
@@ -206,7 +206,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "ZeroBounce Email Validation",
     description: "Async email address validation for contact enrichment. Validates contact emails before outreach to reduce bounce rates and protect sender reputation.",
     category: "Enrichment",
-    tier: "C",
+    tier: "Ref",
     accessType: "Requires Key",
     status: "Partial",
     refreshCadence: "On demand",
@@ -216,7 +216,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "Bouncer Email Validation",
     description: "Secondary email validation provider — used as fallback when ZeroBounce confidence is low. Provides redundancy for contact deliverability verification.",
     category: "Enrichment",
-    tier: "C",
+    tier: "Ref",
     accessType: "Requires Key",
     status: "Partial",
     refreshCadence: "On demand",
@@ -226,7 +226,7 @@ const DATA_SOURCES: DataSource[] = [
     name: "HubSpot CRM",
     description: "HubSpot OAuth integration for contact sync and deal pipeline management. Planned for Q3; will support bi-directional sync of facility contacts and CON-based deals.",
     category: "CRM",
-    tier: "C",
+    tier: "Ref",
     accessType: "OAuth",
     status: "Pending",
     refreshCadence: "On push",
@@ -236,20 +236,26 @@ const DATA_SOURCES: DataSource[] = [
     name: "Salesforce CRM",
     description: "Salesforce OAuth integration for lead and opportunity management. Planned for Q4; supports enterprise accounts that run Salesforce as their CRM of record.",
     category: "CRM",
-    tier: "C",
+    tier: "Ref",
     accessType: "OAuth",
     status: "Pending",
     refreshCadence: "On push",
   },
 ];
 
-const ALL_TIERS: Tier[] = ["A", "B", "C"];
+const ALL_TIERS: Tier[] = ["1", "2", "Ref"];
 const ALL_ACCESS_TYPES: AccessType[] = ["Public API", "Requires Key", "OAuth"];
 
 const TIER_BADGE: Record<Tier, string> = {
-  A: "bg-red-500/10 text-red-700 border-red-200",
-  B: "bg-yellow-500/10 text-yellow-700 border-yellow-200",
-  C: "bg-muted text-muted-foreground border-border",
+  "1":   "bg-blue-500/10 text-blue-700 border-blue-200",
+  "2":   "bg-yellow-500/10 text-yellow-700 border-yellow-200",
+  "Ref": "bg-muted text-muted-foreground border-border",
+};
+
+const TIER_LABEL: Record<Tier, string> = {
+  "1":   "Tier 1",
+  "2":   "Tier 2",
+  "Ref": "Ref",
 };
 
 function StatusBadge({ status }: { status: SourceStatus }) {
@@ -351,7 +357,7 @@ export default function DataSourcesPage() {
           <SelectContent>
             <SelectItem value="all">All tiers</SelectItem>
             {ALL_TIERS.map((t) => (
-              <SelectItem key={t} value={t}>Tier {t}</SelectItem>
+              <SelectItem key={t} value={t}>{TIER_LABEL[t]}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -427,7 +433,7 @@ export default function DataSourcesPage() {
                       </td>
                       <td className="px-4 py-3 hidden sm:table-cell">
                         <Badge variant="outline" className={`text-xs font-semibold ${TIER_BADGE[src.tier]}`}>
-                          Tier {src.tier}
+                          {TIER_LABEL[src.tier]}
                         </Badge>
                       </td>
                       <td className="px-4 py-3">

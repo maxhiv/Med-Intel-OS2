@@ -43,9 +43,9 @@ const CMX_CON_STATES: ConState[] = [
 ];
 
 const TIER_CONFIG: Record<Tier, { label: string; description: string; badgeClass: string; dotClass: string }> = {
-  A: { label: "Tier A", description: "Highest CON activity & deal value",  badgeClass: "bg-red-500/10 text-red-700 border-red-200",    dotClass: "bg-red-500" },
+  A: { label: "Tier A", description: "Highest CON activity & deal value",  badgeClass: "bg-green-500/10 text-green-700 border-green-200",  dotClass: "bg-green-500" },
   B: { label: "Tier B", description: "Moderate activity",                  badgeClass: "bg-yellow-500/10 text-yellow-700 border-yellow-200", dotClass: "bg-yellow-500" },
-  C: { label: "Tier C", description: "Emerging / lower volume",            badgeClass: "bg-muted text-muted-foreground border-border", dotClass: "bg-gray-400" },
+  C: { label: "Tier C", description: "Emerging / lower volume",            badgeClass: "bg-muted text-muted-foreground border-border",    dotClass: "bg-gray-400" },
 };
 
 function TierBadge({ tier }: { tier: Tier }) {
@@ -59,7 +59,7 @@ function TierBadge({ tier }: { tier: Tier }) {
 
 function StateCard({ state, filingCount }: { state: ConState; filingCount: number }) {
   const hasSunset = !!state.sunsetDate;
-  const sunsetNear = hasSunset && new Date(state.sunsetDate!) < new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+  const sunsetNear = hasSunset && new Date(state.sunsetDate!) < new Date(Date.now() + 548 * 24 * 60 * 60 * 1000);
 
   return (
     <Link href={`/con-monitor?state=${state.code}`}>

@@ -66,7 +66,7 @@ interface SignalBreakdown {
 
 function scoreColor(score: number): { bg: string; text: string; border: string; label: string } {
   if (score >= 81) return { bg: "bg-red-500/15", text: "text-red-700", border: "border-red-300", label: "Critical" };
-  if (score >= 61) return { bg: "bg-orange-500/15", text: "text-orange-700", border: "border-orange-300", label: "High" };
+  if (score >= 60) return { bg: "bg-orange-500/15", text: "text-orange-700", border: "border-orange-300", label: "High" };
   if (score >= 31) return { bg: "bg-yellow-500/15", text: "text-yellow-700", border: "border-yellow-300", label: "Medium" };
   return { bg: "bg-muted", text: "text-muted-foreground", border: "border-border", label: "Low" };
 }
@@ -189,7 +189,7 @@ export default function FacilitiesPage() {
   let displayData = facilitiesRes?.data ?? [];
 
   if (highPriorityOnly) {
-    displayData = displayData.filter((f) => (f.signalScore ?? 0) >= 61);
+    displayData = displayData.filter((f) => (f.signalScore ?? 0) >= 60);
   }
 
   if (sortBy === "signal_desc") {

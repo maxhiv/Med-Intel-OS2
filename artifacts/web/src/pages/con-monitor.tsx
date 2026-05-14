@@ -36,7 +36,7 @@ function StatusBadge({
   normalized,
   raw,
 }: {
-  normalized: "approved" | "filed" | null | undefined;
+  normalized: "approved" | "denied" | "under_review" | "pending" | "filed" | null | undefined;
   raw: string | null | undefined;
 }) {
   if (normalized === "approved") {
@@ -46,10 +46,24 @@ function StatusBadge({
       </span>
     );
   }
-  if (normalized === "filed") {
+  if (normalized === "denied") {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/10 text-red-700 border border-red-200" title={raw || undefined}>
+        Denied
+      </span>
+    );
+  }
+  if (normalized === "under_review") {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-500/10 text-purple-700 border border-purple-200" title={raw || undefined}>
+        Under Review
+      </span>
+    );
+  }
+  if (normalized === "pending" || normalized === "filed") {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/10 text-blue-700 border border-blue-200" title={raw || undefined}>
-        Filed
+        Pending
       </span>
     );
   }
@@ -301,7 +315,7 @@ export default function ConMonitorPage() {
 
   const { data, isLoading, refetch } = useListConFilings({
     state: stateParam,
-    status: statusFilter !== "all" ? (statusFilter as "approved" | "filed") : undefined,
+    status: statusFilter !== "all" ? (statusFilter as "approved" | "denied" | "under_review" | "pending" | "filed") : undefined,
     equipmentType: equipmentTypeFilter || undefined,
     fromDate: fromDate || undefined,
     toDate: toDate || undefined,
@@ -424,8 +438,10 @@ export default function ConMonitorPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="under_review">Under Review</SelectItem>
                   <SelectItem value="approved">Approved</SelectItem>
-                  <SelectItem value="filed">Filed</SelectItem>
+                  <SelectItem value="denied">Denied</SelectItem>
                 </SelectContent>
               </Select>
 
