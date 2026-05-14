@@ -377,6 +377,37 @@ router.get("/facilities/:id/equipment", requireAccount, async (req, res) => {
   res.json(rows);
 });
 
+router.post("/facilities/:id/contacts", requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+  const id = String(req.params.id);
+  const { firstName, lastName, title, department, email, phone } = req.body as {
+    firstName?: string; lastName?: string; title?: string;
+    department?: string; email?: string; phone?: string;
+  };
+
+  const [own] = await db
+    .select({ id: accountFacilities.id })
+    .from(accountFacilities)
+    .where(and(eq(accountFacilities.accountId, accountId), eq(accountFacilities.facilityId, id)))
+    .limit(1);
+  if (!own) { res.status(403).json({ error: "forbidden" }); return; }
+
+  const [contact] = await db
+    .insert(facilityContacts)
+    .values({
+      facilityId: id,
+      firstName: firstName?.trim() || null,
+      lastName: lastName?.trim() || null,
+      title: title?.trim() || null,
+      department: department?.trim() || null,
+      email: email?.trim() || null,
+      phone: phone?.trim() || null,
+      confidenceScore: 0,
+    })
+    .returning();
+  res.status(201).json(contact);
+});
+
 router.post(
   "/facilities/sync-from-npi/:npi",
   requireAccount,

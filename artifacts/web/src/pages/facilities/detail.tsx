@@ -4,7 +4,9 @@ import {
   useGetFacility,
   useSyncFacilityFromNpi,
   useUpdateFacility,
+  customFetch,
 } from "@workspace/api-client-react";
+import { useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -140,9 +142,31 @@ export default function FacilityDetailPage() {
   const [editType, setEditType] = useState("");
   const [editBeds, setEditBeds] = useState("");
 
+  const [addContactOpen, setAddContactOpen] = useState(false);
+  const [acFirst, setAcFirst] = useState("");
+  const [acLast, setAcLast] = useState("");
+  const [acTitle, setAcTitle] = useState("");
+  const [acDept, setAcDept] = useState("");
+  const [acEmail, setAcEmail] = useState("");
+  const [acPhone, setAcPhone] = useState("");
+
   const { data: facility, isLoading, refetch } = useGetFacility(id);
   const syncFacility = useSyncFacilityFromNpi();
   const updateFacility = useUpdateFacility();
+
+  const addContact = useMutation({
+    mutationFn: (data: { firstName?: string; lastName?: string; title?: string; department?: string; email?: string; phone?: string }) =>
+      customFetch(`/api/facilities/${id}/contacts`, { method: "POST", body: JSON.stringify(data), headers: { "Content-Type": "application/json" } }),
+    onSuccess: () => {
+      toast({ title: "Contact added" });
+      setAddContactOpen(false);
+      setAcFirst(""); setAcLast(""); setAcTitle(""); setAcDept(""); setAcEmail(""); setAcPhone("");
+      refetch();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const handleOpenEdit = () => {
     if (facility) {
@@ -411,7 +435,7 @@ export default function FacilityDetailPage() {
                     <CardTitle>Key Contacts</CardTitle>
                     <CardDescription>Decision makers and technical staff</CardDescription>
                   </div>
-                  <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Add Contact</Button>
+                  <Button size="sm" onClick={() => setAddContactOpen(true)}><Plus className="h-4 w-4 mr-1" /> Add Contact</Button>
                 </CardHeader>
                 <CardContent>
                   {facility.contacts && facility.contacts.length > 0 ? (
@@ -497,6 +521,52 @@ export default function FacilityDetailPage() {
           </Tabs>
         </div>
       </div>
+
+      <Dialog open={addContactOpen} onOpenChange={setAddContactOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Contact</DialogTitle>
+            <DialogDescription>Manually add a decision-maker or staff member to this facility.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="ac-first">First Name</Label>
+                <Input id="ac-first" value={acFirst} onChange={(e) => setAcFirst(e.target.value)} placeholder="Jane" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="ac-last">Last Name</Label>
+                <Input id="ac-last" value={acLast} onChange={(e) => setAcLast(e.target.value)} placeholder="Smith" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="ac-title">Title</Label>
+              <Input id="ac-title" value={acTitle} onChange={(e) => setAcTitle(e.target.value)} placeholder="Director of Imaging" />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="ac-dept">Department</Label>
+              <Input id="ac-dept" value={acDept} onChange={(e) => setAcDept(e.target.value)} placeholder="Radiology" />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="ac-email">Email</Label>
+              <Input id="ac-email" type="email" value={acEmail} onChange={(e) => setAcEmail(e.target.value)} placeholder="jsmith@facility.org" />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="ac-phone">Phone</Label>
+              <Input id="ac-phone" type="tel" value={acPhone} onChange={(e) => setAcPhone(e.target.value)} placeholder="312-555-0100" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddContactOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => addContact.mutate({ firstName: acFirst, lastName: acLast, title: acTitle, department: acDept, email: acEmail, phone: acPhone })}
+              disabled={addContact.isPending || (!acFirst && !acLast)}
+            >
+              {addContact.isPending ? "Adding…" : "Add Contact"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>

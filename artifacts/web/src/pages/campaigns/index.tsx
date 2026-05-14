@@ -13,6 +13,7 @@ export default function CampaignsPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [search, setSearch] = useState("");
   const { toast } = useToast();
 
   const { data: me } = useGetMe();
@@ -20,7 +21,10 @@ export default function CampaignsPage() {
   const [subAccountId, setSubAccountId] = useState<string>("");
 
   const { data: campaignsRes, isLoading, refetch } = useListCampaigns();
-  const campaigns = campaignsRes ?? [];
+  const allCampaigns = campaignsRes ?? [];
+  const campaigns = search.trim()
+    ? allCampaigns.filter((c) => c.name.toLowerCase().includes(search.trim().toLowerCase()))
+    : allCampaigns;
 
   const createCampaign = useCreateCampaign();
 
@@ -130,7 +134,7 @@ export default function CampaignsPage() {
              <CardTitle>All Campaigns</CardTitle>
              <div className="relative w-full sm:w-72">
                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-               <Input placeholder="Search campaigns..." className="pl-9" />
+               <Input placeholder="Search campaigns..." className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} />
              </div>
           </div>
         </CardHeader>

@@ -29,11 +29,31 @@ export default function ReportsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDescription, setNewDescription] = useState("");
-  const [newReportType, setNewReportType] = useState("facilities");
+  const [newDataSources, setNewDataSources] = useState<string[]>(["facilities"]);
+  const [newVizType, setNewVizType] = useState("table");
+
+  const DATA_SOURCE_OPTIONS = [
+    { value: "facilities", label: "Facilities" },
+    { value: "signals", label: "Signals" },
+    { value: "contacts", label: "Contacts" },
+    { value: "campaigns", label: "Campaigns" },
+    { value: "con_filings", label: "CON Filings" },
+    { value: "leads", label: "Leads" },
+  ];
+
+  const toggleDataSource = (value: string) => {
+    setNewDataSources((prev) =>
+      prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
+    );
+  };
 
   const handleCreateTemplate = () => {
     if (!newName.trim()) {
       toast({ title: "Name required", variant: "destructive" });
+      return;
+    }
+    if (newDataSources.length === 0) {
+      toast({ title: "Select at least one data source", variant: "destructive" });
       return;
     }
     createTemplate.mutate(
@@ -41,7 +61,8 @@ export default function ReportsPage() {
         data: {
           name: newName.trim(),
           description: newDescription.trim() || undefined,
-          reportType: newReportType,
+          dataSources: newDataSources,
+          vizType: newVizType,
         },
       },
       {
@@ -50,7 +71,8 @@ export default function ReportsPage() {
           setCreateOpen(false);
           setNewName("");
           setNewDescription("");
-          setNewReportType("facilities");
+          setNewDataSources(["facilities"]);
+          setNewVizType("table");
           refetchTemplates();
         },
         onError: (err) => {
@@ -180,17 +202,30 @@ export default function ReportsPage() {
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="rpt-type">Report Type</Label>
-              <Select value={newReportType} onValueChange={setNewReportType}>
-                <SelectTrigger id="rpt-type">
-                  <SelectValue />
-                </SelectTrigger>
+              <Label>Data Sources <span className="text-red-500">*</span></Label>
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                {DATA_SOURCE_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      checked={newDataSources.includes(opt.value)}
+                      onChange={() => toggleDataSource(opt.value)}
+                      className="rounded border-border"
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="rpt-viz">Visualization</Label>
+              <Select value={newVizType} onValueChange={setNewVizType}>
+                <SelectTrigger id="rpt-viz"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="facilities">Facilities</SelectItem>
-                  <SelectItem value="signals">Signals</SelectItem>
-                  <SelectItem value="contacts">Contacts</SelectItem>
-                  <SelectItem value="campaigns">Campaigns</SelectItem>
-                  <SelectItem value="con_filings">CON Filings</SelectItem>
+                  <SelectItem value="table">Table</SelectItem>
+                  <SelectItem value="bar_chart">Bar Chart</SelectItem>
+                  <SelectItem value="line_chart">Line Chart</SelectItem>
+                  <SelectItem value="map">Map</SelectItem>
                 </SelectContent>
               </Select>
             </div>

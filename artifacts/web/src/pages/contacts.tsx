@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useListFacilities, useGetFacilityContacts, useEnrichContact } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -6,15 +6,25 @@ import { Button } from "@/components/ui/button";
 import { Building2, Users, Mail, Phone, ShieldCheck, Activity, ShieldX, AlertTriangle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 
 export default function ContactsPage() {
   const [selectedFacility, setSelectedFacility] = useState<string>("");
   const { toast } = useToast();
+  const searchString = useSearch();
 
   const { data: facilitiesRes, isLoading: loadingFacilities } = useListFacilities({ limit: 50 });
   const facilities = facilitiesRes?.data || [];
-  
+
+  // Pre-select facility if linked from another page (e.g. lead cards → /contacts?facilityId=X)
+  useEffect(() => {
+    const params = new URLSearchParams(searchString);
+    const facilityId = params.get("facilityId");
+    if (facilityId && facilities.some((f) => f.id === facilityId)) {
+      setSelectedFacility(facilityId);
+    }
+  }, [searchString, facilities]);
+
   // Default to first facility if none selected
   const activeFacilityId = selectedFacility || (facilities.length > 0 ? facilities[0].id : "");
 
