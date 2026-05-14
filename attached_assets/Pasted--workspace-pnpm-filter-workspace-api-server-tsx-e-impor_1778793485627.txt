@@ -1,0 +1,49 @@
+~/workspace$ pnpm --filter @workspace/api-server tsx -e "
+  import { ingestConFilings }       from './src/services/conFilingsIngestor';
+  import { ingestClinicalTrials }   from './src/services/clinicalTrialsIngestor';
+  import { ingestFda510k }          from './src/services/fda510kIngestor';
+  import { ingestFdaRecalls }       from './src/services/fdaRecallsIngestor';
+  import { ingestFdaMaude }         from './src/services/fdaMaudeIngestor';
+  import { ingestFdaClassification }from './src/services/fdaClassificationIngestor';
+  import { ingestHcris }            from './src/services/hcrisIngestor';
+  import { ingestSecEdgar }         from './src/services/secEdgarIngestor';
+  import { ingestEmma }             from './src/services/emmaIngestor';
+  import { ingestUsaSpending }      from './src/services/usaSpendingIngestor';
+  import { ingestNppes }            from './src/services/nppesIngestor';
+  import { ingestCmsData }          from './src/services/cmsDataIngestor';
+  import { ingestPropublica990 }    from './src/services/propublica990Ingestor';
+  import { ingestHrsa }             from './src/services/hrsaIngestor';
+  import { ingestUsda }             from './src/services/usdaIngestor';
+  import { ingestMedicareUtil }     from './src/services/medicareUtilIngestor';
+  import { ingestSamGov }           from './src/services/samGovIngestor';
+
+  const run = async () => {
+    const jobs = [
+      ['CON Filings',        () => ingestConFilings()],
+      ['ClinicalTrials',     () => ingestClinicalTrials({ limit: 500 })],
+      ['FDA 510k',           () => ingestFda510k({ limit: 500 })],
+      ['FDA Recalls',        () => ingestFdaRecalls({ limit: 500 })],
+      ['FDA MAUDE',          () => ingestFdaMaude({ limit: 500 })],
+      ['FDA Classification', () => ingestFdaClassification({ limit: 500 })],
+      ['HCRIS',              () => ingestHcris({ limit: 200 })],
+      ['SEC EDGAR',          () => ingestSecEdgar({ limit: 200 })],
+      ['EMMA Bonds',         () => ingestEmma({ limit: 200 })],
+      ['USASpending',        () => ingestUsaSpending({ limit: 500 })],
+      ['NPPES',              () => ingestNppes({ limit: 500 })],
+      ['CMS',                () => ingestCmsData({ limit: 200 })],
+      ['ProPublica 990',     () => ingestPropublica990({ limit: 200 })],
+      ['HRSA',               () => ingestHrsa({ limit: 500 })],
+      ['USDA',               () => ingestUsda({ limit: 200 })],
+      ['Medicare Util',      () => ingestMedicareUtil({ limit: 200 })],
+      ['SAM.gov',            () => ingestSamGov({ limit: 500 })],
+    ];
+    for (const [name, fn] of jobs) {
+      console.log(\`\n→ Starting \${name}...\`);
+      try { console.log(\`  ✓\`, await fn()); }
+      catch (e) { console.error(\`  ✗ \${name} failed:\`, e.message); }
+    }
+    process.exit(0);
+  };
+" 2>&1 | tee ingest-$(date +%Y%m%d-%H%M).log
+None of the selected packages has a "tsx" script
+~/workspace$ 
