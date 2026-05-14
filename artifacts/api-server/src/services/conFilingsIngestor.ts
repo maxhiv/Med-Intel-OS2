@@ -652,3 +652,6 @@ export async function ingestConFilings(opts: {
   logger.info(result, "con filings ingest complete");
   return result;
 }
+
+// Re-export for external callers that want to record/read telemetry.
+export { recordIngestorRun, getIngestorTelemetry } from "../lib/ingestorTelemetry";

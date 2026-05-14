@@ -6,7 +6,7 @@ import { decodeStoredCredentials } from "../services/encryption";
 import { logger } from "../lib/logger";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
-import { ingestConFilings, buildAdapters } from "../services/conFilingsIngestor";
+import { ingestConFilings, buildAdapters, recordIngestorRun } from "../services/conFilingsIngestor";
 import { ingestNppes } from "../services/nppesIngestor";
 import { ingestFda510k } from "../services/fda510kIngestor";
 import { ingestFdaRecalls } from "../services/fdaRecallsIngestor";
@@ -432,7 +432,15 @@ router.post(
       return;
     }
 
-    const result = await ingestConFilings({ adapters });
+    const t0 = Date.now();
+    let result;
+    try {
+      result = await ingestConFilings({ adapters });
+      recordIngestorRun("conFilings", Date.now() - t0, "success");
+    } catch (err) {
+      recordIngestorRun("conFilings", Date.now() - t0, "error");
+      throw err;
+    }
     res.json(result);
   },
 );

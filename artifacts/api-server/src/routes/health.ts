@@ -3,6 +3,7 @@ import { HealthCheckResponse } from "@workspace/api-zod";
 import { sql } from "drizzle-orm";
 import { db, facilities, accountFacilities, conFilings } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { getIngestorTelemetry } from "../lib/ingestorTelemetry";
 
 const router: IRouter = Router();
 
@@ -54,6 +55,7 @@ router.get("/health", async (_req, res) => {
   }
 
   const disableCron = process.env.DISABLE_CRON === "true";
+  const conTelemetry = getIngestorTelemetry("conFilings");
 
   res.json({
     status: dbStatus === "ok" ? "ok" : "degraded",
@@ -66,8 +68,10 @@ router.get("/health", async (_req, res) => {
       nextRun: disableCron ? null : "~04:30 UTC daily",
     },
     ingestors: {
-      lastRun: null as string | null,
-      status: disableCron ? "disabled" : "scheduled",
+      lastRun: conTelemetry.lastRun,
+      lastDurationMs: conTelemetry.lastDurationMs,
+      lastStatus: conTelemetry.lastStatus,
+      status: disableCron ? "disabled" : conTelemetry.lastRun ? "ran" : "scheduled",
     },
   });
 });
