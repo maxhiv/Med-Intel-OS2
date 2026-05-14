@@ -30,6 +30,7 @@ import batchesRouter from "../../src/routes/batches";
 import reportsRouter from "../../src/routes/reports";
 import adminRouter from "../../src/routes/admin";
 import signalsRouter from "../../src/routes/signals";
+import leadsRouter from "../../src/routes/leads";
 import { errorHandler } from "../../src/middlewares/errors";
 
 /**
@@ -116,6 +117,7 @@ export function createTestApp(): Express {
   app.use(dashboardRouter);
   app.use(facilitiesRouter);
   app.use(signalsRouter);
+  app.use(leadsRouter);
   app.use(contactsRouter);
   app.use(campaignsRouter);
   app.use(sequencesRouter);

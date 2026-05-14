@@ -62,7 +62,7 @@ function budgetWindowStatus(daysUntil: number | null): string {
   return "open";
 }
 
-function daysUntilFYE(fiscalYearEndMonth: number | null | undefined): number | null {
+export function daysUntilFYE(fiscalYearEndMonth: number | null | undefined): number | null {
   if (!fiscalYearEndMonth || fiscalYearEndMonth < 1 || fiscalYearEndMonth > 12) return null;
   const now = new Date();
   const currentYear = now.getFullYear();
