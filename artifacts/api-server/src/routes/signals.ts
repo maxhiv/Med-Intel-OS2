@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { sql, desc, eq, and, ilike, inArray, type SQL } from "drizzle-orm";
 import { db, conFilings, facilities, accountFacilities, subAccounts } from "@workspace/db";
-import { requirePlatformAdmin, requireAccount } from "../middlewares/auth";
+import { requirePlatformAdmin, requirePlatformAdminOrLocalhost, requireAccount } from "../middlewares/auth";
 import { decodeStoredCredentials } from "../services/encryption";
 import { logger } from "../lib/logger";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
@@ -614,7 +614,7 @@ async function handlePushDraftToGhl(req: import("express").Request, res: import(
 router.post("/signals/con-filings/:id/push-draft-to-ghl", requireAccount, handlePushDraftToGhl);
 router.post("/con-filings/:id/push-draft-to-ghl", requireAccount, handlePushDraftToGhl);
 
-router.post("/signals/recompute", requirePlatformAdmin, async (_req, res) => {
+router.post("/signals/recompute", requirePlatformAdminOrLocalhost, async (_req, res) => {
   const result = await recomputeAllScores();
   res.json(result);
 });
@@ -623,7 +623,7 @@ router.post("/signals/recompute", requirePlatformAdmin, async (_req, res) => {
 // new signals can be backfilled without waiting for the 04:30 cron tick.
 router.post(
   "/signals/ingest/clinicaltrials",
-  requirePlatformAdmin,
+  requirePlatformAdminOrLocalhost,
   async (req, res) => {
     const raw = req.query.limit;
     let limit: number | undefined;
@@ -645,7 +645,7 @@ router.post(
 // Omit for a full Tier-A batch across all configured adapters.
 router.post(
   "/signals/ingest/con-filings",
-  requirePlatformAdmin,
+  requirePlatformAdminOrLocalhost,
   async (req, res) => {
     const stateParam =
       typeof req.query.state === "string" ? req.query.state.trim().toUpperCase() : "";
@@ -686,7 +686,7 @@ router.post(
 //   sam_gov, emma_bonds, hcris, hrsa, usda, medicare_util
 router.post(
   "/signals/ingest/free-apis",
-  requirePlatformAdmin,
+  requirePlatformAdminOrLocalhost,
   async (req, res) => {
     const sourceParam =
       typeof req.query.source === "string" ? req.query.source.trim() : "";

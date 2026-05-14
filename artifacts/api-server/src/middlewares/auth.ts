@@ -186,14 +186,6 @@ export const requireSubAccountAccess: RequestHandler = async (req, res, next) =>
 };
 
 export const requirePlatformAdmin: RequestHandler = (req, res, next) => {
-  // Allow internal service calls (e.g. the refresh-all-sources script) to
-  // bypass Clerk auth when an INTERNAL_ADMIN_KEY is configured and the
-  // caller presents a matching X-Internal-Admin-Key header.
-  const internalKey = process.env.INTERNAL_ADMIN_KEY;
-  if (internalKey && req.headers["x-internal-admin-key"] === internalKey) {
-    next();
-    return;
-  }
   if (!req.currentUser) {
     res.status(401).json({ error: "unauthenticated" });
     return;
@@ -203,4 +195,20 @@ export const requirePlatformAdmin: RequestHandler = (req, res, next) => {
     return;
   }
   next();
+};
+
+/**
+ * Variant of requirePlatformAdmin that also allows requests from the local
+ * loopback interface (127.0.0.1 / ::1). Used for ingest endpoints so that
+ * internal scripts (e.g. refresh-all-sources.ts) can call them directly
+ * without needing a Clerk session, while remote callers still require a
+ * valid platform-admin session.
+ */
+export const requirePlatformAdminOrLocalhost: RequestHandler = (req, res, next) => {
+  const addr = req.socket.remoteAddress ?? "";
+  if (addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1") {
+    next();
+    return;
+  }
+  requirePlatformAdmin(req, res, next);
 };
