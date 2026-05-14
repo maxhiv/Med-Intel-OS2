@@ -1,15 +1,16 @@
 /**
  * SEC EDGAR ingestor — free public source, no API key required.
  *
- * Performs two EDGAR searches per facility:
+ * Performs up to three EDGAR searches per facility:
  *   1. The facility's own name (confidence 72 on a direct hit).
- *   2. The parent health system's name when parentSystemId is populated
- *      (confidence 85; source = 'sec_edgar_parent', encoding matchedVia =
- *      'parent_system').
+ *   2. The facility's systemName field when set.
+ *   3. The parent health system facility's name via parentSystemId lookup.
  *
- * Accession numbers are de-duplicated across both searches so each filing is
- * written at most once per facility. Form types: 424B3, 424B5, S-1, S-11,
- * 424B4, FWP.
+ * Hits from searches (2) or (3) are stored with source = 'sec_edgar' at
+ * confidence 85, and tagged via metadata.matchedVia = 'parent_system' to
+ * distinguish them from direct-name hits. Accession numbers are de-duplicated
+ * across all searches so each filing is written at most once per facility.
+ * Form types: 424B3, 424B5, S-1, S-11, 424B4, FWP.
  *
  * Docs: https://efts.sec.gov/LATEST/search-index (EDGAR EFTS)
  */
