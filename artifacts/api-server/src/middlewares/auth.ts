@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction, RequestHandler } from "express";
-import { getAuth } from "@clerk/express";
+import { getAuth, clerkClient } from "@clerk/express";
 import { eq } from "drizzle-orm";
 import { db, users, accounts, subAccounts, type User, type Account } from "@workspace/db";
 
@@ -24,7 +24,7 @@ async function loadUserContext(req: Request): Promise<void> {
   const sessionClaims = auth.sessionClaims as
     | { email?: string; primary_email?: string }
     | undefined;
-  const email =
+  let email =
     (sessionClaims?.email || sessionClaims?.primary_email || "").toLowerCase();
 
   let [user] = await db
@@ -32,6 +32,22 @@ async function loadUserContext(req: Request): Promise<void> {
     .from(users)
     .where(eq(users.clerkUserId, clerkUserId))
     .limit(1);
+
+  // Session claims may not include email (depends on Clerk JWT template).
+  // Fall back to Clerk's backend API to get the primary email address so the
+  // email-based lookup and JIT provisioning below work correctly.
+  if (!user && !email) {
+    try {
+      const clerkUser = await clerkClient.users.getUser(clerkUserId);
+      email =
+        clerkUser.emailAddresses.find((e) => e.id === clerkUser.primaryEmailAddressId)
+          ?.emailAddress?.toLowerCase() ??
+        clerkUser.emailAddresses[0]?.emailAddress?.toLowerCase() ??
+        "";
+    } catch {
+      // Clerk API unavailable — continue without email (will 401 below)
+    }
+  }
 
   if (!user && email) {
     const [byEmail] = await db
