@@ -28,6 +28,8 @@ export function AppLayout({ children }: AppLayoutProps) {
     { name: "Reports", href: "/reports", icon: FileText },
   ];
 
+  navigation.push({ name: "Settings", href: "/settings", icon: Settings });
+
   if (me?.isPlatformAdmin) {
     navigation.push({ name: "Admin", href: "/admin", icon: ShieldAlert });
   }
@@ -61,20 +63,6 @@ export function AppLayout({ children }: AppLayoutProps) {
             );
           })}
         </nav>
-        <div className="p-4 border-t border-sidebar-border">
-          <Link
-            href="/settings"
-            className={cn(
-              "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-              location.startsWith("/settings")
-                ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-            )}
-          >
-            <Settings className="h-4 w-4" />
-            Settings
-          </Link>
-        </div>
       </div>
       
       <div className="flex-1 flex flex-col min-w-0">
