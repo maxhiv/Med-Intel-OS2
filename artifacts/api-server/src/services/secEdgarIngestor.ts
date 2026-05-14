@@ -73,7 +73,7 @@ export async function ingestSecEdgar(
       const searchTerm = (f.systemName ?? f.name).split(/[,\-]/)[0].trim();
       const params = new URLSearchParams({
         q: `"${searchTerm}"`,
-        forms: "424B3,424B5,S-1",
+        forms: "424B3,424B5,S-1,S-11,424B4,FWP",
         dateRange: "custom",
         startdt: oneYearAgo(),
         enddt: today(),
@@ -106,11 +106,12 @@ export async function ingestSecEdgar(
           .limit(1);
         if (exists) continue;
 
+        const usedSystemName = !!f.systemName && f.systemName !== f.name;
         await db.insert(purchaseSignals).values({
           facilityId: f.id,
           signalType: "bond_issuance",
           signalValue: accession,
-          confidence: 72,
+          confidence: usedSystemName ? 85 : 72,
           source: "sec_edgar",
           isActive: true,
         });

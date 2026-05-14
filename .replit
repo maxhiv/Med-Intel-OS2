@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "postgresql-16", "python-3.11"]
+modules = ["nodejs-24", "python-3.11", "postgresql-16"]
 
 [deployment]
 router = "application"
@@ -41,8 +41,10 @@ externalPort = 3000
 
 [nix]
 channel = "stable-25_05"
+packages = ["wget"]
 
 [userenv]
 
 [userenv.shared]
 CRM_ENCRYPTION_KEY = "oWWY+QkPRtRsmm4K8X4guoAZI5dxgPyMIIBb5qW4kmI="
+PLATFORM_ADMIN_EMAIL = "maxhanseniv@gmail.com"

@@ -20,7 +20,7 @@ import { ConReviewQueue } from "./ConReviewQueue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ShieldAlert, Activity, CheckCircle2, XCircle, AlertTriangle, KeyRound, RefreshCw, Lock } from "lucide-react";
+import { ShieldAlert, Activity, CheckCircle2, XCircle, AlertTriangle, KeyRound, RefreshCw, Lock, Link2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { SubAccountCredentialsDialog } from "./sub-account-credentials";
 import { WebhookConfigRow } from "@/components/admin/webhook-config-row";
@@ -330,6 +330,93 @@ function Stat({
       <div className="text-xs uppercase text-muted-foreground">{label}</div>
       <div className={`text-lg ${mono ? "font-mono" : ""} ${valueClass}`}>{value}</div>
     </div>
+  );
+}
+
+function LinkAllFacilitiesCard() {
+  const { toast } = useToast();
+  const [isRunning, setIsRunning] = useState(false);
+  const [result, setResult] = useState<{ linked: number; skipped: number; errors: number } | null>(null);
+
+  const handleLinkAll = async () => {
+    setIsRunning(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/admin/facilities/link-all", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const body = await res.json() as { linked: number; skipped: number; errors: number };
+      setResult(body);
+      toast({
+        title: "Facilities linked",
+        description: `Linked: ${body.linked}, Skipped: ${body.skipped}, Errors: ${body.errors}`,
+      });
+    } catch (err) {
+      toast({ title: "Link-all failed", description: String(err), variant: "destructive" });
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Link2 className="h-5 w-5" /> Link All Facilities
+        </CardTitle>
+        <CardDescription>
+          Run the automated facility-to-CON-filing linker across the entire database. Uses fuzzy name matching and NPI cross-referencing.
+          This is idempotent — safe to run multiple times.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex items-center justify-between gap-4">
+        <div className="flex-1">
+          {result ? (
+            <div className="flex items-center gap-6 text-sm">
+              <div>
+                <span className="font-bold text-green-600">{result.linked}</span>
+                <span className="text-muted-foreground ml-1">linked</span>
+              </div>
+              <div>
+                <span className="font-bold text-muted-foreground">{result.skipped}</span>
+                <span className="text-muted-foreground ml-1">skipped</span>
+              </div>
+              {result.errors > 0 && (
+                <div>
+                  <span className="font-bold text-red-500">{result.errors}</span>
+                  <span className="text-muted-foreground ml-1">errors</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Processes all unlinked CON filings and attempts to match them to existing facilities.
+            </p>
+          )}
+        </div>
+        <Button
+          onClick={handleLinkAll}
+          disabled={isRunning}
+          data-testid="button-link-all-facilities"
+        >
+          {isRunning ? (
+            <>
+              <RefreshCw className="h-4 w-4 mr-2 animate-spin" /> Running…
+            </>
+          ) : (
+            <>
+              <Link2 className="h-4 w-4 mr-2" /> Link All Facilities
+            </>
+          )}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -677,24 +764,27 @@ export default function AdminPage() {
         </TabsContent>
 
         <TabsContent value="accounts" className="mt-4">
-          <Card>
-             <CardHeader>
-               <CardTitle>Tenant Accounts</CardTitle>
-             </CardHeader>
-             <CardContent>
-               <div className="divide-y border rounded-md">
-                 {accounts.map((acc) => (
-                   <div key={acc.id} className="p-4 flex justify-between items-center">
-                     <div>
-                       <div className="font-bold">{acc.name}</div>
-                       <div className="text-sm text-muted-foreground">{acc.planTier || 'Default'} Plan • {acc.subAccountCount || 0} Sub-accounts</div>
+          <div className="space-y-4">
+            <LinkAllFacilitiesCard />
+            <Card>
+               <CardHeader>
+                 <CardTitle>Tenant Accounts</CardTitle>
+               </CardHeader>
+               <CardContent>
+                 <div className="divide-y border rounded-md">
+                   {accounts.map((acc) => (
+                     <div key={acc.id} className="p-4 flex justify-between items-center">
+                       <div>
+                         <div className="font-bold">{acc.name}</div>
+                         <div className="text-sm text-muted-foreground">{acc.planTier || 'Default'} Plan • {acc.subAccountCount || 0} Sub-accounts</div>
+                       </div>
+                       <div className="text-sm bg-secondary px-2 py-1 rounded">{acc.status}</div>
                      </div>
-                     <div className="text-sm bg-secondary px-2 py-1 rounded">{acc.status}</div>
-                   </div>
-                 ))}
-               </div>
-             </CardContent>
-          </Card>
+                   ))}
+                 </div>
+               </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="con-review" className="mt-4">

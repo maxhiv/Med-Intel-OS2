@@ -24,6 +24,13 @@ export const signalTypeEnum = pgEnum("signal_type", [
   "con_approved",
   "grant_awarded",
   "bond_issuance",
+  "bond_issued",
+  "rfp_posted",
+  "hcris_depreciation_spike",
+  "high_utilization",
+  "equipment_age_7yr",
+  "adverse_event_spike",
+  "sec_capex_flag",
   "construction_permit",
   "leadership_change",
   "service_line_expansion",
@@ -35,6 +42,7 @@ export const signalTypeEnum = pgEnum("signal_type", [
   "nih_grant",
   "clinical_trial",
   "fiscal_year_end",
+  "system_signal_propagated",
 ]);
 
 export const contactStatusEnum = pgEnum("contact_status", [

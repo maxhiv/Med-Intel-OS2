@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1778774751978,
+      "tag": "0000_lumpy_microbe",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1778783596703,
+      "tag": "0001_mature_joystick",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778787812804,
+      "tag": "0002_reflective_wolfpack",
+      "breakpoints": true
+    }
+  ]
+}

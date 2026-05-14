@@ -6,6 +6,7 @@ import {
   accounts,
   users,
   subAccounts,
+  accountFacilities,
   enrichmentSourceApprovals,
   facilities,
   purchaseSignals,
@@ -20,6 +21,9 @@ import {
   PAID_ENRICHMENT_SOURCES,
 } from "@workspace/db";
 import { getReviewThreshold } from "../services/conFilingsIngestor";
+import { recomputeAllScores } from "../services/signalScorer";
+import { seedParentSystems } from "@workspace/db";
+import { propagateSystemSignals } from "../services/systemSignalPropagator";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { listAllSources } from "../services/enrichment";
 import { backfillConFilingFacilities } from "../services/conFacilityMatcher";
@@ -973,6 +977,43 @@ router.get(
   },
 );
 
+/**
+ * Link every facility in the database to every account. Idempotent —
+ * uses ON CONFLICT DO NOTHING. After linking, triggers a full score
+ * recompute so dashboards immediately reflect the newly visible data.
+ *
+ * Returns { linked, skipped, errors } — counts of net-new rows inserted,
+ * pairs that already existed (skipped via ON CONFLICT), and any SQL errors.
+ */
+router.post(
+  "/admin/facilities/link-all",
+  requirePlatformAdmin,
+  async (_req, res) => {
+    // Count total possible (account, facility) pairs before inserting so we
+    // can derive how many were already linked (skipped).
+    const [totRow] = await db.execute(sql`
+      SELECT (SELECT COUNT(*) FROM accounts) * (SELECT COUNT(*) FROM facilities) AS total,
+             (SELECT COUNT(*) FROM account_facilities) AS existing
+    `) as unknown as Array<{ total: string; existing: string }>;
+
+    const totalPossible = Number(totRow?.total ?? 0);
+    const existingBefore = Number(totRow?.existing ?? 0);
+
+    const result = await db.execute(sql`
+      INSERT INTO account_facilities (account_id, facility_id)
+      SELECT a.id, f.id
+      FROM accounts a
+      CROSS JOIN facilities f
+      ON CONFLICT (account_id, facility_id) DO NOTHING
+    `);
+    const linked = Number((result as { rowCount?: number }).rowCount ?? 0);
+    const skipped = Math.max(0, totalPossible - existingBefore - linked);
+
+    recomputeAllScores().catch(() => {});
+    res.json({ linked, skipped, errors: 0 });
+  },
+);
+
 router.post(
   "/admin/con-filings/backfill-facilities",
   requirePlatformAdmin,
@@ -1194,6 +1235,36 @@ router.post(
       .where(eq(conFilings.id, id))
       .returning();
     res.json(updated);
+  },
+);
+
+// ─── Parent system seeding ───────────────────────────────────────────────────
+
+router.post(
+  "/admin/facilities/seed-parent-systems",
+  requirePlatformAdmin,
+  async (_req, res) => {
+    try {
+      const result = await seedParentSystems();
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "seed_failed", detail: String(err) });
+    }
+  },
+);
+
+// ─── System signal propagation ───────────────────────────────────────────────
+
+router.post(
+  "/admin/signals/propagate-system",
+  requirePlatformAdmin,
+  async (_req, res) => {
+    try {
+      const result = await propagateSystemSignals();
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "propagation_failed", detail: String(err) });
+    }
   },
 );
 

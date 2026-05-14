@@ -3,10 +3,13 @@ import {
   sql,
   eq,
   and,
+  asc,
   desc,
   ilike,
   gte,
   inArray,
+  isNotNull,
+  getTableColumns,
   type SQL,
 } from "drizzle-orm";
 import {
@@ -21,7 +24,7 @@ import {
 import { requireAccount } from "../middlewares/auth";
 import { validateBody } from "../middlewares/validate";
 import { syncFacilityFromNpi } from "../services/npiSync";
-import { recomputeOne } from "../services/signalScorer";
+import { recomputeOne, computeSignalBreakdown, type SignalBreakdown } from "../services/signalScorer";
 import { CreateFacilityFromNpiBody, UpdateFacilityBody } from "@workspace/api-zod";
 
 const router: IRouter = Router();
@@ -43,48 +46,149 @@ async function assertAccountOwnsFacility(
   return Boolean(row);
 }
 
+/**
+ * Batch-compute signal breakdowns for a list of facility IDs without
+ * issuing N separate DB queries. Fetches all signals in one round trip,
+ * then groups in memory.
+ */
+async function batchSignalBreakdowns(
+  facilityIds: string[],
+): Promise<Map<string, SignalBreakdown>> {
+  if (facilityIds.length === 0) return new Map();
+
+  const sigs = await db
+    .select()
+    .from(purchaseSignals)
+    .where(
+      and(
+        inArray(purchaseSignals.facilityId, facilityIds),
+        eq(purchaseSignals.isActive, true),
+      ),
+    );
+
+  const TIER1 = new Set([
+    "con_filed", "con_approved", "bond_issued", "rfp_posted", "hcris_depreciation_spike",
+  ]);
+  const TIER2 = new Set([
+    "equipment_age_7yr", "high_utilization", "grant_awarded", "clinical_trial",
+  ]);
+
+  const WEIGHTS: Record<string, number> = {
+    con_filed: 35, con_approved: 40, bond_issued: 35, rfp_posted: 40,
+    hcris_depreciation_spike: 25, equipment_age_7yr: 20, high_utilization: 15,
+    grant_awarded: 25, clinical_trial: 15, adverse_event_spike: 10, sec_capex_flag: 18,
+    depreciation_flag: 12, eol_equipment: 12,
+  };
+
+  const grouped = new Map<string, typeof sigs>();
+  for (const fid of facilityIds) grouped.set(fid, []);
+  for (const s of sigs) {
+    const arr = grouped.get(s.facilityId);
+    if (arr) arr.push(s);
+  }
+
+  const result = new Map<string, SignalBreakdown>();
+  for (const [fid, fsigs] of grouped) {
+    const typeSet = new Set(fsigs.map((s) => s.signalType));
+    let tier1Count = 0, tier2Count = 0, tier3Count = 0;
+    for (const s of fsigs) {
+      if (TIER1.has(s.signalType)) tier1Count++;
+      else if (TIER2.has(s.signalType)) tier2Count++;
+      else tier3Count++;
+    }
+    const crossSourceBonuses: string[] = [];
+    if (typeSet.has("con_filed") && typeSet.has("bond_issued"))
+      crossSourceBonuses.push("CON + Bond Match");
+    if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed"))
+      crossSourceBonuses.push("Depreciation + CON Match");
+    if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr"))
+      crossSourceBonuses.push("High Utilization + Equipment Age");
+    if (typeSet.has("rfp_posted") && fsigs.some((s) => s.source === "usa_spending"))
+      crossSourceBonuses.push("RFP + Prior Award Match");
+
+    const topSignals = fsigs
+      .sort((a, b) => (WEIGHTS[b.signalType] ?? 0) - (WEIGHTS[a.signalType] ?? 0))
+      .slice(0, 3)
+      .map((s) => ({ type: s.signalType, detectedAt: s.detectedAt, confidence: s.confidence ?? 50 }));
+
+    result.set(fid, { tier1Count, tier2Count, tier3Count, crossSourceBonuses, topSignals });
+  }
+  return result;
+}
+
 router.get("/facilities", requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
   const state = req.query.state as string | undefined;
   const facilityType = req.query.facilityType as string | undefined;
   const minScore = req.query.minScore ? Number(req.query.minScore) : undefined;
   const search = req.query.search as string | undefined;
+  const trackedOnly = req.query.trackedOnly === "true";
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
 
-  const owned = await db
-    .select({ id: accountFacilities.facilityId })
-    .from(accountFacilities)
-    .where(eq(accountFacilities.accountId, accountId));
-  const facIds = owned.map((o) => o.id);
+  const sortByParam = typeof req.query.sortBy === "string" ? req.query.sortBy.trim() : "score_desc";
 
-  if (facIds.length === 0) {
-    res.json({ data: [], total: 0, limit, offset });
-    return;
-  }
-
-  const conds: SQL[] = [inArray(facilities.id, facIds)];
+  const conds: SQL[] = [];
   if (state) conds.push(eq(facilities.state, state));
   if (facilityType) conds.push(eq(facilities.facilityType, facilityType));
   if (typeof minScore === "number")
     conds.push(gte(facilities.signalScore, minScore));
   if (search) conds.push(ilike(facilities.name, `%${search}%`));
-  const where = and(...conds);
+  if (trackedOnly) conds.push(isNotNull(accountFacilities.facilityId));
+  const where = conds.length > 0 ? and(...conds) : undefined;
+
+  const orderClause =
+    sortByParam === "score_asc"
+      ? asc(facilities.signalScore)
+      : sortByParam === "name"
+      ? asc(facilities.name)
+      : desc(facilities.signalScore);
 
   const rows = await db
-    .select()
+    .select({
+      ...getTableColumns(facilities),
+      tracked: sql<boolean>`${accountFacilities.facilityId} IS NOT NULL`,
+    })
     .from(facilities)
+    .leftJoin(
+      accountFacilities,
+      and(
+        eq(accountFacilities.facilityId, facilities.id),
+        eq(accountFacilities.accountId, accountId),
+      ),
+    )
     .where(where)
-    .orderBy(desc(facilities.signalScore))
+    .orderBy(orderClause)
     .limit(limit)
     .offset(offset);
 
   const [{ c }] = await db
     .select({ c: sql<number>`count(*)::int` })
     .from(facilities)
+    .leftJoin(
+      accountFacilities,
+      and(
+        eq(accountFacilities.facilityId, facilities.id),
+        eq(accountFacilities.accountId, accountId),
+      ),
+    )
     .where(where);
 
-  res.json({ data: rows, total: c, limit, offset });
+  const facilityIds = rows.map((r) => r.id);
+  const breakdowns = await batchSignalBreakdowns(facilityIds);
+
+  const data = rows.map((r) => ({
+    ...r,
+    signalBreakdown: breakdowns.get(r.id) ?? {
+      tier1Count: 0,
+      tier2Count: 0,
+      tier3Count: 0,
+      crossSourceBonuses: [],
+      topSignals: [],
+    },
+  }));
+
+  res.json({ data, total: c, limit, offset });
 });
 
 router.post("/facilities", requireAccount, validateBody(CreateFacilityFromNpiBody), async (req, res) => {
@@ -104,7 +208,6 @@ router.post("/facilities", requireAccount, validateBody(CreateFacilityFromNpiBod
     }
     facility = created;
   }
-  // Auto-link to current account
   await db
     .insert(accountFacilities)
     .values({ accountId, facilityId: facility.id, status: "identified" })
@@ -124,7 +227,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [signals, contacts, equipment] = await Promise.all([
+  const [signals, contacts, equipment, signalBreakdown] = await Promise.all([
     db
       .select()
       .from(purchaseSignals)
@@ -134,8 +237,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
           eq(purchaseSignals.isActive, true),
         ),
       )
-      .orderBy(desc(purchaseSignals.detectedAt))
-      .limit(50),
+      .orderBy(desc(purchaseSignals.detectedAt)),
     db
       .select()
       .from(facilityContacts)
@@ -146,6 +248,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
       .from(equipmentRecords)
       .where(eq(equipmentRecords.facilityId, id))
       .limit(200),
+    computeSignalBreakdown(id),
   ]);
 
   res.json({
@@ -153,6 +256,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
     signals,
     contacts,
     equipment,
+    signalBreakdown,
     activeSignalCount: signals.length,
     contactCount: contacts.length,
     equipmentCount: equipment.length,
@@ -219,10 +323,6 @@ router.get("/facilities/:id/contacts", requireAccount, async (req, res) => {
     .where(eq(facilityContacts.facilityId, id))
     .orderBy(desc(facilityContacts.confidenceScore));
 
-  // Attach the most recent validation entry (validator + verdict + timestamp)
-  // so the contacts UI can show at a glance who verified each contact. We
-  // limit to email validators (zerobounce / bouncer) to stay focused on the
-  // verdict ops actually care about for debugging accuracy.
   const contactIds = rows.map((r) => r.id);
   const lastByContact = new Map<
     string,

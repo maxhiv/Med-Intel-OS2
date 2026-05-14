@@ -1,0 +1,186 @@
+~/workspace$ # Pull merged main
+git fetch origin main && git checkout main && git pull origin main
+
+# Install any new deps and build
+npm install
+npm run build
+
+# Run DB migrations (safe to re-run)
+npm run db:migrate
+
+# Restart the server (or just use Replit's Run button)
+npm run start
+remote: Enumerating objects: 7, done.
+remote: Counting objects: 100% (7/7), done.
+remote: Compressing objects: 100% (3/3), done.
+remote: Total 3 (delta 2), reused 0 (delta 0), pack-reused 0 (from 0)
+Unpacking objects: 100% (3/3), 1.06 KiB | 10.00 KiB/s, done.
+From https://github.com/maxhiv/Med-Intel-OS2
+ * branch            main       -> FETCH_HEAD
+   aa72c20..7ad1def  main       -> origin/main
+Already on 'main'
+Your branch and 'origin/main' have diverged,
+and have 2 and 2 different commits each, respectively.
+  (use "git pull" if you want to integrate the remote branch with yours)
+From https://github.com/maxhiv/Med-Intel-OS2
+ * branch            main       -> FETCH_HEAD
+hint: You have divergent branches and need to specify how to reconcile them.
+hint: You can do so by running one of the following commands sometime before
+hint: your next pull:
+hint:
+hint:   git config pull.rebase false  # merge
+hint:   git config pull.rebase true   # rebase
+hint:   git config pull.ff only       # fast-forward only
+hint:
+hint: You can replace "git config" with "git config --global" to set a default
+hint: preference for all repositories. You can also pass --rebase, --no-rebase,
+hint: or --ff-only on the command line to override the configured default per
+hint: invocation.
+fatal: Need to specify how to reconcile divergent branches.
+npm warn Unknown project config "auto-install-peers". This will stop working in the next major version of npm.
+npm warn Unknown project config "strict-peer-dependencies". This will stop working in the next major version of npm.
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: typescript@5.9.3
+npm warn Found: peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/rule-tester@8.59.3
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/rule-tester
+npm warn   dev @typescript-eslint/rule-tester@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn
+npm warn Could not resolve dependency:
+npm warn peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/rule-tester@8.59.3
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/rule-tester
+npm warn   dev @typescript-eslint/rule-tester@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: typescript@5.9.3
+npm warn Found: peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/type-utils@8.59.3
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/type-utils
+npm warn   dev @typescript-eslint/type-utils@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn
+npm warn Could not resolve dependency:
+npm warn peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/type-utils@8.59.3
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/type-utils
+npm warn   dev @typescript-eslint/type-utils@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: typescript@5.9.3
+npm warn Found: peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/utils@8.59.3
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/utils
+npm warn   dev @typescript-eslint/utils@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn   2 more (@typescript-eslint/rule-tester, @typescript-eslint/type-utils)
+npm warn
+npm warn Could not resolve dependency:
+npm warn peer eslint@"^8.57.0 || ^9.0.0 || ^10.0.0" from @typescript-eslint/utils@8.59.3
+npm warn node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/node_modules/@typescript-eslint/utils
+npm warn   dev @typescript-eslint/utils@"^8.24.1" from typescript@5.9.3
+npm warn   node_modules/.pnpm/typescript@5.9.3/node_modules/typescript
+npm warn   2 more (@typescript-eslint/rule-tester, @typescript-eslint/type-utils)
+npm warn reify invalid or damaged lockfile detected
+npm warn reify please re-try this operation once it completes
+npm warn reify so that the damage can be corrected, or perform
+npm warn reify a fresh install with no lockfile if the problem persists.
+npm warn deprecated debuglog@1.0.1: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
+npm warn deprecated read-package-json@5.0.2: This package is no longer supported. Please use @npmcli/package-json instead.
+npm warn deprecated osenv@0.1.5: This package is no longer supported.
+npm warn deprecated are-we-there-yet@3.0.1: This package is no longer supported.
+npm warn deprecated readdir-scoped-modules@1.1.0: This functionality has been moved to @npmcli/fs
+npm warn deprecated npmlog@6.0.2: This package is no longer supported.
+npm warn deprecated gauge@4.0.4: This package is no longer supported.
+npm warn deprecated @npmcli/move-file@2.0.1: This functionality has been moved to @npmcli/fs
+npm warn deprecated tar@6.2.1: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated rimraf@3.0.2: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated npm-lockfile@3.0.7: The primary dependent of this package, `aud`, is EOL since npm added first-class support for it, and so this one is as well. See https://npmjs.com/lockfile-tools for similar (better) helpers!
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated @humanwhocodes/config-array@0.9.5: Use @eslint/config-array instead
+npm warn deprecated @humanwhocodes/object-schema@1.2.1: Use @eslint/object-schema instead
+npm warn deprecated aud@2.0.5: As of npm v10.2, `npm audit` works without a lockfile! As such, this project is EOL.
+npm warn deprecated
+npm warn deprecated Please replace it with `npx npm@">=10.2" audit --production` or the equivalent.
+npm warn deprecated libnpx@10.2.4: This package is no longer supported.
+npm warn deprecated glob@8.1.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@8.1.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated @npmcli/move-file@1.1.2: This functionality has been moved to @npmcli/fs
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@8.1.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@8.1.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated rimraf@2.7.1: Rimraf versions prior to v4 are no longer supported
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@8.1.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated eslint@8.8.0: This version is no longer supported. Please see https://eslint.org/version-support for other options.
+npm error code 1
+npm error path /home/runner/workspace/node_modules/.pnpm/typescript@5.9.3/node_modules/esbuild
+npm error command failed
+npm error command sh -c node install.js
+npm error /home/runner/workspace/node_modules/.pnpm/typescript@5.9.3/node_modules/esbuild/install.js:136
+npm error     throw new Error(`Expected ${JSON.stringify(versionFromPackageJSON)} but got ${JSON.stringify(stdout)}`);
+npm error           ^
+npm error
+npm error Error: Expected "0.25.12" but got "0.27.3"
+npm error     at validateBinaryVersion (/home/runner/workspace/node_modules/.pnpm/typescript@5.9.3/node_modules/esbuild/install.js:136:11)
+npm error     at /home/runner/workspace/node_modules/.pnpm/typescript@5.9.3/node_modules/esbuild/install.js:287:5
+npm error
+npm error Node.js v24.13.0
+npm notice
+npm notice New minor version of npm available! 11.6.2 -> 11.14.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.14.1
+npm notice To update run: npm install -g npm@11.14.1
+npm notice
+npm error A complete log of this run can be found in: /home/runner/.npm/_logs/2026-05-14T15_19_05_235Z-debug-0.log
+npm warn Unknown project config "auto-install-peers". This will stop working in the next major version of npm.
+npm warn Unknown project config "strict-peer-dependencies". This will stop working in the next major version of npm.
+
+> workspace@0.0.0 build
+> pnpm run typecheck && pnpm -r --if-present run build
+
+
+> workspace@0.0.0 typecheck /home/runner/workspace
+> pnpm run typecheck:libs && pnpm -r --filter "./artifacts/**" --filter "./scripts" --if-present run typecheck
+
+
+> workspace@0.0.0 typecheck:libs /home/runner/workspace
+> tsc --build
+
+Scope: 4 of 10 workspace projects
+artifacts/mockup-sandbox typecheck$ tsc -p tsconfig.json --noEmit
+└─ Done in 9s
+artifacts/api-server typecheck$ tsc -p tsconfig.json --noEmit
+└─ Done in 8.5s
+artifacts/web typecheck$ tsc -p tsconfig.json --noEmit
+│ src/pages/con-filings.tsx(67,7): error TS2741: Property 'queryKey' is missing in type '{ refetchInterval: number; }' …
+│ src/pages/dashboard.tsx(11,5): error TS2741: Property 'queryKey' is missing in type '{ refetchInterval: number; }' bu…
+│ src/pages/dashboard.tsx(15,7): error TS2741: Property 'queryKey' is missing in type '{ refetchInterval: number; }' bu…
+│ src/pages/dashboard.tsx(19,7): error TS2741: Property 'queryKey' is missing in type '{ refetchInterval: number; }' bu…
+│ src/pages/drafts.tsx(51,7): error TS2741: Property 'queryKey' is missing in type '{ refetchInterval: number; }' but r…
+│ src/pages/signals.tsx(15,7): error TS2741: Property 'queryKey' is missing in type '{ refetchInterval: number; }' but …
+└─ Failed in 11.3s at /home/runner/workspace/artifacts/web
+scripts typecheck$ tsc -p tsconfig.json --noEmit
+└─ Done in 3.1s
+/home/runner/workspace/artifacts/web:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/web@0.0.0 typecheck: `tsc -p tsconfig.json --noEmit`
+Exit status 2
+ ELIFECYCLE  Command failed with exit code 2.
+npm warn Unknown project config "auto-install-peers". This will stop working in the next major version of npm.
+npm warn Unknown project config "strict-peer-dependencies". This will stop working in the next major version of npm.
+npm error Missing script: "db:migrate"
+npm error
+npm error To see a list of scripts, run:
+npm error   npm run
+npm error A complete log of this run can be found in: /home/runner/.npm/_logs/2026-05-14T15_19_58_317Z-debug-0.log
+npm warn Unknown project config "auto-install-peers". This will stop working in the next major version of npm.
+npm warn Unknown project config "strict-peer-dependencies". This will stop working in the next major version of npm.
+npm error Missing script: "start"
+npm error
+npm error Did you mean one of these?
+npm error   npm star # Mark your favorite packages
+npm error   npm stars # View packages marked as favorites
+npm error
+npm error To see a list of scripts, run:
+npm error   npm run
+npm error A complete log of this run can be found in: /home/runner/.npm/_logs/2026-05-14T15_19_58_462Z-debug-0.log
+~/workspace$ 

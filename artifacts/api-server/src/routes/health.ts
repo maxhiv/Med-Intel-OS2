@@ -1,10 +1,13 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
-import { sql } from "drizzle-orm";
-import { db } from "@workspace/db";
+import { sql, gte } from "drizzle-orm";
+import { db, facilities, accountFacilities, conFilings, purchaseSignals } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { getIngestorTelemetry } from "../lib/ingestorTelemetry";
 
 const router: IRouter = Router();
+
+const startedAt = Date.now();
 
 router.get("/healthz", (_req, res) => {
   const data = HealthCheckResponse.parse({ status: "ok" });
@@ -19,6 +22,80 @@ router.get("/readyz", async (_req, res) => {
     logger.error({ err }, "readyz: db ping failed");
     res.status(503).json({ status: "degraded", db: "down" });
   }
+});
+
+router.get("/health", async (_req, res) => {
+  const uptimeSeconds = Math.floor((Date.now() - startedAt) / 1000);
+
+  let dbStatus: "ok" | "down" = "ok";
+  let facilitiesCount = 0;
+  let accountFacilitiesLinked = 0;
+  let conFilingsCount = 0;
+
+  try {
+    await db.execute(sql`select 1`);
+
+    const [facRow] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(facilities);
+    facilitiesCount = facRow?.c ?? 0;
+
+    const [afRow] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(accountFacilities);
+    accountFacilitiesLinked = afRow?.c ?? 0;
+
+    const [cfRow] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(conFilings);
+    conFilingsCount = cfRow?.c ?? 0;
+  } catch (err) {
+    logger.error({ err }, "health: db query failed");
+    dbStatus = "down";
+  }
+
+  let signalsCount = 0;
+  let highScoreFacilities = 0;
+
+  if (dbStatus === "ok") {
+    try {
+      const [sigRow] = await db
+        .select({ c: sql<number>`count(*)::int` })
+        .from(purchaseSignals);
+      signalsCount = sigRow?.c ?? 0;
+
+      const [hsRow] = await db
+        .select({ c: sql<number>`count(*)::int` })
+        .from(facilities)
+        .where(gte(facilities.signalScore, 70));
+      highScoreFacilities = hsRow?.c ?? 0;
+    } catch {
+      // non-critical
+    }
+  }
+
+  const disableCron = process.env.DISABLE_CRON === "true";
+  const conTelemetry = getIngestorTelemetry("conFilings");
+
+  res.json({
+    status: dbStatus === "ok" ? "ok" : "degraded",
+    uptime: uptimeSeconds,
+    db: dbStatus,
+    facilitiesCount,
+    accountFacilitiesLinked,
+    conFilingsCount,
+    signalsCount,
+    highScoreFacilities,
+    cronStatus: {
+      nextRun: disableCron ? null : "~04:30 UTC daily",
+    },
+    ingestors: {
+      lastRun: conTelemetry.lastRun,
+      lastDurationMs: conTelemetry.lastDurationMs,
+      lastStatus: conTelemetry.lastStatus,
+      status: disableCron ? "disabled" : conTelemetry.lastRun ? "ran" : "scheduled",
+    },
+  });
 });
 
 export default router;

@@ -31,9 +31,10 @@ if (!process.env.BASE_PATH && !isBuild) {
 
 export default defineConfig({
   base: basePath,
+  define: {},
   plugins: [
     react(),
-    tailwindcss(),
+    tailwindcss({ optimize: false }),
     runtimeErrorOverlay(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined

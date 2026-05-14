@@ -489,9 +489,9 @@ export const GetConAlertSubscriptionResponse = zod.union([
         'Modality codes (MRI, CT, PET, …). Empty array means \"any modality\".',
       ),
     statusFilter: zod
-      .enum(["any", "approved", "filed"])
+      .enum(["any", "approved", "denied", "under_review", "pending", "filed"])
       .describe(
-        "any: both filed + approved; approved: only approved\/granted\/issued; filed: only newly-filed.",
+        "any: all statuses; approved: only approved/granted; denied: only denied; under_review: in review; pending: newly filed; filed: non-approved alias.",
       ),
     isActive: zod.boolean(),
     createdAt: zod.coerce.date().nullish(),
@@ -506,7 +506,7 @@ export const GetConAlertSubscriptionResponse = zod.union([
 export const UpsertConAlertSubscriptionBody = zod.object({
   states: zod.array(zod.string()).optional(),
   modalities: zod.array(zod.string()).optional(),
-  statusFilter: zod.enum(["any", "approved", "filed"]).optional(),
+  statusFilter: zod.enum(["any", "approved", "denied", "under_review", "pending", "filed"]).optional(),
   isActive: zod.boolean().optional(),
 });
 
@@ -525,9 +525,9 @@ export const UpsertConAlertSubscriptionResponse = zod.object({
       'Modality codes (MRI, CT, PET, …). Empty array means \"any modality\".',
     ),
   statusFilter: zod
-    .enum(["any", "approved", "filed"])
+    .enum(["any", "approved", "denied", "under_review", "pending", "filed"])
     .describe(
-      "any: both filed + approved; approved: only approved\/granted\/issued; filed: only newly-filed.",
+      "any: all statuses; approved: only approved/granted; denied: only denied; under_review: in review; pending: newly filed; filed: non-approved alias.",
     ),
   isActive: zod.boolean(),
   createdAt: zod.coerce.date().nullish(),
@@ -558,7 +558,7 @@ export const ListConAlertNotificationsResponse = zod.object({
       conFilingId: zod.string().uuid(),
       state: zod.string(),
       modality: zod.string().nullish(),
-      statusNormalized: zod.enum(["approved", "filed"]).nullish(),
+      statusNormalized: zod.enum(["approved", "denied", "under_review", "pending", "filed"]).nullish(),
       applicantName: zod.string().nullish(),
       facilityId: zod.string().uuid().nullish(),
       readAt: zod.coerce.date().nullish(),
@@ -592,7 +592,7 @@ export const MarkConAlertNotificationReadResponse = zod.object({
   conFilingId: zod.string().uuid(),
   state: zod.string(),
   modality: zod.string().nullish(),
-  statusNormalized: zod.enum(["approved", "filed"]).nullish(),
+  statusNormalized: zod.enum(["approved", "denied", "under_review", "pending", "filed"]).nullish(),
   applicantName: zod.string().nullish(),
   facilityId: zod.string().uuid().nullish(),
   readAt: zod.coerce.date().nullish(),
@@ -616,7 +616,10 @@ export const ListConFilingsQueryParams = zod.object({
     .min(listConFilingsQueryStateMin)
     .max(listConFilingsQueryStateMax)
     .optional(),
-  status: zod.enum(["approved", "filed"]).optional(),
+  status: zod.enum(["approved", "denied", "under_review", "pending", "filed"]).optional(),
+  equipmentType: zod.string().optional(),
+  fromDate: zod.string().optional(),
+  toDate: zod.string().optional(),
   limit: zod.coerce
     .number()
     .max(listConFilingsQueryLimitMax)
@@ -647,10 +650,10 @@ export const ListConFilingsResponse = zod.object({
         .nullish()
         .describe("Raw status text as published by the source regulator."),
       statusNormalized: zod
-        .enum(["approved", "filed"])
+        .enum(["approved", "denied", "under_review", "pending", "filed"])
         .nullish()
         .describe(
-          "Normalized binary status for filtering and badges; null when source status is unknown.",
+          "Normalized status for filtering and badges; null when source status is unknown.",
         ),
       applicantName: zod.string().nullish(),
       filingUrl: zod.string().nullish(),

@@ -24,6 +24,9 @@ catalogs:
     '@types/node':
       specifier: ^25.3.3
       version: 25.3.5
+    '@types/pg':
+      specifier: ^8.11.14
+      version: 8.18.0
     '@types/react':
       specifier: ^19.2.0
       version: 19.2.14
@@ -709,10 +712,17 @@ importers:
         version: 25.3.5
 
   scripts:
+    dependencies:
+      pg:
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 25.3.5
+      '@types/pg':
+        specifier: 'catalog:'
+        version: 8.18.0
       tsx:
         specifier: 'catalog:'
         version: 4.21.0

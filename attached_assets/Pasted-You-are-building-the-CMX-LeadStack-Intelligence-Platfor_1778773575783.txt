@@ -1,0 +1,611 @@
+You are building the CMX LeadStack Intelligence Platform to production-ready state. 
+This is a medical equipment sales intelligence platform for Chicago Medical Exchange (CMX). 
+The monorepo lives in the current directory. Read the codebase carefully before making 
+changes. Work through every phase below in order. Do not stop until all phases are complete.
+
+==========================================================================
+CODEBASE MAP (read this first)
+==========================================================================
+
+Monorepo structure:
+  artifacts/api-server/src/       — Express API server
+    routes/                       — All HTTP route handlers
+    services/                     — Business logic and ingestors
+    cron/index.ts                 — Scheduled jobs (node-cron)
+  artifacts/web/src/              — React/Vite frontend (Wouter routing)
+    pages/                        — One file per route
+    components/                   — Shared UI components
+  lib/db/src/schema/              — Drizzle ORM schema (5 files)
+  scripts/src/                    — One-off CLI scripts (NPI import, etc.)
+
+Key schema tables:
+  facilities              — master facility list (keyed by NPI)
+  account_facilities      — JOIN table: links facilities to tenant accounts
+  purchase_signals        — all buy-intent signals across all sources
+  con_filings             — CON application records from state portals
+  equipment_records       — per-facility equipment with urgency tiers
+  financial_documents     — 990s, HCRIS reports, bond documents
+  facility_contacts       — contacts per facility with confidence scores
+  con_alert_subscriptions — per-user CON alert subscriptions
+  con_alert_notifications — delivered alert records
+
+Already-implemented ingestors (in services/):
+  nppesIngestor, fda510kIngestor, fdaRecallsIngestor, fdaMaudeIngestor,
+  fdaClassificationIngestor, propublica990Ingestor, cmsDataIngestor,
+  secEdgarIngestor, usaSpendingIngestor, clinicalTrialsIngestor,
+  conFilingsIngestor, conAlertNotifier, signalScorer
+
+Signal scoring uses WEIGHTS map in signalScorer.ts — tenant-agnostic 
+global score + per-tenant engagement score on account_facilities.
+
+CRM integration: GHL (GoHighLevel), HubSpot, Salesforce via OAuth. 
+Credentials stored AES-256-GCM encrypted on sub_accounts.crm_credentials.
+
+Frontend routes: /dashboard, /facilities, /signals, /con-filings, 
+/contacts, /campaigns, /sequences, /drafts, /batches, /reports, 
+/admin (tabs: Accounts, Sub-Account CRM Credentials, CON Review Queue, 
+Key Rotation), /settings
+
+==========================================================================
+PHASE 0 — CRITICAL: FIX DATA VISIBILITY (do this first, app is broken)
+==========================================================================
+
+PROBLEM: The NPI bulk import populates `facilities` but never writes to 
+`account_facilities`. Every API endpoint filters by account_facilities, so 
+NPI data is in the DB but invisible in the UI.
+
+FIX: Add a database migration + admin API endpoint that links all existing 
+facilities to all existing accounts.
+
+1. Create a new Drizzle migration file in lib/db/src/migrations/ that runs:
+
+   INSERT INTO account_facilities (account_id, facility_id)
+   SELECT a.id, f.id
+   FROM accounts a
+   CROSS JOIN facilities f
+   ON CONFLICT (account_id, facility_id) DO NOTHING;
+
+2. Add a POST /admin/facilities/link-all endpoint in 
+   artifacts/api-server/src/routes/admin.ts that:
+   - Requires platform_admin role
+   - Runs the same INSERT ... ON CONFLICT DO NOTHING
+   - Returns { linked: number } count
+   - Triggers recomputeAllScores() after linking
+
+3. Add a "Link All Facilities to Accounts" button in the Admin UI 
+   (artifacts/web/src/pages/admin/index.tsx) under the Accounts tab 
+   that calls this endpoint and shows a toast with the count.
+
+4. Run the migration immediately via npm run db:migrate or equivalent.
+
+Also fix the NPI bulk import script (scripts/src/importNpiRegistry.ts): 
+after each batch flush to `facilities`, also INSERT the new facility IDs 
+into account_facilities for ALL accounts. Do this inside flushBatch().
+
+==========================================================================
+PHASE 1 — MISSING DATA INGESTORS (add these 6 sources)
+==========================================================================
+
+The handoff document identifies these sources as NOT YET IMPLEMENTED. 
+Add each as a new service file in artifacts/api-server/src/services/ 
+following the exact same pattern as the existing ingestors 
+(return { signalsInserted: number, errors: number }, idempotent, 
+rate-limit polite with 200ms delays between requests).
+
+--- 1A. SAM.gov Federal Procurement Ingestor ---
+File: artifacts/api-server/src/services/samGovIngestor.ts
+
+Source: https://api.sam.gov/opportunities/v2/search
+Requires env var: SAM_GOV_API_KEY (free key at api.sam.gov)
+NAICS codes to monitor: 334517 (irradiation apparatus), 334510 (electromedical)
+
+For each PENDING/POSTED opportunity:
+  - Insert a purchase_signal with signal_type = 'rfp_posted'
+  - Try to match to a facility by extracting org name from the award data
+  - Store the SOW URL in the signal's sourceUrl field
+  - Fields to capture: noticeId, title, postedDate, responseDeadLine, 
+    organizationName, placeOfPerformanceCity, placeOfPerformanceState, 
+    naicsCode, description (first 500 chars), uiLink
+
+Add SAM_GOV_API_KEY to .env.example with instructions.
+If SAM_GOV_API_KEY is not set, log a warning and return { signalsInserted: 0, errors: 0 }.
+
+--- 1B. EMMA Municipal Bond Ingestor ---
+File: artifacts/api-server/src/services/emmaIngestor.ts
+
+EMMA does not have a formal REST API, but the MSRB provides an EMMA API 
+at https://emma.msrb.org/api/. Use the search endpoint:
+  GET https://emma.msrb.org/api/SecSearch.aspx?type=O&category=bond&
+      keywords=hospital+imaging+equipment&pageSize=25
+
+Parse the JSON response for municipal bond issuances where:
+  - issuerType includes "Hospital" or "Health"  
+  - principalAmount > 5000000 (bonds over $5M)
+
+For each qualifying bond:
+  - Try to match to a facility by issuerName vs facilities.name (ILIKE)
+  - Insert into financial_documents table with doc_type = 'municipal_bond'
+  - Insert a purchase_signal with signal_type = 'bond_issued'
+  - Store the EMMA detail URL as sourceUrl
+
+Also query: https://emma.msrb.org/api/IssuerSearch.aspx for healthcare issuers 
+in target states: IL, MI, NY, VA, CT, MD, KY, MS, AL, GA, MA
+
+--- 1C. HCRIS Cost Reports Ingestor ---
+File: artifacts/api-server/src/services/hcrisIngestor.ts
+
+Source: CMS HCRIS API at https://data.cms.gov/provider-compliance/cost-report/hospital-provider-cost-report/api
+(JSON REST, no key required)
+
+Fetch the latest cost report records. For each record:
+  - Match facility by PRVDR_NUM (provider number) against facilities.cmsId
+    OR by PRVDR_CTRL_TYPE_CD and facility name similarity
+  - Upsert into financial_documents with doc_type = 'hcris_cost_report'
+  - Calculate depreciation ratio: equipment depreciation / total assets
+  - If depreciation ratio > 0.40, insert purchase_signal with 
+    signal_type = 'hcris_depreciation_spike'
+  - Set confidence proportional to the depreciation ratio (0.4 = 60%, 0.7 = 90%)
+
+Key fields to capture and store in parsedJson:
+  PRVDR_NUM, PROVIDER_NAME, COST_RPT_STATUS_CD, FY_BGN_DT, FY_END_DT,
+  NET_PATIENT_REV_AMT, TOT_OPERATING_EXPENSE_AMT, TOT_ASSETS_EOY_AMT,
+  CAPITAL_EXPENDITURES (compute from available depreciation fields)
+
+--- 1D. HRSA Health Center Data Ingestor ---
+File: artifacts/api-server/src/services/hrsaIngestor.ts
+
+Source: https://data.hrsa.gov/api/download/datafile/HEALTHCENTERDATADOWNLOADAGREEMENT
+Use the HRSA Health Center Program Awardee Data API:
+  GET https://data.hrsa.gov/api/export/excel/Health_Center_Program_Awardees_Data
+
+Parse the response for FQHCs with:
+  - Patient visits > 10,000/year (Tot_Patients field)
+  - State in target states: IL, MI, NY, VA, CT, MD, KY, MS, AL, GA, MA
+
+For each qualifying FQHC:
+  - Try to match to facility by name + state
+  - If not found, create a new facility record (facilityType = 'FQHC', fqhcDesignation = true)
+  - Insert purchase_signal with signal_type = 'grant_awarded' if the record 
+    shows a capital award in the past 24 months
+  - Always add to account_facilities for all accounts
+
+--- 1E. USDA Rural Development Awards Ingestor ---
+File: artifacts/api-server/src/services/usdaIngestor.ts
+
+Source: https://www.rd.usda.gov/sites/default/files/CommFacilitiesData.csv
+(CSV download, no key, updated regularly)
+
+Also try the USASpending API filtered by USDA + Community Facilities program:
+  POST https://api.usaspending.gov/api/v2/search/spending_by_award/
+  Body: { filters: { agencies: [{ type: "awarding", tier: "toptier", name: "Department of Agriculture" }],
+          award_type_codes: ["A","B","C","D"], keywords: ["community facility", "health", "hospital"] } }
+
+For each rural health/hospital capital award:
+  - Match facility by recipient_name vs facilities.name (ILIKE fuzzy)
+  - Insert purchase_signal with signal_type = 'grant_awarded'
+  - Store award amount, award date, award description in signal metadata
+  - Only process awards in the past 24 months
+  - Only process awards > $100,000
+
+--- 1F. Medicare Provider Utilization Ingestor ---
+File: artifacts/api-server/src/services/medicareUtilIngestor.ts
+
+Source: CMS Medicare Provider Utilization and Payment Data API:
+  GET https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners/medicare-physician-other-practitioners-by-provider-and-service/api
+
+Filter for high-volume imaging HCPCS codes:
+  70553 (MRI Brain), 70553 (MRI Brain w/wo), 71250 (CT Chest),
+  78816 (PET Whole Body), 77067 (Mammography), 70470 (CT Head/Neck)
+
+For each provider with Tot_Srvcs > 2000/year on these codes:
+  - Match to facility by Rndrng_NPI
+  - If facility.signalScore < 30, compute utilization signal
+  - Insert purchase_signal with signal_type = 'high_utilization'
+  - confidence = min(1.0, Tot_Srvcs / 5000)
+
+==========================================================================
+PHASE 1G — REGISTER NEW INGESTORS IN CRON
+==========================================================================
+
+In artifacts/api-server/src/cron/index.ts, import all 6 new ingestors 
+and add them to the 06:00 "ingestFreeApis" job alongside existing ones:
+
+  { name: "sam_gov",       fn: () => ingestSamGov({ limit: 50 }) },
+  { name: "emma_bonds",    fn: () => ingestEmma({ limit: 30 }) },
+  { name: "hcris",         fn: () => ingestHcris({ limit: 50 }) },
+  { name: "hrsa",          fn: () => ingestHrsa({ limit: 50 }) },
+  { name: "usda",          fn: () => ingestUsda({ limit: 50 }) },
+  { name: "medicare_util", fn: () => ingestMedicareUtil({ limit: 50 }) },
+
+Also add these to the POST /signals/ingest/free-apis endpoint in 
+artifacts/api-server/src/routes/signals.ts so they can be triggered manually.
+
+Add new signal types to lib/db/src/schema/enums.ts signalTypeEnum if not 
+already present:
+  'rfp_posted', 'bond_issued', 'hcris_depreciation_spike', 
+  'grant_awarded', 'high_utilization'
+
+Run db:migrate after adding enum values.
+
+==========================================================================
+PHASE 2 — FACILITY SCORING MODEL ENHANCEMENTS
+==========================================================================
+
+The signal scorer in artifacts/api-server/src/services/signalScorer.ts 
+exists but needs to be updated to reflect the cross-source signal weights 
+specified in the handoff document.
+
+Update the WEIGHTS map to match these tiers exactly:
+
+Tier 1 signals (direct buying intent):
+  con_filed:                 35
+  con_approved:              40
+  bond_issued:               35
+  rfp_posted:                40
+  hcris_depreciation_spike:  25
+
+Tier 2 signals (supporting context):
+  equipment_age_7yr:         20
+  high_utilization:          15
+  grant_awarded:             25
+  clinical_trial:            15
+
+Tier 3 signals (enrichment):
+  adverse_event_spike:       10
+  510k_clearance_old:        12
+  sec_capex_flag:            18
+
+Cross-source bonus (add to computeFacilityScore):
+  If facility has BOTH con_filed AND bond_issued signals: add +15 bonus
+  If facility has BOTH hcris_depreciation_spike AND con_filed: add +10 bonus
+  If facility has BOTH high_utilization AND equipment_age_7yr: add +8 bonus
+  If facility has rfp_posted AND prior usa_spending award: add +12 bonus
+
+Add a new field to the facilities API response: signalBreakdown: { 
+  tier1Count, tier2Count, tier3Count, crossSourceBonuses, topSignals[] }
+
+This breakdown should be returned by GET /facilities and 
+GET /facilities/:id for display in the UI.
+
+==========================================================================
+PHASE 3 — UI: UNIFIED CON PORTAL MONITOR PAGE
+==========================================================================
+
+Create a new page: artifacts/web/src/pages/con-monitor.tsx
+
+This page is the "Unified CON Portal Monitor" from the handoff doc. It 
+displays CON filings from the con_filings table with advanced filtering.
+
+Add route /con-monitor to artifacts/web/src/App.tsx and a nav link in the 
+sidebar.
+
+Page features:
+  1. Header with "Run All 11 Tier A States" button that calls 
+     POST /signals/ingest/free-apis (triggers conFilingsIngestor)
+     Show a progress indicator while running (poll GET /con-filings for changes)
+
+  2. Filter bar:
+     - State: multi-select (IL, MI, NY, VA, CT, MD, KY, MS, AL, GA, MA + All)
+     - Equipment type: MRI, CT, PET, Linear Accelerator, Surgical Robot, C-Arm, Ultrasound, All
+     - Status: PENDING, APPROVED, DENIED, UNDER REVIEW, All
+     - Date range picker
+
+  3. Results table columns:
+     Facility | City | State | Equipment Type | Vendor Named | 
+     Project Cost | Status | Filed Date | Permit # | Source URL | Actions
+
+  4. Status badges: PENDING = amber, APPROVED = green, DENIED = red, 
+     UNDER REVIEW = blue
+
+  5. Export CSV button: downloads all filtered results as 
+     CMX_CON_[YYYY-MM-DD].csv with columns formatted for GHL import
+
+  6. Per-state refresh buttons for CT, IL, NY (high-volume states)
+
+  7. "Add to Pipeline" button per row: opens a modal to select which 
+     sub-account to push the facility to (calls the CRM push endpoint)
+
+Fetch data from GET /con-filings (existing endpoint, may need 
+pagination and filter params added).
+
+Add query params to GET /con-filings: state, equipmentType, status, 
+fromDate, toDate, limit, offset.
+
+==========================================================================
+PHASE 4 — UI: FACILITY SCORING DASHBOARD
+==========================================================================
+
+Update the existing facilities page 
+(artifacts/web/src/pages/facilities/index.tsx) to add:
+
+  1. Signal score badge on each facility card (color: 
+     0-30 = gray, 31-60 = yellow, 61-80 = orange, 81-100 = red)
+
+  2. Signal breakdown tooltip on hover showing:
+     - Top 3 signals with their types and dates
+     - Cross-source bonus applied (if any)
+     - Tier classification (Tier 1/2/3 based on highest signal)
+
+  3. Sort by Signal Score option (add to existing sort dropdown)
+
+  4. "High Priority" filter toggle: show only facilities with 
+     signalScore >= 60
+
+  5. Scoring legend panel (collapsible) explaining what each 
+     signal type means and its weight
+
+Update GET /facilities to return signalBreakdown in the response 
+(from Phase 2 above).
+
+Also update the facility detail page 
+(artifacts/web/src/pages/facilities/detail.tsx) to show:
+  - Full signal timeline (all signals sorted by date, most recent first)
+  - Signal type icons and color coding
+  - Cross-source match badges ("CON + Bond Match", "Depreciation + CON Match")
+  - Recommended action based on highest-tier signal:
+    CON PENDING → "File within 30 days of approval"
+    Bond Issued → "Immediate outreach — capital is secured"
+    HCRIS Spike → "30-day follow-up cycle"
+    RFP Posted → "Review SOW and respond immediately"
+
+==========================================================================
+PHASE 5 — UI: CON STATE INTELLIGENCE MAP
+==========================================================================
+
+Create a new page: artifacts/web/src/pages/con-states.tsx
+
+Add route /con-states to App.tsx and sidebar nav.
+
+Display a grid of state cards (not an actual map — a responsive card grid 
+is fine and avoids map library dependencies).
+
+Each card shows:
+  - State abbreviation + name
+  - Tier badge (Tier A = green, Tier B = yellow, Tier C = gray)
+  - Agency name
+  - Equipment threshold (e.g. "$2.5M" or "Any MRI/CT/PET")
+  - Sunset date (if applicable, show in red if within 18 months)
+  - Active filings count (query con_filings grouped by state)
+  - Portal link (external link button)
+  - Strategic note
+
+Hardcode the 22-state data from this list exactly:
+
+Tier A (11 states):
+  IL - HFSRB - $4.6M - Sunset Dec 2029 - "Primary market. Sunsetting Dec 2029 — window closing."
+  MI - LARA CON Division - $3.4M - No sunset - "Strong hospital market. Detroit metro + rural Upper Peninsula."
+  NY - NY Dept of Health - $15M hosp/$6M ASC - No sunset - "Updated regs Aug 2025. High-volume filing state."
+  VA - VA Dept of Health - $2.5M - No sunset - "Lower threshold = more filings. DC suburbs growth corridor."
+  CT - CT OHCA - Any MRI/CT/PET - No sunset - "CON required for any CT, MRI, PET regardless of cost. Most filings."
+  MD - MD Health Care Commission - $2.5M - No sunset - "Dense hospital corridor, DC suburbs."
+  KY - KY Cabinet Health Services - $1.5M - No sunset - "Low threshold = high filing volume. Rural hospital cycle active."
+  MS - MS State Dept of Health - $2.0M - No sunset - "Adjacent to CMX Southeast territory. Delta region growth."
+  AL - AL CON Review Board - $3.0M - No sunset - "CMX Southeast anchor state. UAB Health system major buyer."
+  GA - GA Dept Community Health - $2.5M - No sunset - "2024 reforms exempted single-specialty ASCs. Atlanta + rural."
+  MA - MA Health Policy Commission - $2.5M (DoN) - No sunset - "Dense Boston market. Partners/Mass General Brigham system."
+
+Tier B (5 states):
+  TN - SUNSETTING 2027 - "Repealing Dec 2027. Already removed PET and MRI requirements."
+  NC - NEAR-TOTAL REPEAL - "Near-total repeal in progress."
+  MO - FACILITIES ONLY - "Equipment largely exempt since reform."
+  AR - LIMITED COVERAGE - "Covers hospitals and LTC. Coverage inconsistent."
+  WV - ACTIVE (limited) - "2023 carve-out for some imaging. Panhandle growth market."
+
+Tier C (6 states):
+  IN - REPEALED 1999 - "No CON. Primary Midwest gap. Use NPPES + HCRIS + 990."
+  WI - NO CON - "No formal CON. Use NPPES + facility age model."
+  OH - LTC ONLY - "Equipment CON largely exempt since 1997."
+  FL - HOSPITALS REPEALED 2019 - "Hospital/equipment CON repealed 2019. Large market — alternative signals."
+  SC - FULLY REPEALED 2023 - "Full repeal May 2023. Use NPPES + HCRIS + SAM.gov."
+
+Add a summary row at top: "11 Tier A • 5 Tier B • 6 Tier C • 35 states total with CON programs"
+
+Filter tabs: All | Tier A | Tier B | Tier C
+
+==========================================================================
+PHASE 6 — UI: FREE DATA SOURCE REGISTRY PAGE
+==========================================================================
+
+Create: artifacts/web/src/pages/data-sources.tsx
+Route: /data-sources
+Add to sidebar nav as "Data Sources"
+
+Display a searchable, filterable table of all 22 CMX data sources 
+from the handoff document. Each row is expandable to show full details.
+
+Columns: Source Name | Organization | Tier | Access Type | CMX Use Case | Status
+
+Status badges:
+  - "Live" (green) = already ingesting
+  - "Partial" (yellow) = API exists but not all fields used
+  - "Pending" (gray) = not yet ingesting
+
+Access Type filter: "Live API (No Key)", "Live API (Free Key)", 
+"Bulk Download", "Document Portal"
+
+Tier filter: Tier 1, Tier 2, Reference
+
+For each source, the expanded row shows:
+  - CMX Use Case (specific signal it generates)
+  - Key fields / endpoints
+  - Update cadence
+  - Integration status with link to relevant ingestor file (if implemented)
+  - CMX vertical coverage checkboxes (Imaging, Ortho, Surgical, Rural, Vet)
+
+Hardcode all 22 sources from the handoff document. Mark these as "Live":
+  NPPES, FDA 510(k), FDA Recalls, FDA MAUDE, FDA Classification, 
+  ProPublica 990, CMS data.cms.gov, SEC EDGAR, USASpending.gov,
+  ClinicalTrials.gov, CON State Portals (11 states)
+
+Mark as "Live" after Phase 1 completes: SAM.gov, EMMA, HCRIS, HRSA, 
+USDA, Medicare Utilization
+
+Mark as "Partial": IRS 990 XML (bulk), CMS POS File, NPPES Bulk Download
+
+==========================================================================
+PHASE 7 — SLACK ALERTING
+==========================================================================
+
+Add Slack webhook integration for new PENDING CON applications.
+
+1. Add env var: SLACK_CON_WEBHOOK_URL to .env.example
+
+2. In artifacts/api-server/src/services/conAlertNotifier.ts, after 
+   inserting a con_alert_notification, if SLACK_CON_WEBHOOK_URL is set, 
+   POST a Slack message to that webhook URL:
+
+   {
+     "text": "🏥 New CON Filing: *[Facility Name]* ([City], [State])\n*Equipment:* [modality]\n*Cost:* $[amount]\n*Status:* PENDING\n*Filed:* [date]\n<[sourceUrl]|View Filing>"
+   }
+
+   Only send Slack notifications for status = 'pending' or 'under_review'.
+   Rate limit: max 1 Slack message per 30 seconds using a module-level 
+   queue (don't block the main notifier loop — fire and forget with catch).
+
+3. Add a "Slack Webhook URL" field to the Settings page 
+   (artifacts/web/src/pages/settings.tsx) under a new "Alerts & Notifications" 
+   section. Save to sub_account settings or account-level settings.
+   Test button that sends a test message to the configured webhook.
+
+==========================================================================
+PHASE 8 — GHL PIPELINE PUSH FROM CON MONITOR
+==========================================================================
+
+Add a "Push to GHL" feature to the CON Monitor page (Phase 3).
+
+1. Add endpoint: POST /con-filings/:id/push-to-crm in 
+   artifacts/api-server/src/routes (new file or extend con-filings route)
+
+   This endpoint:
+   - Looks up the con_filing by ID
+   - Looks up the matched facility and its contacts
+   - Gets the sub_account's GHL credentials (from sub_accounts.crm_credentials)
+   - Creates or updates a GHL opportunity via the existing GHL API client:
+     Pipeline stage: "CON Pre-Qualified"
+     Opportunity name: "[Facility Name] — [Modality] CON [State] [Year]"
+     Custom fields: conFilingUrl, projectCost, filingStatus, equipmentType
+   - Also upserts the facility's primary contact as a GHL contact
+
+2. In the CON Monitor table, the "Add to Pipeline" button per row should 
+   open a sub-account selector modal (list the user's sub-accounts from 
+   GET /admin/sub-accounts) and then call this endpoint.
+
+3. Show a success toast: "Added to [Sub-Account Name] GHL pipeline"
+
+==========================================================================
+PHASE 9 — 990 CONTACT ENRICHMENT (CFO/COO AUTO-PULL)
+==========================================================================
+
+Enhance the propublica990Ingestor.ts service to also extract executive 
+contacts from the 990 Part VII data.
+
+ProPublica returns organization data including officers. When a 990 record 
+is ingested:
+
+1. Check the ProPublica organizations API response for officers/people data:
+   GET https://projects.propublica.org/nonprofits/api/v2/organizations/[EIN].json
+   Parse the `filings_with_data[0].formType990` data if available.
+
+2. Look for titles containing: CFO, Chief Financial, COO, Chief Operating,
+   VP Finance, Director Finance, Administrator, CEO, President
+
+3. For each executive found:
+   - Upsert into facility_contacts table with:
+     source = 'irs_990', title = [their title], 
+     name = [first + last], confidence = 0.7
+     buyingAuthorityScore: CFO/COO = 85, VP Finance = 75, CEO = 70
+
+4. This auto-enrichment happens every time the 990 ingestor runs — 
+   existing contacts are updated with refreshed data (ON CONFLICT UPDATE).
+
+5. In the facility detail page (Phase 4), show a "990 Contacts" section 
+   listing auto-enriched contacts with their buying authority score.
+
+==========================================================================
+PHASE 10 — PRODUCTION HARDENING
+==========================================================================
+
+1. ENVIRONMENT VARIABLES
+   Audit all process.env references across the entire codebase and ensure 
+   every variable has an entry in .env.example with a descriptive comment.
+   Required additions:
+     SAM_GOV_API_KEY=        # Free key from api.sam.gov — required for federal RFP monitoring
+     SLACK_CON_WEBHOOK_URL=  # Optional — Slack incoming webhook for CON alerts
+     CRM_ENCRYPTION_KEY=     # 32-byte hex key for AES-256-GCM sub-account credential encryption
+     DATABASE_URL=           # PostgreSQL connection string
+     CLERK_SECRET_KEY=       # Clerk auth backend key
+     VITE_CLERK_PUBLISHABLE_KEY= # Clerk auth frontend key
+
+2. DATABASE MIGRATIONS
+   Run npm run db:migrate (or the equivalent pnpm command) to apply:
+   - New signal type enum values (rfp_posted, bond_issued, etc.)
+   - Any new columns added by the ingestors above
+   - The account_facilities backfill migration from Phase 0
+
+3. BUILD VERIFICATION
+   Run the full build:
+     npm install (or pnpm install)
+     npm run build (or equivalent — check package.json scripts)
+   Fix any TypeScript errors. The codebase uses strict TypeScript — 
+   do not use `any` casts to suppress errors.
+
+4. HEALTH CHECK
+   Verify GET /health returns 200 with:
+   { status: "ok", db: "connected", uptime: [seconds] }
+   
+   Enhance it to also include:
+   { 
+     ingestors: { lastRun: ISO timestamp, status: "ok"|"error" },
+     cronStatus: { nextRun: ISO timestamp },
+     facilitiesCount: number,
+     accountFacilitiesLinked: number
+   }
+
+5. SIDEBAR NAVIGATION
+   Add the new pages to the sidebar nav in the correct order:
+   Dashboard | Facilities | Signals | CON Monitor | CON States | 
+   Data Sources | Contacts | Campaigns | Sequences | Drafts | 
+   Batches | Reports | Settings | Admin (admin only)
+
+6. SEED DATA VERIFICATION
+   Check that the seed script (if present) creates at minimum:
+   - 1 platform_admin account
+   - 1 demo account + sub-account with GHL credentials placeholder
+   - 5-10 sample facilities across IL, MI, NY, VA with account_facilities rows
+   - Sample purchase_signals of each tier for demo
+
+==========================================================================
+IMPORTANT CONSTRAINTS
+==========================================================================
+
+1. All ingestors MUST be idempotent (re-runnable without duplicates). 
+   Use ON CONFLICT DO NOTHING or ON CONFLICT DO UPDATE with 
+   unique indexes.
+
+2. All ingestors MUST handle network failures gracefully — wrap each 
+   HTTP call in try/catch, log the error, and continue to the next record.
+   Never let one bad API response fail the entire ingestor run.
+
+3. Rate limiting: add a 200-300ms delay between API calls within each 
+   ingestor. Use a simple sleep helper: 
+   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+4. All new API endpoints must use the existing requireAccount middleware 
+   (or requireAdmin for admin-only endpoints) — never skip auth.
+
+5. All new frontend pages must use the existing QueryClient hooks pattern 
+   (react-query via @tanstack/react-query) — don't use raw fetch() calls.
+
+6. New schema columns require a Drizzle migration — never modify the DB 
+   directly. Run db:generate then db:migrate.
+
+7. TypeScript strict mode is on — no `any` types, no ts-ignore comments.
+
+8. The existing test for account_facilities isolation (one tenant's data 
+   not leaking to another) must continue to pass. Never query 
+   purchase_signals, facilities, or contacts without an account_id filter 
+   when inside a tenant-scoped request.
+
+Start with Phase 0 immediately — the application is effectively broken 
+for NPI data display until account_facilities is populated. 
+Then proceed in order through Phase 10.

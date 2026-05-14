@@ -974,6 +974,9 @@ export type ListFacilitiesParams = {
    */
   limit?: number;
   offset?: number;
+  trackedOnly?: string;
+  /** Sort order: "score_desc" (default), "score_asc", "name" */
+  sortBy?: string;
 };
 
 export type ListConAlertNotificationsParams = {
@@ -994,7 +997,12 @@ export type ListConFilingsParams = {
    * @maxLength 2
    */
   state?: string;
+  /** Comma-separated list of 2-letter state codes for multi-state server-side filtering. */
+  states?: string;
   status?: ListConFilingsStatus;
+  equipmentType?: string;
+  fromDate?: string;
+  toDate?: string;
   /**
    * @maximum 200
    */
@@ -1006,8 +1014,11 @@ export type ListConFilingsStatus =
   (typeof ListConFilingsStatus)[keyof typeof ListConFilingsStatus];
 
 export const ListConFilingsStatus = {
-  approved: "approved",
-  filed: "filed",
+  approved:     "approved",
+  denied:       "denied",
+  under_review: "under_review",
+  pending:      "pending",
+  filed:        "filed",
 } as const;
 
 export type ListDraftsParams = {

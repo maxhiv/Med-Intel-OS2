@@ -50,8 +50,8 @@ router.use(sequencesRouter);
 router.use(draftsRouter);
 router.use(batchesRouter);
 router.use(reportsRouter);
-router.use(adminRouter);
 router.use(leadsRouter);
+router.use(adminRouter);
 router.use(oauthRouter);
 
 export default router;

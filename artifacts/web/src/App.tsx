@@ -9,7 +9,6 @@ import { dark } from "@clerk/themes";
 import { AppLayout } from "@/components/layout/app-layout";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 
-// Pages placeholder mapping
 import LandingPage from "@/pages/landing";
 import SignInPage from "@/pages/auth/sign-in";
 import SignUpPage from "@/pages/auth/sign-up";
@@ -18,6 +17,9 @@ import FacilitiesPage from "@/pages/facilities/index";
 import FacilityDetailPage from "@/pages/facilities/detail";
 import SignalsPage from "@/pages/signals";
 import ConFilingsPage from "@/pages/con-filings";
+import ConMonitorPage from "@/pages/con-monitor";
+import ConStatesPage from "@/pages/con-states";
+import DataSourcesPage from "@/pages/data-sources";
 import ContactsPage from "@/pages/contacts";
 import CampaignsPage from "@/pages/campaigns/index";
 import CampaignDetailPage from "@/pages/campaigns/detail";
@@ -32,10 +34,15 @@ import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
 
+// publishableKeyFromHost derives the correct key for the current domain.
+// VITE_CLERK_PUBLISHABLE_KEY is the test key in dev and is automatically
+// swapped to the live key by Replit at publish time — do not edit manually.
 const clerkPubKey = publishableKeyFromHost(
-  typeof window !== "undefined" ? window.location.hostname : "",
+  window.location.hostname,
   import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
 );
+// Empty in dev (proxy is production-only). Automatically set by Replit at
+// publish time to https://<app-domain>/api/__clerk — do not set manually.
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -62,6 +69,9 @@ function Router() {
               <Route path="/facilities/:id" component={FacilityDetailPage} />
               <Route path="/signals" component={SignalsPage} />
               <Route path="/con-filings" component={ConFilingsPage} />
+              <Route path="/con-monitor" component={ConMonitorPage} />
+              <Route path="/con-states" component={ConStatesPage} />
+              <Route path="/data-sources" component={DataSourcesPage} />
               <Route path="/contacts" component={ContactsPage} />
               <Route path="/campaigns" component={CampaignsPage} />
               <Route path="/campaigns/:id" component={CampaignDetailPage} />
@@ -91,7 +101,7 @@ function ClerkProviderWithRoutes() {
       routerPush={(to) => setLocation(stripBase(to))}
       routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
       appearance={{
-        baseTheme: document.documentElement.classList.contains("dark") ? dark : undefined,
+        theme: dark,
         variables: {
           colorPrimary: "hsl(175 40% 20%)",
         },

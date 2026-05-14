@@ -13,6 +13,58 @@ const router: IRouter = Router();
 const STATUSES = ["pending", "approved", "sent", "skipped", "rejected"] as const;
 type DraftStatus = (typeof STATUSES)[number];
 
+const DRAFT_CHANNELS = ["email", "linkedin", "phone", "both"] as const;
+type DraftChannel = (typeof DRAFT_CHANNELS)[number];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+router.post("/drafts", requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+  // contactId and facilityId are intentionally NOT accepted from the client — they must
+  // only be set by server-side processes that have already verified account ownership.
+  // CON-filing drafts (the primary caller of this endpoint) never have contact/facility links.
+  const { subject, body, channel, conFilingId, aiModel, aiPromptVersion } = req.body ?? {};
+
+  if (!body || typeof body !== "string" || body.trim().length === 0) {
+    res.status(400).json({ error: "body_required" });
+    return;
+  }
+  if (body.trim().length > 20_000) {
+    res.status(400).json({ error: "body_too_long", max: 20_000 });
+    return;
+  }
+  if (subject !== undefined && (typeof subject !== "string" || subject.length > 500)) {
+    res.status(400).json({ error: "subject_invalid", max: 500 });
+    return;
+  }
+  if (channel !== undefined && !DRAFT_CHANNELS.includes(channel as DraftChannel)) {
+    res.status(400).json({ error: "channel_invalid", allowed: DRAFT_CHANNELS });
+    return;
+  }
+  if (conFilingId !== undefined && (typeof conFilingId !== "string" || !UUID_RE.test(conFilingId))) {
+    res.status(400).json({ error: "con_filing_id_invalid" });
+    return;
+  }
+
+  const [draft] = await db
+    .insert(outreachDrafts)
+    .values({
+      accountId,
+      contactId: null,
+      facilityId: null,
+      conFilingId: conFilingId ?? null,
+      channel: channel ?? "email",
+      subject: subject ?? null,
+      body: body.trim(),
+      aiModel: aiModel ?? null,
+      aiPromptVersion: aiPromptVersion ?? null,
+      status: "pending",
+    })
+    .returning();
+
+  res.status(201).json(draft);
+});
+
 router.get("/drafts", requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
   const status = req.query.status as DraftStatus | undefined;

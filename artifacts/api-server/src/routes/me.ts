@@ -2,11 +2,13 @@ import { Router, type IRouter } from "express";
 import { eq, and, desc, isNull, sql } from "drizzle-orm";
 import {
   db,
+  accounts,
   subAccounts,
   conAlertSubscriptions,
   conAlertNotifications,
 } from "@workspace/db";
 import { requireAuth, requireAccount } from "../middlewares/auth";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -31,11 +33,126 @@ router.get("/me", requireAuth, async (req, res) => {
   });
 });
 
+// Dedicated sub-accounts listing for the current account.
+// This is the canonical account-scoped endpoint for UI use (e.g. Pipeline modal).
+// It returns only the sub-accounts belonging to the authenticated user's account,
+// equivalent to filtering /admin/sub-accounts by the current account_id.
+// Use /admin/sub-accounts (requirePlatformAdmin) when you need to query
+// sub-accounts across all accounts.
+router.get("/me/sub-accounts", requireAuth, requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+  const subs = await db
+    .select({
+      id: subAccounts.id,
+      name: subAccounts.name,
+      crmType: subAccounts.crmType,
+    })
+    .from(subAccounts)
+    .where(and(eq(subAccounts.accountId, accountId), eq(subAccounts.isActive, true)));
+  res.json({ data: subs });
+});
+
+// ---------------------------------------------------------------------------
+// Account settings (stored in accounts.settings JSONB)
+// ---------------------------------------------------------------------------
+
+router.get("/me/settings", requireAuth, requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+  const [row] = await db
+    .select({ settings: accounts.settings })
+    .from(accounts)
+    .where(eq(accounts.id, accountId))
+    .limit(1);
+  res.json((row?.settings as Record<string, unknown>) ?? {});
+});
+
+router.patch("/me/settings", requireAuth, requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+
+  // Allow-list of settings keys the user may write
+  const ALLOWED_KEYS = new Set(["slackWebhookUrl"]);
+  const incoming: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (ALLOWED_KEYS.has(k)) incoming[k] = v;
+  }
+
+  // Read current settings and merge
+  const [row] = await db
+    .select({ settings: accounts.settings })
+    .from(accounts)
+    .where(eq(accounts.id, accountId))
+    .limit(1);
+
+  const current = (row?.settings as Record<string, unknown>) ?? {};
+  const merged = { ...current, ...incoming };
+
+  const [updated] = await db
+    .update(accounts)
+    .set({ settings: merged, updatedAt: new Date() })
+    .where(eq(accounts.id, accountId))
+    .returning({ settings: accounts.settings });
+
+  res.json((updated?.settings as Record<string, unknown>) ?? {});
+});
+
+// Test the account's configured Slack webhook URL by posting a sample message.
+router.post(
+  "/me/settings/test-slack",
+  requireAuth,
+  requireAccount,
+  async (req, res) => {
+    const accountId = req.currentAccount!.id;
+    const [row] = await db
+      .select({ settings: accounts.settings })
+      .from(accounts)
+      .where(eq(accounts.id, accountId))
+      .limit(1);
+
+    const settings = (row?.settings as Record<string, unknown>) ?? {};
+    const webhookUrl = typeof settings.slackWebhookUrl === "string"
+      ? settings.slackWebhookUrl.trim()
+      : "";
+
+    if (!webhookUrl) {
+      res.status(400).json({ ok: false, error: "no_webhook_url_configured" });
+      return;
+    }
+
+    if (!webhookUrl.startsWith("https://hooks.slack.com/")) {
+      res.status(400).json({ ok: false, error: "invalid_webhook_url" });
+      return;
+    }
+
+    try {
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: "✅ MedIntel OS — Slack webhook test successful! CON filing alerts will be delivered here.",
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        res.status(502).json({ ok: false, error: "slack_rejected", details: body });
+        return;
+      }
+
+      res.json({ ok: true });
+    } catch (err) {
+      logger.warn({ err, accountId }, "me: slack webhook test failed");
+      res.status(502).json({ ok: false, error: "network_error", message: String(err) });
+    }
+  },
+);
+
 // ---------------------------------------------------------------------------
 // CON-filing alert subscription + in-app notifications
 // ---------------------------------------------------------------------------
 
-const VALID_STATUS_FILTERS = new Set(["any", "approved", "filed"]);
+const VALID_STATUS_FILTERS = new Set(["any", "approved", "denied", "under_review", "pending", "filed"]);
 
 function sanitizeStates(input: unknown): string[] {
   if (!Array.isArray(input)) return [];

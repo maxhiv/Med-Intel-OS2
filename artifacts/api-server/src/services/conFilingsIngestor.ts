@@ -363,6 +363,13 @@ export function buildAdapters(): StateAdapter[] {
       "https://odh.ohio.gov/news/rss",
       "CON_FEED_URL_OH",
     ),
+    // Connecticut — OHS CON program. Override the feed URL via
+    // CON_FEED_URL_CT once CT OHS publishes a stable machine-readable feed.
+    rssAdapter(
+      "CT",
+      "https://portal.ct.gov/OHS/Newsroom/feed.xml",
+      "CON_FEED_URL_CT",
+    ),
   ];
 }
 
@@ -645,3 +652,6 @@ export async function ingestConFilings(opts: {
   logger.info(result, "con filings ingest complete");
   return result;
 }
+
+// Re-export for external callers that want to record/read telemetry.
+export { recordIngestorRun, getIngestorTelemetry } from "../lib/ingestorTelemetry";

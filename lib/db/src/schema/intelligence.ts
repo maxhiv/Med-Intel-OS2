@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   pgTable,
   uuid,
   text,
@@ -55,6 +56,12 @@ export const facilities = pgTable(
     fqhcDesignation: boolean("fqhc_designation").default(false),
     teachingHospital: boolean("teaching_hospital").default(false),
     gmeSlots: integer("gme_slots"),
+    parentSystemId: uuid("parent_system_id").references(
+      (): AnyPgColumn => facilities.id,
+      { onDelete: "set null" },
+    ),
+    fiscalYearEndMonth: integer("fiscal_year_end_month"),
+    fiscalYearEndSource: text("fiscal_year_end_source"),
     signalScore: smallint("signal_score").default(0),
     lastScrapedAt: timestamp("last_scraped_at", { withTimezone: true }),
     lastEnrichedAt: timestamp("last_enriched_at", { withTimezone: true }),
@@ -269,6 +276,7 @@ export const facilityContacts = pgTable(
     humanVerifiedAt: timestamp("human_verified_at", { withTimezone: true }),
     humanVerifiedBy: uuid("human_verified_by"),
     buyingAuthorityScore: smallint("buying_authority_score").default(0),
+    dataSource: text("data_source"),
     lastEnrichedAt: timestamp("last_enriched_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),

@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { useGetMe } from "@workspace/api-client-react";
 import { UserButton } from "@clerk/react";
-import { Activity, LayoutDashboard, Building2, Radio, Users, Target, Layers, FileText, Settings, ShieldAlert, CheckCircle2, FileSignature, Star } from "lucide-react";
+import { Activity, LayoutDashboard, Building2, Radio, Users, Target, Layers, FileText, Settings, ShieldAlert, CheckCircle2, FileSignature, MapPin, Database, Monitor, Crosshair } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
@@ -14,17 +14,20 @@ export function AppLayout({ children }: AppLayoutProps) {
   const { data: me, isLoading } = useGetMe();
 
   const navigation = [
-    { name: "Lead Cards", href: "/leads", icon: Star },
+    { name: "Lead Cards", href: "/leads", icon: Crosshair },
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { name: "Facilities", href: "/facilities", icon: Building2 },
     { name: "Signals", href: "/signals", icon: Radio },
-    { name: "CON Filings", href: "/con-filings", icon: FileSignature },
+    { name: "CON Monitor", href: "/con-monitor", icon: Monitor },
+    { name: "CON States", href: "/con-states", icon: MapPin },
+    { name: "Data Sources", href: "/data-sources", icon: Database },
     { name: "Contacts", href: "/contacts", icon: Users },
     { name: "Campaigns", href: "/campaigns", icon: Target },
     { name: "Sequences", href: "/sequences", icon: Layers },
     { name: "Drafts", href: "/drafts", icon: FileText },
     { name: "Batches", href: "/batches", icon: CheckCircle2 },
     { name: "Reports", href: "/reports", icon: FileText },
+    { name: "Settings", href: "/settings", icon: Settings },
   ];
 
   if (me?.isPlatformAdmin) {
@@ -60,20 +63,6 @@ export function AppLayout({ children }: AppLayoutProps) {
             );
           })}
         </nav>
-        <div className="p-4 border-t border-sidebar-border">
-          <Link
-            href="/settings"
-            className={cn(
-              "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-              location.startsWith("/settings")
-                ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-            )}
-          >
-            <Settings className="h-4 w-4" />
-            Settings
-          </Link>
-        </div>
       </div>
       
       <div className="flex-1 flex flex-col min-w-0">

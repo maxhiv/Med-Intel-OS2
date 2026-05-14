@@ -1,209 +1,283 @@
+/**
+ * GET /leads — returns paginated lead cards for the current account.
+ *
+ * Each card includes: tier (A/B/C), recommended action, top signals,
+ * cross-source bonus matches, contacts, and FYE timing fields.
+ */
 import { Router, type IRouter } from "express";
-import { eq, and, inArray, gte, desc } from "drizzle-orm";
+import { eq, and, gte, inArray, sql, desc } from "drizzle-orm";
 import {
   db,
   facilities,
   purchaseSignals,
   facilityContacts,
   accountFacilities,
-  conFilings,
 } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
+import { computeSignalBreakdown, computeTimingBonus } from "../services/signalScorer";
 
 const router: IRouter = Router();
 
-const TIER_A_APPROVAL = new Set(["con_approved", "rfp_posted"]);
-const TIER_1_BUDGET = new Set(["bond_issuance", "bond_issued", "grant_awarded", "nih_grant"]);
-const TIER_1_INTENT = new Set(["con_filed", "con_approved", "rfp_posted", ...TIER_1_BUDGET]);
-const TIER_2 = new Set([
-  "hcris_depreciation_spike",
-  "high_utilization",
-  "eol_equipment",
-  "adverse_event_spike",
-  "clinical_trial",
-  "510k_clearance_old",
-  "fiscal_year_end",
-]);
+// ─── Tier logic ───────────────────────────────────────────────────────────────
 
-function computeTier(types: string[]): "A" | "B" | "C" {
-  const s = new Set(types);
-  const hasCon = s.has("con_filed") || s.has("con_approved");
-  const hasBudget = s.has("bond_issuance") || s.has("bond_issued") || s.has("grant_awarded") || s.has("nih_grant");
-  const hasApproval = [...s].some((t) => TIER_A_APPROVAL.has(t));
+type LeadTier = "A" | "B" | "C";
 
-  if (hasApproval && hasBudget) return "A";
-  if (hasCon && hasBudget) return "A";
-  if (s.has("rfp_posted")) return "A";
-  if (hasCon || (hasBudget && types.some((t) => TIER_2.has(t)))) return "B";
-  if (types.some((t) => TIER_1_INTENT.has(t) || TIER_2.has(t))) return "C";
+function computeTier(score: number): LeadTier {
+  if (score >= 70) return "A";
+  if (score >= 50) return "B";
   return "C";
 }
 
-function computeRecommendedAction(types: string[]): string {
-  const s = new Set(types);
-  const hasBudget = s.has("bond_issuance") || s.has("bond_issued") || s.has("grant_awarded") || s.has("nih_grant");
-
-  if (s.has("rfp_posted")) return "Active RFP — respond within 48 hours or lose.";
-  if (s.has("con_approved") && hasBudget) return "URGENT: Capital confirmed + CON approved. Call this week.";
-  if (s.has("con_approved")) return "CON approved — outreach window is now. 30-day close cycle.";
-  if (s.has("con_filed") && hasBudget) return "Pre-position: CON pending with capital secured. Reach out now.";
-  if (hasBudget) return "Capital available. Identify equipment need in discovery.";
-  if (s.has("eol_equipment") && s.has("high_utilization")) return "Throughput pressure + aging equipment. ROI conversation.";
-  if (s.has("adverse_event_spike")) return "Equipment failures on record. Empathy-led replacement outreach.";
-  if (s.has("fiscal_year_end")) return "FYE approaching — qualify budget before close.";
-  return "Relationship building. Monitor for Tier 1 signals.";
+function computeRecommendedAction(
+  score: number,
+  signalTypes: Set<string>,
+): { label: string; urgency: "high" | "medium" | "low" } {
+  if (score >= 70) {
+    if (signalTypes.has("con_approved") || signalTypes.has("rfp_posted")) {
+      return { label: "Schedule Discovery Call — Active procurement window", urgency: "high" };
+    }
+    if (signalTypes.has("bond_issued") || signalTypes.has("bond_issuance")) {
+      return { label: "Contact CFO/Buyer — Capital approved", urgency: "high" };
+    }
+    if (signalTypes.has("con_filed")) {
+      return { label: "Reach out now — CON filed, decision approaching", urgency: "high" };
+    }
+    return { label: "Prioritize outreach — high-intent signals detected", urgency: "high" };
+  }
+  if (score >= 50) {
+    if (signalTypes.has("hcris_depreciation_spike")) {
+      return { label: "Send Equipment ROI Overview + Depreciation Report", urgency: "medium" };
+    }
+    return { label: "Send Equipment ROI Overview", urgency: "medium" };
+  }
+  return { label: "Enroll in Drip Nurture Sequence", urgency: "low" };
 }
+
+function budgetWindowStatus(daysUntil: number | null): string {
+  if (daysUntil === null) return "unknown";
+  if (daysUntil <= 30) return "closing";
+  if (daysUntil <= 90) return "active";
+  if (daysUntil <= 180) return "approaching";
+  return "open";
+}
+
+function daysUntilFYE(fiscalYearEndMonth: number | null | undefined): number | null {
+  if (!fiscalYearEndMonth || fiscalYearEndMonth < 1 || fiscalYearEndMonth > 12) return null;
+  const now = new Date();
+  const currentMonth = now.getMonth() + 1;
+  const currentYear = now.getFullYear();
+  let fyeYear = currentYear;
+  if (fiscalYearEndMonth < currentMonth || (fiscalYearEndMonth === currentMonth && now.getDate() > 15)) {
+    fyeYear = currentYear + 1;
+  }
+  const fyeDate = new Date(fyeYear, fiscalYearEndMonth - 1, 1);
+  return Math.round((fyeDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+// ─── GET /leads ───────────────────────────────────────────────────────────────
 
 router.get("/leads", requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
-  const minScore = Math.max(Number(req.query.minScore) || 40, 0);
-  const limit = Math.min(Number(req.query.limit) || 25, 100);
-  const offset = Math.max(Number(req.query.offset) || 0, 0);
-  const stateFilter =
-    typeof req.query.state === "string" && req.query.state.length === 2
-      ? req.query.state.toUpperCase()
-      : "";
-  const tierFilter =
-    typeof req.query.tierFilter === "string" && ["A", "B", "C"].includes(req.query.tierFilter)
-      ? (req.query.tierFilter as "A" | "B" | "C")
-      : null;
 
-  const owned = await db
-    .select({ id: accountFacilities.facilityId })
-    .from(accountFacilities)
-    .where(eq(accountFacilities.accountId, accountId));
-  const facIds = owned.map((o) => o.id);
+  const minScore = Math.max(0, parseInt(String(req.query.minScore ?? "40"), 10));
+  const tierFilter = String(req.query.tierFilter ?? "").toUpperCase() as LeadTier | "";
+  const stateFilter = String(req.query.state ?? "").toUpperCase().slice(0, 2) || null;
+  const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10)));
+  const offset = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10));
 
-  if (facIds.length === 0) {
-    res.json({ leads: [], total: 0, limit, offset });
-    return;
-  }
+  // Compute effective min score based on tier filter
+  let effectiveMinScore = minScore;
+  if (tierFilter === "A") effectiveMinScore = Math.max(minScore, 70);
+  else if (tierFilter === "B") effectiveMinScore = Math.max(minScore, 50);
 
-  const facConds = [inArray(facilities.id, facIds), gte(facilities.signalScore, minScore)];
-  if (stateFilter) facConds.push(eq(facilities.state, stateFilter));
-
-  const facRows = await db
-    .select()
+  // Query facilities tracked by this account with a score threshold
+  const rows = await db
+    .select({
+      id: facilities.id,
+      name: facilities.name,
+      city: facilities.city,
+      state: facilities.state,
+      facilityType: facilities.facilityType,
+      systemName: facilities.systemName,
+      parentSystemId: facilities.parentSystemId,
+      signalScore: facilities.signalScore,
+      fiscalYearEndMonth: facilities.fiscalYearEndMonth,
+      fiscalYearEndSource: facilities.fiscalYearEndSource,
+      beds: facilities.beds,
+      ownership: facilities.ownership,
+    })
     .from(facilities)
-    .where(and(...facConds))
+    .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
+    .where(
+      and(
+        eq(accountFacilities.accountId, accountId),
+        gte(facilities.signalScore, effectiveMinScore),
+        stateFilter ? eq(facilities.state, stateFilter as "IL") : undefined,
+      ),
+    )
     .orderBy(desc(facilities.signalScore))
-    .limit(200);
+    .limit(limit)
+    .offset(offset);
 
-  if (facRows.length === 0) {
-    res.json({ leads: [], total: 0, limit, offset });
+  if (rows.length === 0) {
+    res.json({ leads: [], total: rows.length, offset, limit });
     return;
   }
 
-  const facilityIds = facRows.map((f) => f.id);
+  const facilityIds = rows.map((r) => r.id);
 
-  const cutoff = new Date();
-  cutoff.setMonth(cutoff.getMonth() - 24);
+  // Batch-fetch all active signals
+  const allSigs = await db
+    .select()
+    .from(purchaseSignals)
+    .where(and(inArray(purchaseSignals.facilityId, facilityIds), eq(purchaseSignals.isActive, true)));
 
-  const [signals, contacts, cons] = await Promise.all([
-    db
-      .select()
-      .from(purchaseSignals)
-      .where(and(inArray(purchaseSignals.facilityId, facilityIds), gte(purchaseSignals.detectedAt, cutoff)))
-      .orderBy(desc(purchaseSignals.detectedAt)),
-    db
-      .select()
-      .from(facilityContacts)
-      .where(inArray(facilityContacts.facilityId, facilityIds))
-      .orderBy(desc(facilityContacts.buyingAuthorityScore))
-      .limit(facilityIds.length * 5),
-    db
-      .select()
-      .from(conFilings)
-      .where(inArray(conFilings.facilityId, facilityIds))
-      .orderBy(desc(conFilings.filingDate))
-      .limit(facilityIds.length),
-  ]);
-
-  const sigsByFac = new Map<string, typeof signals>();
-  for (const s of signals) {
-    if (!s.facilityId) continue;
-    const arr = sigsByFac.get(s.facilityId) ?? [];
-    arr.push(s);
-    sigsByFac.set(s.facilityId, arr);
+  const sigsByFacility = new Map<string, typeof allSigs>();
+  for (const sig of allSigs) {
+    if (!sigsByFacility.has(sig.facilityId)) sigsByFacility.set(sig.facilityId, []);
+    sigsByFacility.get(sig.facilityId)!.push(sig);
   }
 
-  const contactsByFac = new Map<string, typeof contacts>();
-  for (const c of contacts) {
-    const arr = contactsByFac.get(c.facilityId) ?? [];
-    arr.push(c);
-    contactsByFac.set(c.facilityId, arr);
-  }
+  // Batch-fetch contacts sorted by buying authority
+  const allContacts = await db
+    .select({
+      id: facilityContacts.id,
+      facilityId: facilityContacts.facilityId,
+      firstName: facilityContacts.firstName,
+      lastName: facilityContacts.lastName,
+      title: facilityContacts.title,
+      email: facilityContacts.email,
+      phone: facilityContacts.phone,
+      buyingAuthorityScore: facilityContacts.buyingAuthorityScore,
+      humanVerified: facilityContacts.humanVerified,
+    })
+    .from(facilityContacts)
+    .where(inArray(facilityContacts.facilityId, facilityIds))
+    .orderBy(desc(facilityContacts.buyingAuthorityScore));
 
-  const conByFac = new Map<string, (typeof cons)[0]>();
-  for (const con of cons) {
-    if (con.facilityId && !conByFac.has(con.facilityId)) {
-      conByFac.set(con.facilityId, con);
+  const contactsByFacility = new Map<string, typeof allContacts>();
+  for (const c of allContacts) {
+    if (!contactsByFacility.has(c.facilityId)) contactsByFacility.set(c.facilityId, []);
+    if (contactsByFacility.get(c.facilityId)!.length < 3) {
+      contactsByFacility.get(c.facilityId)!.push(c);
     }
   }
 
-  const allLeads = facRows
-    .map((fac) => {
-      const facSigs = sigsByFac.get(fac.id) ?? [];
-      const signalTypes = facSigs.map((s) => s.signalType as string);
-      const tier = computeTier(signalTypes);
-      const recommendedAction = computeRecommendedAction(signalTypes);
+  const SIGNAL_WEIGHTS: Record<string, number> = {
+    con_approved: 40, rfp_posted: 40, con_filed: 35, bond_issued: 35,
+    hcris_depreciation_spike: 25, grant_awarded: 25, equipment_age_7yr: 20,
+    high_utilization: 15, clinical_trial: 15, sec_capex_flag: 18,
+    system_signal_propagated: 15,
+  };
 
-      const topSignals = [...facSigs]
-        .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+  const leads = rows
+    .filter((f) => {
+      const score = f.signalScore ?? 0;
+      if (tierFilter === "A" && score < 70) return false;
+      if (tierFilter === "B" && (score < 50 || score >= 70)) return false;
+      if (tierFilter === "C" && (score < 40 || score >= 50)) return false;
+      return true;
+    })
+    .map((f) => {
+      const score = f.signalScore ?? 0;
+      const sigs = sigsByFacility.get(f.id) ?? [];
+      const typeSet = new Set(sigs.map((s) => s.signalType));
+      const tier = computeTier(score);
+      const { label: recommendedAction, urgency } = computeRecommendedAction(score, typeSet);
+      const days = daysUntilFYE(f.fiscalYearEndMonth);
+      const timingBonus = computeTimingBonus(f.fiscalYearEndMonth);
+
+      // Top 3 signals by weight
+      const topSignals = sigs
+        .sort((a, b) => (SIGNAL_WEIGHTS[b.signalType] ?? 0) - (SIGNAL_WEIGHTS[a.signalType] ?? 0))
         .slice(0, 3)
-        .map((s) => ({
-          signalType: s.signalType,
-          signalDate: s.detectedAt,
-          confidence: s.confidence,
-          source: s.source,
-          metadata: s.metadata,
-        }));
+        .map((s) => ({ type: s.signalType, detectedAt: s.detectedAt, confidence: s.confidence ?? 50 }));
 
-      const facContacts = (contactsByFac.get(fac.id) ?? []).slice(0, 3).map((c) => ({
-        id: c.id,
-        name: `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim(),
-        title: c.title,
-        email: c.email,
-        phone: c.phone,
-        buyingAuthorityScore: c.buyingAuthorityScore,
-      }));
-
-      const latestCon = conByFac.get(fac.id) ?? null;
-      const tier1Count = signalTypes.filter((t) => TIER_1_INTENT.has(t)).length;
-      const tier2Count = signalTypes.filter((t) => TIER_2.has(t)).length;
+      // Cross-source matches
+      const crossSourceMatches: string[] = [];
+      if (typeSet.has("con_approved") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
+        crossSourceMatches.push("CON Approved + Capital Confirmed");
+      if (typeSet.has("con_filed") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
+        crossSourceMatches.push("CON Filed + Bond Financing");
+      if (typeSet.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending"))
+        crossSourceMatches.push("RFP + Prior Award Match");
+      if (typeSet.has("grant_awarded") && typeSet.has("con_filed"))
+        crossSourceMatches.push("Grant + CON Expansion");
+      if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed"))
+        crossSourceMatches.push("Depreciation Spike + CON Filed");
+      if (typeSet.has("system_signal_propagated") && (typeSet.has("con_filed") || typeSet.has("con_approved")))
+        crossSourceMatches.push("System-Wide Capital Signal");
 
       return {
-        facilityId: fac.id,
-        facilityName: fac.name,
-        city: fac.city,
-        state: fac.state,
-        facilityType: fac.facilityType,
-        signalScore: fac.signalScore ?? 0,
-        leadTier: tier,
+        facilityId: f.id,
+        name: f.name,
+        city: f.city,
+        state: f.state,
+        facilityType: f.facilityType,
+        systemName: f.systemName,
+        parentSystemId: f.parentSystemId,
+        beds: f.beds,
+        ownership: f.ownership,
+        score,
+        tier,
         recommendedAction,
+        urgency,
         topSignals,
-        signalBreakdown: { tier1Count, tier2Count, total: facSigs.length },
-        contacts: facContacts,
-        latestConFiling: latestCon
-          ? {
-              status: latestCon.status,
-              modality: latestCon.modality,
-              requestedAmount: latestCon.requestedAmount,
-              filingDate: latestCon.filingDate,
-              filingUrl: latestCon.filingUrl,
-            }
-          : null,
+        crossSourceMatches,
+        contacts: contactsByFacility.get(f.id) ?? [],
+        fye: {
+          month: f.fiscalYearEndMonth,
+          source: f.fiscalYearEndSource,
+          daysUntil: days,
+          timingBonus,
+          budgetWindowStatus: budgetWindowStatus(days),
+        },
       };
-    })
-    .filter((lead) => !tierFilter || lead.leadTier === tierFilter);
+    });
 
-  const tierCounts = { A: 0, B: 0, C: 0 };
-  for (const lead of allLeads) tierCounts[lead.leadTier]++;
+  res.json({ leads, total: leads.length, offset, limit });
+});
 
-  const total = allLeads.length;
-  const paginated = allLeads.slice(offset, offset + limit);
+// ─── GET /leads/summary ────────────────────────────────────────────────────────
 
-  res.json({ leads: paginated, total, limit, offset, tierCounts });
+router.get("/leads/summary", requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+
+  const [tierA] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(facilities)
+    .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
+    .where(and(eq(accountFacilities.accountId, accountId), gte(facilities.signalScore, 70)));
+
+  const [tierB] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(facilities)
+    .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
+    .where(
+      and(
+        eq(accountFacilities.accountId, accountId),
+        gte(facilities.signalScore, 50),
+        sql`${facilities.signalScore} < 70`,
+      ),
+    );
+
+  const [tierC] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(facilities)
+    .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
+    .where(
+      and(
+        eq(accountFacilities.accountId, accountId),
+        gte(facilities.signalScore, 40),
+        sql`${facilities.signalScore} < 50`,
+      ),
+    );
+
+  res.json({
+    tierA: tierA?.count ?? 0,
+    tierB: tierB?.count ?? 0,
+    tierC: tierC?.count ?? 0,
+  });
 });
 
 export default router;
