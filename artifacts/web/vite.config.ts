@@ -41,10 +41,19 @@ const clerkProxyUrl = (() => {
   return process.env.VITE_CLERK_PROXY_URL ?? "";
 })();
 
+// Replit provides CLERK_PUBLISHABLE_KEY (no VITE_ prefix) in production build
+// environments. Vite only forwards VITE_-prefixed vars automatically, so we
+// manually inject it here so ClerkProvider gets the live key in the bundle.
+const clerkPublishableKey =
+  process.env.VITE_CLERK_PUBLISHABLE_KEY ??
+  process.env.CLERK_PUBLISHABLE_KEY ??
+  "";
+
 export default defineConfig({
   base: basePath,
   define: {
     "import.meta.env.VITE_CLERK_PROXY_URL": JSON.stringify(clerkProxyUrl),
+    "import.meta.env.VITE_CLERK_PUBLISHABLE_KEY": JSON.stringify(clerkPublishableKey),
   },
   plugins: [
     react(),
