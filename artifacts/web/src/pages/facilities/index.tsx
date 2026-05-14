@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Search, Plus, MapPin, Activity, BookmarkCheck, Bookmark } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Building2, Search, Plus, MapPin, Activity, BookmarkCheck, Bookmark, AlertTriangle } from "lucide-react";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -55,14 +56,89 @@ const TYPE_LABELS: Record<string, string> = Object.fromEntries(
   FACILITY_TYPES.map((t) => [t.value, t.label])
 );
 
+interface SignalBreakdown {
+  tier1Count: number;
+  tier2Count: number;
+  tier3Count: number;
+  crossSourceBonuses: string[];
+  topSignals: Array<{ signalType: string; weight: number }>;
+}
+
+function scoreColor(score: number): { bg: string; text: string; border: string; label: string } {
+  if (score >= 81) return { bg: "bg-red-500/15", text: "text-red-700", border: "border-red-300", label: "Critical" };
+  if (score >= 61) return { bg: "bg-orange-500/15", text: "text-orange-700", border: "border-orange-300", label: "High" };
+  if (score >= 31) return { bg: "bg-yellow-500/15", text: "text-yellow-700", border: "border-yellow-300", label: "Medium" };
+  return { bg: "bg-muted", text: "text-muted-foreground", border: "border-border", label: "Low" };
+}
+
+function SignalScoreBadge({ score, breakdown }: { score: number; breakdown?: SignalBreakdown | null }) {
+  const colors = scoreColor(score);
+  const trigger = (
+    <div
+      className={`inline-flex items-center gap-1 font-bold px-2 py-1 rounded border text-xs cursor-pointer ${colors.bg} ${colors.text} ${colors.border}`}
+    >
+      <Activity className="h-3 w-3" />
+      {score}
+    </div>
+  );
+
+  if (!breakdown) return trigger;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+      <TooltipContent side="left" className="max-w-xs">
+        <div className="space-y-2 text-xs">
+          <div className="font-semibold text-sm">{colors.label} Priority (score: {score})</div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div>
+              <div className="font-bold text-red-600">{breakdown.tier1Count}</div>
+              <div className="text-muted-foreground">Tier 1</div>
+            </div>
+            <div>
+              <div className="font-bold text-orange-600">{breakdown.tier2Count}</div>
+              <div className="text-muted-foreground">Tier 2</div>
+            </div>
+            <div>
+              <div className="font-bold text-muted-foreground">{breakdown.tier3Count}</div>
+              <div className="text-muted-foreground">Tier 3</div>
+            </div>
+          </div>
+          {breakdown.topSignals.length > 0 && (
+            <div>
+              <div className="font-medium mb-1">Top signals:</div>
+              {breakdown.topSignals.slice(0, 3).map((s) => (
+                <div key={s.signalType} className="flex justify-between">
+                  <span className="font-mono">{s.signalType.replace(/_/g, " ")}</span>
+                  <span className="text-primary">+{s.weight}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {breakdown.crossSourceBonuses.length > 0 && (
+            <div className="border-t pt-1">
+              <div className="font-medium mb-1">Cross-source bonuses:</div>
+              {breakdown.crossSourceBonuses.map((b) => (
+                <div key={b} className="text-primary text-xs">{b}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export default function FacilitiesPage() {
   const [search, setSearch] = useState("");
   const [state, setState] = useState<string>("all");
   const [facilityType, setFacilityType] = useState<string>("all");
   const [trackedOnly, setTrackedOnly] = useState(false);
+  const [highPriorityOnly, setHighPriorityOnly] = useState(false);
   const [npiInput, setNpiInput] = useState("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [page, setPage] = useState(0);
+  const [sortBy, setSortBy] = useState<"signal_desc" | "signal_asc" | "name">("signal_desc");
   const { toast } = useToast();
   const limit = 50;
 
@@ -110,6 +186,20 @@ export default function FacilitiesPage() {
   const total = facilitiesRes?.total ?? 0;
   const totalPages = Math.ceil(total / limit);
 
+  let displayData = facilitiesRes?.data ?? [];
+
+  if (highPriorityOnly) {
+    displayData = displayData.filter((f) => (f.signalScore ?? 0) >= 61);
+  }
+
+  if (sortBy === "signal_desc") {
+    displayData = [...displayData].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
+  } else if (sortBy === "signal_asc") {
+    displayData = [...displayData].sort((a, b) => (a.signalScore ?? 0) - (b.signalScore ?? 0));
+  } else if (sortBy === "name") {
+    displayData = [...displayData].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -120,7 +210,15 @@ export default function FacilitiesPage() {
           </p>
         </div>
 
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            variant={highPriorityOnly ? "default" : "outline"}
+            onClick={() => { setHighPriorityOnly(!highPriorityOnly); setPage(0); }}
+            size="sm"
+          >
+            <AlertTriangle className="mr-2 h-4 w-4" />
+            {highPriorityOnly ? "High Priority" : "All Scores"}
+          </Button>
           <Button
             variant={trackedOnly ? "default" : "outline"}
             onClick={() => { setTrackedOnly(!trackedOnly); setPage(0); }}
@@ -196,6 +294,16 @@ export default function FacilitiesPage() {
                   ))}
                 </SelectContent>
               </Select>
+              <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue placeholder="Sort by" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="signal_desc">Score: High → Low</SelectItem>
+                  <SelectItem value="signal_asc">Score: Low → High</SelectItem>
+                  <SelectItem value="name">Name A–Z</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </CardHeader>
@@ -222,61 +330,62 @@ export default function FacilitiesPage() {
                       <td className="p-4 text-right"><Skeleton className="h-8 w-20 ml-auto" /></td>
                     </tr>
                   ))
-                ) : facilitiesRes?.data && facilitiesRes.data.length > 0 ? (
-                  facilitiesRes.data.map((facility) => (
-                    <tr key={facility.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                      <td className="p-4">
-                        <div className="flex items-center gap-2">
-                          <Link href={`/facilities/${facility.id}`} className="font-medium text-primary hover:underline">
-                            {facility.name}
-                          </Link>
-                          {(facility as any).tracked && (
-                            <Badge variant="secondary" className="text-xs px-1.5 py-0">Tracked</Badge>
+                ) : displayData.length > 0 ? (
+                  displayData.map((facility) => {
+                    const score = facility.signalScore ?? 0;
+                    const breakdown = (facility as { signalBreakdown?: SignalBreakdown | null }).signalBreakdown;
+                    return (
+                      <tr key={facility.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                        <td className="p-4">
+                          <div className="flex items-center gap-2">
+                            <Link href={`/facilities/${facility.id}`} className="font-medium text-primary hover:underline">
+                              {facility.name}
+                            </Link>
+                            {(facility as { tracked?: boolean }).tracked && (
+                              <Badge variant="secondary" className="text-xs px-1.5 py-0">Tracked</Badge>
+                            )}
+                          </div>
+                          {facility.systemName && (
+                            <div className="text-xs text-muted-foreground mt-0.5">{facility.systemName}</div>
                           )}
-                        </div>
-                        {facility.systemName && (
-                          <div className="text-xs text-muted-foreground mt-0.5">{facility.systemName}</div>
-                        )}
-                      </td>
-                      <td className="p-4 hidden md:table-cell">
-                        <div className="flex items-center gap-2 text-sm">
-                          <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                          <span>{TYPE_LABELS[facility.facilityType] ?? facility.facilityType}</span>
-                        </div>
-                        <div className="flex items-center gap-2 mt-1 text-muted-foreground text-xs">
-                          <MapPin className="h-3 w-3 shrink-0" />
-                          {[facility.city, facility.state].filter(Boolean).join(", ")}
-                        </div>
-                      </td>
-                      <td className="p-4 text-right">
-                        <div className="inline-flex items-center gap-1 font-bold text-primary bg-primary/10 px-2 py-1 rounded text-xs">
-                          <Activity className="h-3 w-3" />
-                          {facility.signalScore ?? 0}
-                        </div>
-                      </td>
-                      <td className="p-4 text-right hidden lg:table-cell">
-                        <span className="text-xs text-muted-foreground font-mono">{facility.npi}</span>
-                      </td>
-                      <td className="p-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {!(facility as any).tracked && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 px-2 text-xs"
-                              onClick={() => handleTrack(facility.npi)}
-                              disabled={createFacility.isPending}
-                            >
-                              <Bookmark className="h-3 w-3 mr-1" /> Track
+                        </td>
+                        <td className="p-4 hidden md:table-cell">
+                          <div className="flex items-center gap-2 text-sm">
+                            <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                            <span>{TYPE_LABELS[facility.facilityType] ?? facility.facilityType}</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 text-muted-foreground text-xs">
+                            <MapPin className="h-3 w-3 shrink-0" />
+                            {[facility.city, facility.state].filter(Boolean).join(", ")}
+                          </div>
+                        </td>
+                        <td className="p-4 text-right">
+                          <SignalScoreBadge score={score} breakdown={breakdown} />
+                        </td>
+                        <td className="p-4 text-right hidden lg:table-cell">
+                          <span className="text-xs text-muted-foreground font-mono">{facility.npi}</span>
+                        </td>
+                        <td className="p-4 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            {!(facility as { tracked?: boolean }).tracked && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => handleTrack(facility.npi)}
+                                disabled={createFacility.isPending}
+                              >
+                                <Bookmark className="h-3 w-3 mr-1" /> Track
+                              </Button>
+                            )}
+                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" asChild>
+                              <Link href={`/facilities/${facility.id}`}>View</Link>
                             </Button>
-                          )}
-                          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" asChild>
-                            <Link href={`/facilities/${facility.id}`}>View</Link>
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
                     <td colSpan={5} className="h-48 text-center text-muted-foreground">

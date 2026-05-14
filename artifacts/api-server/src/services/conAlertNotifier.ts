@@ -12,11 +12,15 @@
  * notification's own timestamp. That keeps progress correct even when a
  * single ingestion run produces more than `BATCH_SIZE` matching filings:
  * we page through ascending until the backlog is exhausted.
+ *
+ * Slack integration: if the account has `settings.slackWebhookUrl` set, a
+ * rate-limited fire-and-forget POST is sent for each newly-matched filing.
+ * Rate is capped to 1 message per 30 seconds per account to avoid flooding.
  */
 import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
-// (kept) types from drizzle
 import {
   db,
+  accounts,
   conAlertSubscriptions,
   conAlertNotifications,
   conFilings,
@@ -29,6 +33,74 @@ export interface ConAlertNotifyResult {
   subscriptionsChecked: number;
   notificationsCreated: number;
   errors: number;
+  slackMessagesSent: number;
+}
+
+// Slack rate-limiter: tracks last-sent timestamp per accountId so we never
+// exceed 1 message per 30 seconds per account (fire-and-forget).
+const SLACK_MIN_INTERVAL_MS = 30_000;
+const slackLastSent = new Map<string, number>();
+
+async function maybeSendSlack(
+  accountId: string,
+  webhookUrl: string,
+  filing: {
+    state: string;
+    applicantName: string | null;
+    equipmentType: string | null;
+    modality: string | null;
+    statusNormalized: "approved" | "filed" | null;
+  },
+): Promise<boolean> {
+  const now = Date.now();
+  const last = slackLastSent.get(accountId) ?? 0;
+  if (now - last < SLACK_MIN_INTERVAL_MS) {
+    return false;
+  }
+  slackLastSent.set(accountId, now);
+
+  const statusEmoji = filing.statusNormalized === "approved" ? "✅" : "📋";
+  const label = filing.statusNormalized === "approved" ? "Approved" : "Filed";
+  const equipment = filing.equipmentType || filing.modality || "Equipment";
+
+  const text =
+    `${statusEmoji} *New CON filing — ${filing.state}* | ${label}\n` +
+    `*Applicant:* ${filing.applicantName || "Unknown"}\n` +
+    `*Equipment:* ${equipment}`;
+
+  fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+    signal: AbortSignal.timeout(5000),
+  }).catch((err: unknown) => {
+    logger.warn({ err, accountId }, "conAlertNotifier: slack webhook failed");
+  });
+
+  return true;
+}
+
+// Cache webhook URLs per run so we don't hit the DB per subscription.
+const accountWebhookCache = new Map<string, string | null>();
+
+async function getSlackWebhookUrl(accountId: string): Promise<string | null> {
+  if (accountWebhookCache.has(accountId)) {
+    return accountWebhookCache.get(accountId) ?? null;
+  }
+  try {
+    const [row] = await db
+      .select({ settings: accounts.settings })
+      .from(accounts)
+      .where(eq(accounts.id, accountId))
+      .limit(1);
+    const settings = (row?.settings as Record<string, unknown>) ?? {};
+    const url = typeof settings.slackWebhookUrl === "string" ? settings.slackWebhookUrl.trim() : null;
+    const valid = url && url.startsWith("https://hooks.slack.com/") ? url : null;
+    accountWebhookCache.set(accountId, valid);
+    return valid;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeStatus(raw: string | null | undefined): "approved" | "filed" | null {
@@ -69,10 +141,14 @@ const MAX_BATCHES_PER_SUB = 20;
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 
 export async function notifyConAlerts(): Promise<ConAlertNotifyResult> {
+  // Reset per-run cache so account settings changes take effect.
+  accountWebhookCache.clear();
+
   const result: ConAlertNotifyResult = {
     subscriptionsChecked: 0,
     notificationsCreated: 0,
     errors: 0,
+    slackMessagesSent: 0,
   };
 
   const subs = await db
@@ -90,6 +166,8 @@ export async function notifyConAlerts(): Promise<ConAlertNotifyResult> {
       let cursorTs: Date = sub.lastProcessedAt ?? sub.createdAt ?? new Date(0);
       let cursorId: string = sub.lastProcessedId ?? ZERO_UUID;
 
+      const webhookUrl = await getSlackWebhookUrl(sub.accountId);
+
       for (let batch = 0; batch < MAX_BATCHES_PER_SUB; batch += 1) {
         const filings = await db
           .select({
@@ -98,6 +176,7 @@ export async function notifyConAlerts(): Promise<ConAlertNotifyResult> {
             modality: conFilings.modality,
             status: conFilings.status,
             applicantName: conFilings.applicantName,
+            equipmentType: conFilings.equipmentType,
             facilityId: conFilings.facilityId,
             createdAt: conFilings.createdAt,
           })
@@ -153,6 +232,13 @@ export async function notifyConAlerts(): Promise<ConAlertNotifyResult> {
             .returning({ id: conAlertNotifications.id });
 
           result.notificationsCreated += inserted.length;
+
+          // Send a rate-limited Slack notification for the first match per batch.
+          if (webhookUrl && inserted.length > 0) {
+            const firstMatch = candidates[0];
+            const sent = await maybeSendSlack(sub.accountId, webhookUrl, firstMatch);
+            if (sent) result.slackMessagesSent += 1;
+          }
         }
 
         // Advance the cursor to the last filing in this batch — even if it

@@ -996,6 +996,9 @@ export type ListConFilingsParams = {
    */
   state?: string;
   status?: ListConFilingsStatus;
+  equipmentType?: string;
+  fromDate?: string;
+  toDate?: string;
   /**
    * @maximum 200
    */

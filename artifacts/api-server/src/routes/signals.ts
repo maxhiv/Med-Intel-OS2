@@ -1,7 +1,9 @@
 import { Router, type IRouter } from "express";
-import { sql, desc, eq, and, type SQL } from "drizzle-orm";
-import { db, conFilings, facilities, accountFacilities } from "@workspace/db";
+import { sql, desc, eq, and, ilike, type SQL } from "drizzle-orm";
+import { db, conFilings, facilities, accountFacilities, subAccounts } from "@workspace/db";
 import { requirePlatformAdmin, requireAccount } from "../middlewares/auth";
+import { decodeStoredCredentials } from "../services/encryption";
+import { logger } from "../lib/logger";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
 import { ingestConFilings } from "../services/conFilingsIngestor";
@@ -44,6 +46,9 @@ router.get("/signals/con-filings", requireAccount, async (req, res) => {
   const offset = Math.max(Number(req.query.offset) || 0, 0);
   const stateRaw = typeof req.query.state === "string" ? req.query.state.trim().toUpperCase() : "";
   const statusRaw = typeof req.query.status === "string" ? req.query.status.trim().toLowerCase() : "";
+  const equipmentTypeRaw = typeof req.query.equipmentType === "string" ? req.query.equipmentType.trim() : "";
+  const fromDateRaw = typeof req.query.fromDate === "string" ? req.query.fromDate.trim() : "";
+  const toDateRaw = typeof req.query.toDate === "string" ? req.query.toDate.trim() : "";
 
   const filters: SQL[] = [];
   if (stateRaw.length === 2) {
@@ -55,6 +60,25 @@ router.get("/signals/con-filings", requireAccount, async (req, res) => {
     filters.push(
       sql`${conFilings.status} IS NOT NULL AND ${conFilings.status} !~* 'approv|grant(ed)?|issued'`,
     );
+  }
+  if (equipmentTypeRaw) {
+    filters.push(ilike(conFilings.equipmentType, `%${equipmentTypeRaw}%`));
+  }
+  if (fromDateRaw) {
+    const fromDate = new Date(fromDateRaw);
+    if (!Number.isNaN(fromDate.getTime())) {
+      filters.push(
+        sql`COALESCE(${conFilings.filingDate}, ${conFilings.createdAt}::date) >= ${fromDate.toISOString().slice(0, 10)}::date`,
+      );
+    }
+  }
+  if (toDateRaw) {
+    const toDate = new Date(toDateRaw);
+    if (!Number.isNaN(toDate.getTime())) {
+      filters.push(
+        sql`COALESCE(${conFilings.filingDate}, ${conFilings.createdAt}::date) <= ${toDate.toISOString().slice(0, 10)}::date`,
+      );
+    }
   }
   const whereClause = filters.length > 0 ? and(...filters) : undefined;
 
@@ -118,6 +142,118 @@ router.get("/signals/con-filings", requireAccount, async (req, res) => {
 
   res.json({ data, total, limit, offset, states });
 });
+
+// Push a CON filing as a pipeline opportunity to a GHL sub-account.
+// Body: { subAccountId: string, opportunityName?: string }
+router.post(
+  "/signals/con-filings/:id/push-to-crm",
+  requireAccount,
+  async (req, res) => {
+    const accountId = req.currentAccount!.id;
+    const filingId = String(req.params.id);
+    const subAccountId = typeof req.body?.subAccountId === "string" ? req.body.subAccountId.trim() : "";
+    const opportunityNameOverride = typeof req.body?.opportunityName === "string" ? req.body.opportunityName.trim() : "";
+
+    if (!subAccountId) {
+      res.status(400).json({ error: "subAccountId_required" });
+      return;
+    }
+
+    const [filing] = await db
+      .select()
+      .from(conFilings)
+      .where(eq(conFilings.id, filingId))
+      .limit(1);
+    if (!filing) {
+      res.status(404).json({ error: "filing_not_found" });
+      return;
+    }
+
+    const [sub] = await db
+      .select()
+      .from(subAccounts)
+      .where(and(eq(subAccounts.id, subAccountId), eq(subAccounts.accountId, accountId)))
+      .limit(1);
+    if (!sub) {
+      res.status(404).json({ error: "sub_account_not_found" });
+      return;
+    }
+
+    const creds = decodeStoredCredentials<{ accessToken?: string; locationId?: string }>(
+      sub.crmCredentials ?? {},
+    );
+
+    const opportunityName =
+      opportunityNameOverride ||
+      `CON: ${filing.applicantName || "Unknown"} — ${filing.state} — ${filing.equipmentType || filing.modality || "Equipment"}`;
+
+    const monetaryValue = Number(filing.approvedAmount ?? filing.requestedAmount ?? 0);
+
+    if (sub.crmType !== "ghl") {
+      res.status(400).json({ error: "unsupported_crm_type_for_push", crmType: sub.crmType ?? null });
+      return;
+    }
+
+    if (!creds.accessToken || !creds.locationId) {
+      res.status(400).json({ error: "ghl_missing_credentials" });
+      return;
+    }
+
+    try {
+      // Upsert a contact from the filing applicant
+      const upsertRes = await fetch("https://services.leadconnectorhq.com/contacts/upsert", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${creds.accessToken}`,
+          Version: "2021-07-28",
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          locationId: creds.locationId,
+          companyName: filing.applicantName || "Unknown applicant",
+          source: "MedIntel OS — CON Filing",
+          tags: ["medintel-con", `state-${filing.state}`, `status-${filing.status?.toLowerCase().replace(/\s/g, "-") ?? "unknown"}`],
+        }),
+      });
+      const upsertBody = await upsertRes.json().catch(() => ({})) as { contact?: { id?: string }; id?: string };
+      const crmContactId = upsertBody?.contact?.id ?? (upsertBody as { id?: string }).id ?? null;
+
+      // Create a pipeline opportunity
+      const oppRes = await fetch("https://services.leadconnectorhq.com/opportunities/", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${creds.accessToken}`,
+          Version: "2021-07-28",
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          pipelineId: null,
+          locationId: creds.locationId,
+          name: opportunityName,
+          monetaryValue,
+          status: "open",
+          ...(crmContactId ? { contactId: crmContactId } : {}),
+          customFields: [
+            { key: "con_state", field_value: filing.state },
+            { key: "equipment_type", field_value: filing.equipmentType || filing.modality || "" },
+            { key: "filing_date", field_value: filing.filingDate ?? "" },
+          ],
+        }),
+      });
+      const oppBody = await oppRes.json().catch(() => ({})) as { opportunity?: { id?: string }; id?: string };
+      const opportunityId = (oppBody as { opportunity?: { id?: string } })?.opportunity?.id ?? (oppBody as { id?: string }).id ?? null;
+
+      logger.info({ filingId, subAccountId }, "signals: CON filing pushed to GHL as opportunity");
+
+      res.json({ ok: true, crmContactId, opportunityId, opportunityName, monetaryValue });
+    } catch (err) {
+      logger.warn({ err, filingId, subAccountId }, "signals: push-to-crm failed");
+      res.status(502).json({ ok: false, error: "push_failed", message: String(err) });
+    }
+  },
+);
 
 router.post("/signals/recompute", requirePlatformAdmin, async (_req, res) => {
   const result = await recomputeAllScores();

@@ -617,6 +617,9 @@ export const ListConFilingsQueryParams = zod.object({
     .max(listConFilingsQueryStateMax)
     .optional(),
   status: zod.enum(["approved", "filed"]).optional(),
+  equipmentType: zod.string().optional(),
+  fromDate: zod.string().optional(),
+  toDate: zod.string().optional(),
   limit: zod.coerce
     .number()
     .max(listConFilingsQueryLimitMax)

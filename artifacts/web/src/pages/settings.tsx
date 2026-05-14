@@ -21,7 +21,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Building2, ShieldCheck, Bell, FileSignature } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Building2, ShieldCheck, Bell, FileSignature, Slack } from "lucide-react";
 
 const ALL_STATES = [
   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
@@ -228,6 +229,104 @@ function ConAlertPreferencesCard() {
   );
 }
 
+function SlackWebhookCard() {
+  const { toast } = useToast();
+  const { data: me } = useGetMe();
+  const [webhookUrl, setWebhookUrl] = useState<string>("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (me && !loaded) {
+      setLoaded(true);
+      const url = (me.account as { settings?: { slackWebhookUrl?: string } } | undefined)?.settings?.slackWebhookUrl ?? "";
+      setWebhookUrl(url || "");
+    }
+  }, [me, loaded]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch("/api/me/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slackWebhookUrl: webhookUrl.trim() }),
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast({ title: "Saved", description: "Slack webhook URL updated." });
+    } catch {
+      toast({ title: "Error", description: "Could not save Slack webhook URL.", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    setIsTesting(true);
+    try {
+      const res = await fetch("/api/me/settings/test-slack", {
+        method: "POST",
+        credentials: "include",
+      });
+      const body = await res.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (body.ok) {
+        toast({ title: "Test sent!", description: "Check your Slack channel for the test message." });
+      } else {
+        toast({ title: "Test failed", description: body.error ?? "Unknown error", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Could not reach the API.", variant: "destructive" });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  return (
+    <Card className="md:col-span-2 bg-card">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Slack className="h-5 w-5" /> Slack Notifications
+        </CardTitle>
+        <CardDescription>
+          Receive a Slack message when a matching CON filing is detected. Rate-limited to one message per 30 seconds per account.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <label htmlFor="slack-webhook" className="text-sm font-medium">
+            Incoming Webhook URL
+          </label>
+          <div className="flex gap-2">
+            <Input
+              id="slack-webhook"
+              placeholder="https://hooks.slack.com/services/..."
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              className="font-mono text-sm"
+              data-testid="input-slack-webhook"
+            />
+            <Button variant="outline" onClick={handleSave} disabled={isSaving}>
+              {isSaving ? "Saving…" : "Save"}
+            </Button>
+            <Button variant="secondary" onClick={handleTest} disabled={isTesting || !webhookUrl.startsWith("https://hooks.slack.com/")}>
+              {isTesting ? "Testing…" : "Test"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Create an incoming webhook at{" "}
+            <a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+              api.slack.com/messaging/webhooks
+            </a>{" "}
+            and paste the URL here.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const { data: me } = useGetMe();
 
@@ -280,6 +379,8 @@ export default function SettingsPage() {
         </Card>
 
         <ConAlertPreferencesCard />
+
+        <SlackWebhookCard />
 
         <div className="md:col-span-2 mt-4 flex justify-center">
            <UserProfile 
