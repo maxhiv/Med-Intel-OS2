@@ -736,4 +736,110 @@ router.post(
   },
 );
 
+/**
+ * Orchestration endpoint: trigger every live ingestor in parallel and return
+ * a consolidated per-source results object.
+ *
+ * Used by the refresh-all-sources.ts script (authenticated via
+ * X-Internal-Admin-Key matching the INTERNAL_ADMIN_KEY secret) and, in
+ * future, by the admin-panel "Refresh All Data" button (platform admin
+ * Clerk session).
+ *
+ * CON filings are triggered once per state (IL, NY, FL, NC, GA, MI, OH) so
+ * each state is independently reported.
+ */
+const CON_INGEST_STATES = ["IL", "NY", "FL", "NC", "GA", "MI", "OH"] as const;
+
+router.post("/signals/ingest/all", async (req, res, next) => {
+  // Scoped internal-key check for this route only (script auth).
+  const internalKey = process.env.INTERNAL_ADMIN_KEY;
+  const providedKey = req.headers["x-internal-admin-key"];
+  const isInternalCaller = internalKey && providedKey === internalKey;
+
+  if (!isInternalCaller) {
+    // Fall through to standard platform-admin check.
+    if (!req.currentUser) {
+      res.status(401).json({ error: "unauthenticated" });
+      return;
+    }
+    if (!req.isPlatformAdmin) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+  }
+
+  type SourceResult = {
+    status: "ok" | "error";
+    signalsInserted: number;
+    errors: number;
+    errorMsg?: string;
+    durationMs: number;
+  };
+
+  async function runSource(
+    fn: () => Promise<{ signalsInserted: number; errors: number }>,
+  ): Promise<SourceResult> {
+    const t0 = Date.now();
+    try {
+      const r = await fn();
+      return { status: r.errors > 0 ? "error" : "ok", signalsInserted: r.signalsInserted, errors: r.errors, durationMs: Date.now() - t0 };
+    } catch (err) {
+      return { status: "error", signalsInserted: 0, errors: 1, errorMsg: String(err).slice(0, 200), durationMs: Date.now() - t0 };
+    }
+  }
+
+  try {
+    const allAdapters = buildAdapters();
+    const results: Record<string, SourceResult> = {};
+
+    // Batch 1: CON filings per state + Clinical Trials (parallel)
+    const [ctResult, ...conStateResults] = await Promise.all([
+      runSource(() => ingestClinicalTrials({ limit: 100 })),
+      ...CON_INGEST_STATES.map((st) => {
+        const adapters = allAdapters.filter((a) => a.state === st);
+        if (adapters.length === 0) {
+          return Promise.resolve<SourceResult>({ status: "error", signalsInserted: 0, errors: 1, errorMsg: "no adapter configured", durationMs: 0 });
+        }
+        return runSource(() => ingestConFilings({ adapters }));
+      }),
+    ]);
+    results["clinical_trials"] = ctResult;
+    CON_INGEST_STATES.forEach((st, i) => { results[`con_${st.toLowerCase()}`] = conStateResults[i]; });
+
+    // Batch 2: 15 free-API sources (parallel)
+    const FREE: Array<[string, () => Promise<{ signalsInserted: number; errors: number }>]> = [
+      ["nppes",          () => ingestNppes({ limit: 50 })],
+      ["fda_510k",       () => ingestFda510k({ limit: 50 })],
+      ["fda_recalls",    () => ingestFdaRecalls({ limit: 50 })],
+      ["fda_maude",      () => ingestFdaMaude({ limit: 50 })],
+      ["fda_class",      () => ingestFdaClassification({ limit: 50 })],
+      ["propublica_990", () => ingestPropublica990({ limit: 40 })],
+      ["cms_data",       () => ingestCmsData({ limit: 50 })],
+      ["sec_edgar",      () => ingestSecEdgar({ limit: 40 })],
+      ["usa_spending",   () => ingestUsaSpending({ limit: 40 })],
+      ["sam_gov",        () => ingestSamGov({ limit: 50 })],
+      ["emma_bonds",     () => ingestEmma({ limit: 30 })],
+      ["hcris",          () => ingestHcris({ limit: 50 })],
+      ["hrsa",           () => ingestHrsa({ limit: 50 })],
+      ["usda",           () => ingestUsda({ limit: 50 })],
+      ["medicare_util",  () => ingestMedicareUtil({ limit: 50 })],
+    ];
+    const freeResults = await Promise.all(FREE.map(([, fn]) => runSource(fn)));
+    FREE.forEach(([name], i) => { results[name] = freeResults[i]; });
+
+    // Batch 3: score recompute
+    const t0 = Date.now();
+    try {
+      await recomputeAllScores();
+      results["score_recompute"] = { status: "ok", signalsInserted: 0, errors: 0, durationMs: Date.now() - t0 };
+    } catch (err) {
+      results["score_recompute"] = { status: "error", signalsInserted: 0, errors: 1, errorMsg: String(err).slice(0, 200), durationMs: Date.now() - t0 };
+    }
+
+    res.json(results);
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;
