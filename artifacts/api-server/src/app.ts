@@ -63,6 +63,13 @@ const allowedOrigins = new Set<string>(
 if (process.env.REPLIT_DEV_DOMAIN) {
   allowedOrigins.add(`https://${process.env.REPLIT_DEV_DOMAIN}`);
 }
+// In production, allow every domain listed in REPLIT_DOMAINS (comma-separated)
+if (process.env.REPLIT_DOMAINS) {
+  for (const d of process.env.REPLIT_DOMAINS.split(",")) {
+    const domain = d.trim();
+    if (domain) allowedOrigins.add(`https://${domain}`);
+  }
+}
 const isDev = process.env.NODE_ENV !== "production";
 
 app.use(
