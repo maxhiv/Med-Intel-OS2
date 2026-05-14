@@ -55,14 +55,14 @@ function StatusBadge({
   }
   if (normalized === "under_review") {
     return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-500/10 text-purple-700 border border-purple-200" title={raw || undefined}>
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/10 text-blue-700 border border-blue-200" title={raw || undefined}>
         Under Review
       </span>
     );
   }
   if (normalized === "pending" || normalized === "filed") {
     return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-500/10 text-blue-700 border border-blue-200" title={raw || undefined}>
+      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/10 text-amber-700 border border-amber-200" title={raw || undefined}>
         Pending
       </span>
     );
@@ -180,7 +180,8 @@ function PipelineModal({ filingId, filingName, subAccounts, onClose }: PipelineM
         throw new Error(body.error ?? `HTTP ${res.status}`);
       }
       setPushed(true);
-      toast({ title: "Added to Pipeline", description: "CON filing pushed to CRM as an opportunity." });
+      const saName = subAccounts.find((sa) => sa.id === selectedSubAccount)?.name ?? "CRM";
+      toast({ title: "Added to Pipeline", description: `CON filing pushed to ${saName} as an opportunity.` });
       setTimeout(onClose, 1200);
     } catch (err) {
       toast({ title: "Push failed", description: String(err), variant: "destructive" });

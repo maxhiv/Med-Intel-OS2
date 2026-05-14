@@ -133,7 +133,7 @@ router.post(
 // CON-filing alert subscription + in-app notifications
 // ---------------------------------------------------------------------------
 
-const VALID_STATUS_FILTERS = new Set(["any", "approved", "filed"]);
+const VALID_STATUS_FILTERS = new Set(["any", "approved", "denied", "under_review", "pending", "filed"]);
 
 function sanitizeStates(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
