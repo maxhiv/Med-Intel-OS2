@@ -227,8 +227,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
           eq(purchaseSignals.isActive, true),
         ),
       )
-      .orderBy(desc(purchaseSignals.detectedAt))
-      .limit(50),
+      .orderBy(desc(purchaseSignals.detectedAt)),
     db
       .select()
       .from(facilityContacts)

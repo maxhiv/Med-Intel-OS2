@@ -269,6 +269,7 @@ export const facilityContacts = pgTable(
     humanVerifiedAt: timestamp("human_verified_at", { withTimezone: true }),
     humanVerifiedBy: uuid("human_verified_by"),
     buyingAuthorityScore: smallint("buying_authority_score").default(0),
+    dataSource: text("data_source"),
     lastEnrichedAt: timestamp("last_enriched_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),

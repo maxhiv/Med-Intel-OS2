@@ -124,6 +124,7 @@ async function upsertOfficerContacts(
         title,
         buyingAuthorityScore: score,
         confidenceScore: 70,
+        dataSource: "irs_990",
       });
       upserted++;
     }
