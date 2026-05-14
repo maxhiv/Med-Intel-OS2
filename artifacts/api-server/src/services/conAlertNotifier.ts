@@ -13,9 +13,19 @@
  * single ingestion run produces more than `BATCH_SIZE` matching filings:
  * we page through ascending until the backlog is exhausted.
  *
- * Slack integration: if the account has `settings.slackWebhookUrl` set, a
- * rate-limited fire-and-forget POST is sent for each newly-matched filing.
- * Rate is capped to 1 message per 30 seconds per account to avoid flooding.
+ * Slack integration: Slack alerts fire ONLY for `pending` and `under_review`
+ * filings — the early-stage statuses that represent actionable sales signals.
+ * Alerts are capped at 1 message per 30 seconds per webhook target via a
+ * module-level queue: messages that arrive while the window is open are
+ * buffered and delivered after the window expires, not dropped.
+ *
+ * Two independent Slack paths:
+ *  - Per-account webhook (from `accounts.settings.slackWebhookUrl`) — fires
+ *    when a subscription matched a pending/under_review filing.
+ *  - Platform webhook (SLACK_CON_WEBHOOK_URL env var) — fires for the same
+ *    statuses, scoped to the `__platform__` rate-limit key. Does NOT fall
+ *    back from the account path; the two paths are strictly independent to
+ *    avoid double-sending to the same URL.
  */
 import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 import {
@@ -36,11 +46,6 @@ export interface ConAlertNotifyResult {
   slackMessagesSent: number;
 }
 
-// Slack rate-limiter: tracks last-sent timestamp per accountId so we never
-// exceed 1 message per 30 seconds per account (fire-and-forget).
-const SLACK_MIN_INTERVAL_MS = 30_000;
-const slackLastSent = new Map<string, number>();
-
 const STATUS_EMOJI: Record<string, string> = {
   approved:     "✅",
   denied:       "🚫",
@@ -54,51 +59,86 @@ const STATUS_LABEL: Record<string, string> = {
   pending:      "Pending",
 };
 
-async function maybeSendSlack(
-  accountId: string,
-  webhookUrl: string,
-  filing: {
-    state: string;
-    applicantName: string | null;
-    equipmentType: string | null;
-    modality: string | null;
-    statusNormalized: NormalizedStatus;
-  },
-): Promise<boolean> {
-  const now = Date.now();
-  const last = slackLastSent.get(accountId) ?? 0;
-  if (now - last < SLACK_MIN_INTERVAL_MS) {
-    logger.debug({ accountId }, "conAlertNotifier: slack rate-limited, skipping");
-    return false;
-  }
-  slackLastSent.set(accountId, now);
+// ---------------------------------------------------------------------------
+// Rate-limited, queued Slack dispatch.
+// One queue entry per target (accountId or "__platform__").
+// Messages that arrive inside the 30-second window are buffered and scheduled
+// for delivery after the window expires — they are never silently dropped.
+// ---------------------------------------------------------------------------
+const SLACK_MIN_INTERVAL_MS = 30_000;
+const slackLastSent = new Map<string, number>();
+const slackQueue = new Map<string, Array<{ webhookUrl: string; payload: string }>>();
 
-  const sn = filing.statusNormalized ?? "pending";
-  const statusEmoji = STATUS_EMOJI[sn] ?? "📋";
-  const label = STATUS_LABEL[sn] ?? sn;
-  const equipment = filing.equipmentType || filing.modality || "Equipment";
-
-  const text =
-    `${statusEmoji} *New CON filing — ${filing.state}* | ${label}\n` +
-    `*Applicant:* ${filing.applicantName || "Unknown"}\n` +
-    `*Equipment:* ${equipment}`;
-
-  fetch(webhookUrl, {
+function flushSlackQueue(targetKey: string): void {
+  const queue = slackQueue.get(targetKey);
+  if (!queue || queue.length === 0) return;
+  const item = queue.shift()!;
+  slackLastSent.set(targetKey, Date.now());
+  fetch(item.webhookUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-    signal: AbortSignal.timeout(5000),
+    body: item.payload,
+    signal: AbortSignal.timeout(5_000),
   }).catch((err: unknown) => {
-    logger.warn({ err, accountId }, "conAlertNotifier: slack webhook failed");
+    logger.warn({ err, targetKey }, "conAlertNotifier: queued slack webhook failed");
   });
-
-  return true;
+  if (queue.length > 0) {
+    setTimeout(() => flushSlackQueue(targetKey), SLACK_MIN_INTERVAL_MS);
+  }
 }
 
-// Cache webhook URLs per run so we don't hit the DB per subscription.
+function enqueueSlack(
+  targetKey: string,
+  webhookUrl: string,
+  payload: string,
+): "sent" | "queued" {
+  const now = Date.now();
+  const last = slackLastSent.get(targetKey) ?? 0;
+  const elapsed = now - last;
+
+  if (elapsed >= SLACK_MIN_INTERVAL_MS) {
+    slackLastSent.set(targetKey, now);
+    fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      signal: AbortSignal.timeout(5_000),
+    }).catch((err: unknown) => {
+      logger.warn({ err, targetKey }, "conAlertNotifier: slack webhook failed");
+    });
+    return "sent";
+  }
+
+  if (!slackQueue.has(targetKey)) slackQueue.set(targetKey, []);
+  slackQueue.get(targetKey)!.push({ webhookUrl, payload });
+  const delay = SLACK_MIN_INTERVAL_MS - elapsed;
+  setTimeout(() => flushSlackQueue(targetKey), delay);
+  logger.debug({ targetKey, delay }, "conAlertNotifier: slack message queued for deferred delivery");
+  return "queued";
+}
+
+function buildSlackPayload(filing: {
+  state: string;
+  applicantName: string | null;
+  equipmentType: string | null;
+  modality: string | null;
+  statusNormalized: NormalizedStatus;
+}): string {
+  const sn = filing.statusNormalized ?? "pending";
+  const equipment = filing.equipmentType || filing.modality || "Equipment";
+  const text =
+    `${STATUS_EMOJI[sn] ?? "📋"} *New CON filing — ${filing.state}* | ${STATUS_LABEL[sn] ?? sn}\n` +
+    `*Applicant:* ${filing.applicantName || "Unknown"}\n` +
+    `*Equipment:* ${equipment}`;
+  return JSON.stringify({ text });
+}
+
+// ---------------------------------------------------------------------------
+// Per-account webhook lookup (NO env fallback — env is a separate path).
+// ---------------------------------------------------------------------------
 const accountWebhookCache = new Map<string, string | null>();
 
-async function getSlackWebhookUrl(accountId: string): Promise<string | null> {
+async function getAccountSlackWebhookUrl(accountId: string): Promise<string | null> {
   if (accountWebhookCache.has(accountId)) {
     return accountWebhookCache.get(accountId) ?? null;
   }
@@ -109,19 +149,18 @@ async function getSlackWebhookUrl(accountId: string): Promise<string | null> {
       .where(eq(accounts.id, accountId))
       .limit(1);
     const settings = (row?.settings as Record<string, unknown>) ?? {};
-    const url = typeof settings.slackWebhookUrl === "string" ? settings.slackWebhookUrl.trim() : null;
-    const accountUrl = url && url.startsWith("https://hooks.slack.com/") ? url : null;
-    // Fall back to platform-wide env var when the account has no per-account webhook.
-    const envFallback = process.env.SLACK_CON_WEBHOOK_URL?.trim() ?? "";
-    const envUrl = envFallback.startsWith("https://hooks.slack.com/") ? envFallback : null;
-    const valid = accountUrl ?? envUrl ?? null;
-    accountWebhookCache.set(accountId, valid);
-    return valid;
+    const raw = typeof settings.slackWebhookUrl === "string" ? settings.slackWebhookUrl.trim() : "";
+    const url = raw.startsWith("https://hooks.slack.com/") ? raw : null;
+    accountWebhookCache.set(accountId, url);
+    return url;
   } catch {
     return null;
   }
 }
 
+// ---------------------------------------------------------------------------
+// Status normalisation.
+// ---------------------------------------------------------------------------
 type NormalizedStatus = "approved" | "denied" | "under_review" | "pending" | null;
 
 function normalizeStatus(raw: string | null | undefined): NormalizedStatus {
@@ -147,26 +186,20 @@ function matches(
       return false;
     }
   }
-  // Map legacy statusFilter values as well as the new four-way taxonomy.
   const sf = sub.statusFilter;
   if (sf === "approved" && filing.statusNormalized !== "approved") return false;
   if (sf === "denied" && filing.statusNormalized !== "denied") return false;
   if (sf === "under_review" && filing.statusNormalized !== "under_review") return false;
   if (sf === "pending" && filing.statusNormalized !== "pending") return false;
-  // Legacy: "filed" covers anything that isn't approved.
   if (sf === "filed" && filing.statusNormalized === "approved") return false;
   return true;
 }
 
 const BATCH_SIZE = 500;
-// Hard cap on pagination per subscription per run as a safety valve so a
-// runaway backlog can't pin a single subscription for an unbounded time;
-// remaining work picks up on the next tick.
 const MAX_BATCHES_PER_SUB = 20;
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 
 export async function notifyConAlerts(): Promise<ConAlertNotifyResult> {
-  // Reset per-run cache so account settings changes take effect.
   accountWebhookCache.clear();
 
   const result: ConAlertNotifyResult = {
@@ -181,17 +214,16 @@ export async function notifyConAlerts(): Promise<ConAlertNotifyResult> {
     .from(conAlertSubscriptions)
     .where(eq(conAlertSubscriptions.isActive, true));
 
+  const envWebhook = (process.env.SLACK_CON_WEBHOOK_URL ?? "").trim();
+  const platformWebhook = envWebhook.startsWith("https://hooks.slack.com/") ? envWebhook : null;
+
   for (const sub of subs) {
     result.subscriptionsChecked += 1;
     try {
-      // Cursor = persistent (last_processed_at, last_processed_id) on the
-      // subscription itself. Advances on every batch even when no rows match,
-      // so a subscription with sparse matches still moves forward through the
-      // backlog instead of re-scanning the same prefix every run.
       let cursorTs: Date = sub.lastProcessedAt ?? sub.createdAt ?? new Date(0);
       let cursorId: string = sub.lastProcessedId ?? ZERO_UUID;
 
-      const webhookUrl = await getSlackWebhookUrl(sub.accountId);
+      const accountWebhook = await getAccountSlackWebhookUrl(sub.accountId);
 
       for (let batch = 0; batch < MAX_BATCHES_PER_SUB; batch += 1) {
         const filings = await db
@@ -206,8 +238,6 @@ export async function notifyConAlerts(): Promise<ConAlertNotifyResult> {
             createdAt: conFilings.createdAt,
           })
           .from(conFilings)
-          // (created_at, id) > (cursorTs, cursorId) — strict tuple ordering so
-          // we don't re-emit the cursor row and don't skip ties.
           .where(
             or(
               sql`${conFilings.createdAt} > ${cursorTs}`,
@@ -258,37 +288,45 @@ export async function notifyConAlerts(): Promise<ConAlertNotifyResult> {
 
           result.notificationsCreated += inserted.length;
 
-          // Send a rate-limited Slack notification for the first match per batch.
-          // Per-account webhook fires for any subscribed status; platform env
-          // webhook (SLACK_CON_WEBHOOK_URL) fires specifically for pending and
-          // under_review filings to surface early-stage opportunities.
           if (inserted.length > 0) {
             const firstMatch = candidates[0];
-            if (webhookUrl) {
-              const sent = await maybeSendSlack(sub.accountId, webhookUrl, firstMatch);
-              if (sent) result.slackMessagesSent += 1;
+            const isEarlyStage =
+              firstMatch.statusNormalized === "pending" ||
+              firstMatch.statusNormalized === "under_review";
+
+            // Per-account Slack: only for pending/under_review.
+            if (accountWebhook && isEarlyStage) {
+              const outcome = enqueueSlack(
+                sub.accountId,
+                accountWebhook,
+                buildSlackPayload(firstMatch),
+              );
+              if (outcome === "sent") result.slackMessagesSent += 1;
             }
-            // Platform-level alert for pending/under_review regardless of subscription.
-            const envWebhook = process.env.SLACK_CON_WEBHOOK_URL?.trim();
+
+            // Platform Slack: only for pending/under_review; strictly
+            // independent of the account path — fires even when the account
+            // has no webhook, but never to the same URL as the account webhook
+            // in the same pass (avoids double-send to a shared endpoint).
             if (
-              envWebhook &&
-              envWebhook.startsWith("https://hooks.slack.com/") &&
-              (firstMatch.statusNormalized === "pending" || firstMatch.statusNormalized === "under_review")
+              platformWebhook &&
+              isEarlyStage &&
+              platformWebhook !== accountWebhook
             ) {
-              const sent = await maybeSendSlack("__platform__", envWebhook, firstMatch);
-              if (sent) result.slackMessagesSent += 1;
+              const outcome = enqueueSlack(
+                "__platform__",
+                platformWebhook,
+                buildSlackPayload(firstMatch),
+              );
+              if (outcome === "sent") result.slackMessagesSent += 1;
             }
           }
         }
 
-        // Advance the cursor to the last filing in this batch — even if it
-        // didn't match the subscription's filters — so we don't re-scan it.
         const last = filings[filings.length - 1];
         cursorTs = last.createdAt ?? cursorTs;
         cursorId = last.id;
 
-        // Persist progress after every batch so a crash mid-run doesn't
-        // force a full backlog re-scan on restart.
         await db
           .update(conAlertSubscriptions)
           .set({ lastProcessedAt: cursorTs, lastProcessedId: cursorId })

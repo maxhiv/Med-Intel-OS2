@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Building2, Search, Plus, MapPin, Activity, BookmarkCheck, Bookmark, AlertTriangle } from "lucide-react";
+import { Building2, Search, Plus, MapPin, Activity, BookmarkCheck, Bookmark, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -66,7 +66,7 @@ interface SignalBreakdown {
 
 function scoreColor(score: number): { bg: string; text: string; border: string; label: string } {
   if (score >= 81) return { bg: "bg-red-500/15", text: "text-red-700", border: "border-red-300", label: "Critical" };
-  if (score >= 60) return { bg: "bg-orange-500/15", text: "text-orange-700", border: "border-orange-300", label: "High" };
+  if (score >= 61) return { bg: "bg-orange-500/15", text: "text-orange-700", border: "border-orange-300", label: "High" };
   if (score >= 31) return { bg: "bg-yellow-500/15", text: "text-yellow-700", border: "border-yellow-300", label: "Medium" };
   return { bg: "bg-muted", text: "text-muted-foreground", border: "border-border", label: "Low" };
 }
@@ -126,6 +126,43 @@ function SignalScoreBadge({ score, breakdown }: { score: number; breakdown?: Sig
         </div>
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+const SCORE_BANDS = [
+  { range: "81–100", label: "Critical", bg: "bg-red-500/15", text: "text-red-700", border: "border-red-300", desc: "Immediate follow-up warranted" },
+  { range: "61–80",  label: "High",     bg: "bg-orange-500/15", text: "text-orange-700", border: "border-orange-300", desc: "Strong purchase signals" },
+  { range: "31–60",  label: "Medium",   bg: "bg-yellow-500/15", text: "text-yellow-700", border: "border-yellow-300", desc: "Moderate activity detected" },
+  { range: "0–30",   label: "Low",      bg: "bg-muted", text: "text-muted-foreground", border: "border-border", desc: "Minimal signals" },
+];
+
+function ScoringLegend() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border border-border bg-card text-sm">
+      <button
+        type="button"
+        className="w-full flex items-center justify-between px-4 py-2.5 font-medium text-left hover:bg-muted/40 transition-colors rounded-lg"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-2">
+          <Activity className="h-4 w-4 text-muted-foreground" />
+          Signal Score Legend
+        </span>
+        {open ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+      </button>
+      {open && (
+        <div className="px-4 pb-3 pt-1 grid grid-cols-2 sm:grid-cols-4 gap-2 border-t border-border">
+          {SCORE_BANDS.map((b) => (
+            <div key={b.label} className={`rounded border px-3 py-2 ${b.bg} ${b.border}`}>
+              <div className={`font-bold text-xs ${b.text}`}>{b.label} <span className="font-normal text-muted-foreground">({b.range})</span></div>
+              <div className="text-xs text-muted-foreground mt-0.5">{b.desc}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -189,7 +226,7 @@ export default function FacilitiesPage() {
   let displayData = facilitiesRes?.data ?? [];
 
   if (highPriorityOnly) {
-    displayData = displayData.filter((f) => (f.signalScore ?? 0) >= 60);
+    displayData = displayData.filter((f) => (f.signalScore ?? 0) >= 61);
   }
 
   if (sortBy === "signal_desc") {
@@ -205,6 +242,7 @@ export default function FacilitiesPage() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Facilities</h1>
+
           <p className="text-muted-foreground">
             Browse {total > 0 ? total.toLocaleString() : ""} healthcare facilities. Track the ones you want to monitor.
           </p>
@@ -258,6 +296,8 @@ export default function FacilitiesPage() {
           </Dialog>
         </div>
       </div>
+
+      <ScoringLegend />
 
       <Card className="bg-card">
         <CardHeader className="pb-4">
