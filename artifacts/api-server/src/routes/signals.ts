@@ -14,6 +14,12 @@ import { ingestPropublica990 } from "../services/propublica990Ingestor";
 import { ingestCmsData } from "../services/cmsDataIngestor";
 import { ingestSecEdgar } from "../services/secEdgarIngestor";
 import { ingestUsaSpending } from "../services/usaSpendingIngestor";
+import { ingestSamGov } from "../services/samGovIngestor";
+import { ingestEmma } from "../services/emmaIngestor";
+import { ingestHcris } from "../services/hcrisIngestor";
+import { ingestHrsa } from "../services/hrsaIngestor";
+import { ingestUsda } from "../services/usdaIngestor";
+import { ingestMedicareUtil } from "../services/medicareUtilIngestor";
 
 const router: IRouter = Router();
 
@@ -150,9 +156,10 @@ router.post(
 );
 
 // Manually trigger any combination of the no-key free-API ingestors.
-// Use ?source={name} to run a single source; omit for all nine.
+// Use ?source={name} to run a single source; omit for all.
 // Valid sources: nppes, fda_510k, fda_recalls, fda_maude, fda_class,
-//   propublica_990, cms_data, sec_edgar, usa_spending
+//   propublica_990, cms_data, sec_edgar, usa_spending,
+//   sam_gov, emma_bonds, hcris, hrsa, usda, medicare_util
 router.post(
   "/signals/ingest/free-apis",
   requirePlatformAdmin,
@@ -162,7 +169,7 @@ router.post(
 
     const ingestors: Record<
       string,
-      () => Promise<{ facilitiesScanned: number; signalsInserted: number; errors: number }>
+      () => Promise<{ signalsInserted: number; errors: number }>
     > = {
       nppes:          () => ingestNppes({ limit: 50 }),
       fda_510k:       () => ingestFda510k({ limit: 50 }),
@@ -173,6 +180,12 @@ router.post(
       cms_data:       () => ingestCmsData({ limit: 50 }),
       sec_edgar:      () => ingestSecEdgar({ limit: 40 }),
       usa_spending:   () => ingestUsaSpending({ limit: 40 }),
+      sam_gov:        () => ingestSamGov({ limit: 50 }),
+      emma_bonds:     () => ingestEmma({ limit: 30 }),
+      hcris:          () => ingestHcris({ limit: 50 }),
+      hrsa:           () => ingestHrsa({ limit: 50 }),
+      usda:           () => ingestUsda({ limit: 50 }),
+      medicare_util:  () => ingestMedicareUtil({ limit: 50 }),
     };
 
     if (sourceParam && !ingestors[sourceParam]) {

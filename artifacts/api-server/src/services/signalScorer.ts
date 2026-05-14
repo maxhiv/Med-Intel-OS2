@@ -10,37 +10,79 @@ import {
   accountContactEngagement,
 } from "@workspace/db";
 
+// ─── Tier weights ────────────────────────────────────────────────────────────
+
+// Tier 1 — direct buying intent
+const TIER1_SIGNALS = new Set([
+  "con_filed",
+  "con_approved",
+  "bond_issued",
+  "rfp_posted",
+  "hcris_depreciation_spike",
+]);
+
+// Tier 2 — supporting context
+const TIER2_SIGNALS = new Set([
+  "equipment_age_7yr",
+  "high_utilization",
+  "grant_awarded",
+  "clinical_trial",
+]);
+
+// Tier 3 — enrichment
+const TIER3_SIGNALS = new Set([
+  "adverse_event_spike",
+  "sec_capex_flag",
+  "depreciation_flag",
+  "eol_equipment",
+  "fiscal_year_end",
+  "bond_issuance",
+  "accreditation_renewal",
+  "compliance_citation",
+  "construction_permit",
+  "leadership_change",
+  "service_line_expansion",
+  "job_posting",
+  "news_expansion",
+  "nih_grant",
+]);
+
 const WEIGHTS: Record<string, number> = {
-  depreciation_flag: 30,
-  con_approved: 25,
-  con_filed: 15,
-  grant_awarded: 12,
-  bond_issuance: 10,
-  construction_permit: 10,
-  leadership_change: 8,
-  service_line_expansion: 12,
-  job_posting: 6,
-  news_expansion: 5,
-  eol_equipment: 20,
-  accreditation_renewal: 7,
-  compliance_citation: 5,
-  nih_grant: 8,
-  clinical_trial: 6,
+  // Tier 1
+  con_filed: 35,
+  con_approved: 40,
+  bond_issued: 35,
+  rfp_posted: 40,
+  hcris_depreciation_spike: 25,
+  // Tier 2
+  equipment_age_7yr: 20,
+  high_utilization: 15,
+  grant_awarded: 25,
+  clinical_trial: 15,
+  // Tier 3
+  adverse_event_spike: 10,
+  sec_capex_flag: 18,
+  // Legacy / kept for backward compat
+  depreciation_flag: 12,
+  eol_equipment: 12,
+  bond_issuance: 8,
+  construction_permit: 8,
+  leadership_change: 6,
+  service_line_expansion: 8,
+  job_posting: 4,
+  news_expansion: 4,
+  accreditation_renewal: 5,
+  compliance_citation: 4,
+  nih_grant: 6,
   fiscal_year_end: 5,
 };
 
-// Engagement weighting. Replies are a strong positive purchase signal; bounces
-// indicate stale / wrong contact data and should drag the facility down so it
-// stops surfacing on the daily pick list. Opens are weakly positive.
-//
-// IMPORTANT: engagement is tenant-specific outreach data. Engagement scores
-// MUST be scoped per (accountId, facilityId) and per (accountId, contactId)
-// so one tenant's CRM activity never moves another tenant's pick list.
+// ─── Engagement constants ─────────────────────────────────────────────────────
+
 const ENGAGEMENT_LOOKBACK_DAYS = 90;
 const REPLY_FACILITY_WEIGHT = 6;
 const OPEN_FACILITY_WEIGHT = 1;
 const BOUNCE_FACILITY_WEIGHT = -4;
-
 const REPLY_CONTACT_WEIGHT = 12;
 const OPEN_CONTACT_WEIGHT = 2;
 const BOUNCE_CONTACT_WEIGHT = -20;
@@ -73,11 +115,7 @@ async function facilityEngagementForAccount(
         eq(outreachDrafts.facilityId, facilityId),
       ),
     );
-  return {
-    replies: row?.replies ?? 0,
-    opens: row?.opens ?? 0,
-    bounces: row?.bounces ?? 0,
-  };
+  return { replies: row?.replies ?? 0, opens: row?.opens ?? 0, bounces: row?.bounces ?? 0 };
 }
 
 async function contactEngagementForAccount(
@@ -98,21 +136,78 @@ async function contactEngagementForAccount(
         eq(outreachDrafts.contactId, contactId),
       ),
     );
-  return {
-    replies: row?.replies ?? 0,
-    opens: row?.opens ?? 0,
-    bounces: row?.bounces ?? 0,
-  };
+  return { replies: row?.replies ?? 0, opens: row?.opens ?? 0, bounces: row?.bounces ?? 0 };
 }
 
 function clampScore(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
 
+// ─── Signal breakdown ─────────────────────────────────────────────────────────
+
+export interface SignalBreakdown {
+  tier1Count: number;
+  tier2Count: number;
+  tier3Count: number;
+  crossSourceBonuses: string[];
+  topSignals: Array<{ type: string; detectedAt: Date | null; confidence: number }>;
+}
+
+export async function computeSignalBreakdown(
+  facilityId: string,
+): Promise<SignalBreakdown> {
+  const sigs = await db
+    .select()
+    .from(purchaseSignals)
+    .where(
+      and(
+        eq(purchaseSignals.facilityId, facilityId),
+        eq(purchaseSignals.isActive, true),
+      ),
+    );
+
+  const typeSet = new Set(sigs.map((s) => s.signalType));
+
+  let tier1Count = 0;
+  let tier2Count = 0;
+  let tier3Count = 0;
+  for (const s of sigs) {
+    if (TIER1_SIGNALS.has(s.signalType)) tier1Count++;
+    else if (TIER2_SIGNALS.has(s.signalType)) tier2Count++;
+    else tier3Count++;
+  }
+
+  const crossSourceBonuses: string[] = [];
+  if (typeSet.has("con_filed") && typeSet.has("bond_issued"))
+    crossSourceBonuses.push("CON + Bond Match");
+  if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed"))
+    crossSourceBonuses.push("Depreciation + CON Match");
+  if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr"))
+    crossSourceBonuses.push("High Utilization + Equipment Age");
+  if (typeSet.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending"))
+    crossSourceBonuses.push("RFP + Prior Award Match");
+
+  const topSignals = sigs
+    .sort((a, b) => {
+      const wa = WEIGHTS[a.signalType] ?? 0;
+      const wb = WEIGHTS[b.signalType] ?? 0;
+      return wb - wa;
+    })
+    .slice(0, 3)
+    .map((s) => ({
+      type: s.signalType,
+      detectedAt: s.detectedAt,
+      confidence: s.confidence ?? 50,
+    }));
+
+  return { tier1Count, tier2Count, tier3Count, crossSourceBonuses, topSignals };
+}
+
+// ─── Core score computation ───────────────────────────────────────────────────
+
 /**
- * Compute the global, tenant-agnostic facility score from objective signals
- * (CON filings, equipment urgency, depreciation flags, etc). Engagement is
- * NOT folded in here because engagement is tenant-specific.
+ * Compute the global, tenant-agnostic facility score from objective signals.
+ * Includes cross-source bonuses defined in the CMX spec.
  */
 export async function computeFacilityScore(facilityId: string): Promise<number> {
   const sigs = await db
@@ -124,6 +219,8 @@ export async function computeFacilityScore(facilityId: string): Promise<number> 
         eq(purchaseSignals.isActive, true),
       ),
     );
+
+  const typeSet = new Set(sigs.map((s) => s.signalType));
 
   let score = 0;
   for (const s of sigs) {
@@ -155,13 +252,17 @@ export async function computeFacilityScore(facilityId: string): Promise<number> 
     );
   if (contacts.length > 0) score += 5;
 
+  // Cross-source bonuses
+  if (typeSet.has("con_filed") && typeSet.has("bond_issued")) score += 15;
+  if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed")) score += 10;
+  if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr")) score += 8;
+  if (typeSet.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending")) score += 12;
+
   return clampScore(score);
 }
 
-/**
- * Compute and persist the per-tenant engagement score for a single facility,
- * stored on `account_facilities.engagementScore`. Capped to a 0-100 range.
- */
+// ─── Engagement scoring ───────────────────────────────────────────────────────
+
 export async function recomputeAccountFacilityEngagement(
   accountId: string,
   facilityId: string,
@@ -184,9 +285,6 @@ export async function recomputeAccountFacilityEngagement(
   return score;
 }
 
-/**
- * Compute and upsert the per-tenant engagement score for a single contact.
- */
 export async function recomputeAccountContactEngagement(
   accountId: string,
   contactId: string,
@@ -208,10 +306,7 @@ export async function recomputeAccountContactEngagement(
       bouncesCount: eng.bounces,
     })
     .onConflictDoUpdate({
-      target: [
-        accountContactEngagement.accountId,
-        accountContactEngagement.contactId,
-      ],
+      target: [accountContactEngagement.accountId, accountContactEngagement.contactId],
       set: {
         engagementScore: score,
         repliesCount: eng.replies,
@@ -236,10 +331,6 @@ async function recomputeAccountContactsForFacility(
   }
 }
 
-/**
- * Recompute the objective facility score for every facility, then refresh
- * per-tenant engagement scores for every (account, facility, contact) triple.
- */
 export async function recomputeAllScores(): Promise<{ updated: number }> {
   const all = await db.select({ id: facilities.id }).from(facilities);
   let updated = 0;
@@ -252,8 +343,6 @@ export async function recomputeAllScores(): Promise<{ updated: number }> {
     updated += 1;
   }
 
-  // Per-tenant engagement refresh, scoped by accountId so tenants stay
-  // isolated.
   const acctFacs = await db
     .select({
       accountId: accountFacilities.accountId,
@@ -267,10 +356,6 @@ export async function recomputeAllScores(): Promise<{ updated: number }> {
   return { updated };
 }
 
-/**
- * Recompute the global score for one facility (objective signals only).
- * Engagement recompute is a separate, account-scoped call.
- */
 export async function recomputeOne(facilityId: string): Promise<number> {
   const score = await computeFacilityScore(facilityId);
   await db
@@ -280,12 +365,6 @@ export async function recomputeOne(facilityId: string): Promise<number> {
   return score;
 }
 
-/**
- * Webhook entry point. Recompute engagement for the (account, facility) pair
- * the webhook event belongs to, and refresh per-contact engagement under that
- * facility for the same account. Strictly tenant-scoped: never reads or
- * writes engagement for any other accountId.
- */
 export async function recomputeEngagementForAccountFacility(
   accountId: string,
   facilityId: string,
@@ -294,5 +373,4 @@ export async function recomputeEngagementForAccountFacility(
   await recomputeAccountContactsForFacility(accountId, facilityId);
 }
 
-// Re-export sql for callers
 export { sql };

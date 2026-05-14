@@ -23,7 +23,7 @@ import {
 import { requireAccount } from "../middlewares/auth";
 import { validateBody } from "../middlewares/validate";
 import { syncFacilityFromNpi } from "../services/npiSync";
-import { recomputeOne } from "../services/signalScorer";
+import { recomputeOne, computeSignalBreakdown, type SignalBreakdown } from "../services/signalScorer";
 import { CreateFacilityFromNpiBody, UpdateFacilityBody } from "@workspace/api-zod";
 
 const router: IRouter = Router();
@@ -43,6 +43,76 @@ async function assertAccountOwnsFacility(
     )
     .limit(1);
   return Boolean(row);
+}
+
+/**
+ * Batch-compute signal breakdowns for a list of facility IDs without
+ * issuing N separate DB queries. Fetches all signals in one round trip,
+ * then groups in memory.
+ */
+async function batchSignalBreakdowns(
+  facilityIds: string[],
+): Promise<Map<string, SignalBreakdown>> {
+  if (facilityIds.length === 0) return new Map();
+
+  const sigs = await db
+    .select()
+    .from(purchaseSignals)
+    .where(
+      and(
+        inArray(purchaseSignals.facilityId, facilityIds),
+        eq(purchaseSignals.isActive, true),
+      ),
+    );
+
+  const TIER1 = new Set([
+    "con_filed", "con_approved", "bond_issued", "rfp_posted", "hcris_depreciation_spike",
+  ]);
+  const TIER2 = new Set([
+    "equipment_age_7yr", "high_utilization", "grant_awarded", "clinical_trial",
+  ]);
+
+  const WEIGHTS: Record<string, number> = {
+    con_filed: 35, con_approved: 40, bond_issued: 35, rfp_posted: 40,
+    hcris_depreciation_spike: 25, equipment_age_7yr: 20, high_utilization: 15,
+    grant_awarded: 25, clinical_trial: 15, adverse_event_spike: 10, sec_capex_flag: 18,
+    depreciation_flag: 12, eol_equipment: 12,
+  };
+
+  const grouped = new Map<string, typeof sigs>();
+  for (const fid of facilityIds) grouped.set(fid, []);
+  for (const s of sigs) {
+    const arr = grouped.get(s.facilityId);
+    if (arr) arr.push(s);
+  }
+
+  const result = new Map<string, SignalBreakdown>();
+  for (const [fid, fsigs] of grouped) {
+    const typeSet = new Set(fsigs.map((s) => s.signalType));
+    let tier1Count = 0, tier2Count = 0, tier3Count = 0;
+    for (const s of fsigs) {
+      if (TIER1.has(s.signalType)) tier1Count++;
+      else if (TIER2.has(s.signalType)) tier2Count++;
+      else tier3Count++;
+    }
+    const crossSourceBonuses: string[] = [];
+    if (typeSet.has("con_filed") && typeSet.has("bond_issued"))
+      crossSourceBonuses.push("CON + Bond Match");
+    if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed"))
+      crossSourceBonuses.push("Depreciation + CON Match");
+    if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr"))
+      crossSourceBonuses.push("High Utilization + Equipment Age");
+    if (typeSet.has("rfp_posted") && fsigs.some((s) => s.source === "usa_spending"))
+      crossSourceBonuses.push("RFP + Prior Award Match");
+
+    const topSignals = fsigs
+      .sort((a, b) => (WEIGHTS[b.signalType] ?? 0) - (WEIGHTS[a.signalType] ?? 0))
+      .slice(0, 3)
+      .map((s) => ({ type: s.signalType, detectedAt: s.detectedAt, confidence: s.confidence ?? 50 }));
+
+    result.set(fid, { tier1Count, tier2Count, tier3Count, crossSourceBonuses, topSignals });
+  }
+  return result;
 }
 
 router.get("/facilities", requireAccount, async (req, res) => {
@@ -94,7 +164,21 @@ router.get("/facilities", requireAccount, async (req, res) => {
     )
     .where(where);
 
-  res.json({ data: rows, total: c, limit, offset });
+  const facilityIds = rows.map((r) => r.id);
+  const breakdowns = await batchSignalBreakdowns(facilityIds);
+
+  const data = rows.map((r) => ({
+    ...r,
+    signalBreakdown: breakdowns.get(r.id) ?? {
+      tier1Count: 0,
+      tier2Count: 0,
+      tier3Count: 0,
+      crossSourceBonuses: [],
+      topSignals: [],
+    },
+  }));
+
+  res.json({ data, total: c, limit, offset });
 });
 
 router.post("/facilities", requireAccount, validateBody(CreateFacilityFromNpiBody), async (req, res) => {
@@ -114,7 +198,6 @@ router.post("/facilities", requireAccount, validateBody(CreateFacilityFromNpiBod
     }
     facility = created;
   }
-  // Auto-link to current account
   await db
     .insert(accountFacilities)
     .values({ accountId, facilityId: facility.id, status: "identified" })
@@ -134,7 +217,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [signals, contacts, equipment] = await Promise.all([
+  const [signals, contacts, equipment, signalBreakdown] = await Promise.all([
     db
       .select()
       .from(purchaseSignals)
@@ -156,6 +239,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
       .from(equipmentRecords)
       .where(eq(equipmentRecords.facilityId, id))
       .limit(200),
+    computeSignalBreakdown(id),
   ]);
 
   res.json({
@@ -163,6 +247,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
     signals,
     contacts,
     equipment,
+    signalBreakdown,
     activeSignalCount: signals.length,
     contactCount: contacts.length,
     equipmentCount: equipment.length,
@@ -229,10 +314,6 @@ router.get("/facilities/:id/contacts", requireAccount, async (req, res) => {
     .where(eq(facilityContacts.facilityId, id))
     .orderBy(desc(facilityContacts.confidenceScore));
 
-  // Attach the most recent validation entry (validator + verdict + timestamp)
-  // so the contacts UI can show at a glance who verified each contact. We
-  // limit to email validators (zerobounce / bouncer) to stay focused on the
-  // verdict ops actually care about for debugging accuracy.
   const contactIds = rows.map((r) => r.id);
   const lastByContact = new Map<
     string,

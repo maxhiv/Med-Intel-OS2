@@ -6,6 +6,7 @@ import {
   accounts,
   users,
   subAccounts,
+  accountFacilities,
   enrichmentSourceApprovals,
   facilities,
   purchaseSignals,
@@ -20,6 +21,7 @@ import {
   PAID_ENRICHMENT_SOURCES,
 } from "@workspace/db";
 import { getReviewThreshold } from "../services/conFilingsIngestor";
+import { recomputeAllScores } from "../services/signalScorer";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { listAllSources } from "../services/enrichment";
 import { backfillConFilingFacilities } from "../services/conFacilityMatcher";
@@ -970,6 +972,30 @@ router.get(
       .orderBy(facilities.name)
       .limit(limit);
     res.json(rows);
+  },
+);
+
+/**
+ * Link every facility in the database to every account. Idempotent —
+ * uses ON CONFLICT DO NOTHING. After linking, triggers a full score
+ * recompute so dashboards immediately reflect the newly visible data.
+ *
+ * Returns { linked: number } — count of net-new rows inserted.
+ */
+router.post(
+  "/admin/facilities/link-all",
+  requirePlatformAdmin,
+  async (_req, res) => {
+    const result = await db.execute(sql`
+      INSERT INTO account_facilities (account_id, facility_id)
+      SELECT a.id, f.id
+      FROM accounts a
+      CROSS JOIN facilities f
+      ON CONFLICT (account_id, facility_id) DO NOTHING
+    `);
+    const linked = Number((result as { rowCount?: number }).rowCount ?? 0);
+    recomputeAllScores().catch(() => {});
+    res.json({ linked });
   },
 );
 

@@ -37,6 +37,12 @@ import { ingestPropublica990 } from "../services/propublica990Ingestor";
 import { ingestCmsData } from "../services/cmsDataIngestor";
 import { ingestSecEdgar } from "../services/secEdgarIngestor";
 import { ingestUsaSpending } from "../services/usaSpendingIngestor";
+import { ingestSamGov } from "../services/samGovIngestor";
+import { ingestEmma } from "../services/emmaIngestor";
+import { ingestHcris } from "../services/hcrisIngestor";
+import { ingestHrsa } from "../services/hrsaIngestor";
+import { ingestUsda } from "../services/usdaIngestor";
+import { ingestMedicareUtil } from "../services/medicareUtilIngestor";
 
 let started = false;
 const locks = new Set<string>();
@@ -175,6 +181,12 @@ export function startCron(): void {
         { name: "cms_data",       fn: () => ingestCmsData({ limit: 50 }) },
         { name: "sec_edgar",      fn: () => ingestSecEdgar({ limit: 40 }) },
         { name: "usa_spending",   fn: () => ingestUsaSpending({ limit: 40 }) },
+        { name: "sam_gov",        fn: () => ingestSamGov({ limit: 50 }) },
+        { name: "emma_bonds",     fn: () => ingestEmma({ limit: 30 }) },
+        { name: "hcris",          fn: () => ingestHcris({ limit: 50 }) },
+        { name: "hrsa",           fn: () => ingestHrsa({ limit: 50 }) },
+        { name: "usda",           fn: () => ingestUsda({ limit: 50 }) },
+        { name: "medicare_util",  fn: () => ingestMedicareUtil({ limit: 50 }) },
       ];
       for (const s of sources) {
         try {
@@ -200,6 +212,6 @@ export function startCron(): void {
   );
 
   logger.info(
-    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings, ingestFreeApis, rolloverSpendCounters, classifyReplies",
+    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings, ingestFreeApis (15 sources), rolloverSpendCounters, classifyReplies",
   );
 }

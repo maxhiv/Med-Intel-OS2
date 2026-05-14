@@ -280,6 +280,20 @@ async function flushBatch(
      ON CONFLICT (npi) DO NOTHING`,
     values,
   );
+
+  // Link every newly-inserted facility to all existing accounts.
+  // ON CONFLICT DO NOTHING makes this safe to run on every batch — facilities
+  // that were already linked are skipped without error.
+  await pool.query(`
+    INSERT INTO account_facilities (account_id, facility_id)
+    SELECT a.id, f.id
+    FROM accounts a
+    CROSS JOIN (
+      SELECT id FROM facilities WHERE npi = ANY($1::text[])
+    ) f
+    ON CONFLICT (account_id, facility_id) DO NOTHING
+  `, [batch.map((r) => r.npi)]);
+
   return batch.length;
 }
 

@@ -3,15 +3,19 @@
  *
  * For each tracked facility we search the ProPublica Nonprofit Explorer API
  * by facility name + state. When a matching nonprofit EIN is found we pull its
- * 990 filing history. Each fiscal-year 990 filing is emitted as a
- * `fiscal_year_end` signal (the close of a fiscal year is an opportune moment
- * for capital procurement). Filings with substantial contributions/grants
- * (> $1M) also emit a `grant_awarded` signal.
+ * 990 filing history and:
+ *
+ *   1. Emit `fiscal_year_end` signals (close of a fiscal year is an opportune
+ *      moment for capital procurement).
+ *   2. Emit `grant_awarded` signals when contributions > $1M.
+ *   3. Extract CFO / COO / VP Finance / CEO officers from the filing's
+ *      Part VII data and upsert them into facility_contacts (confidence 70,
+ *      buyingAuthorityScore per CMX spec: CFO/COO=85, VP Finance=75, CEO=70).
  *
  * Docs: https://projects.propublica.org/nonprofits/api/v2
  */
 import { and, eq, sql } from "drizzle-orm";
-import { db, facilities, purchaseSignals } from "@workspace/db";
+import { db, facilities, purchaseSignals, facilityContacts } from "@workspace/db";
 import { logger } from "../lib/logger";
 
 const PP_SEARCH = "https://projects.propublica.org/nonprofits/api/v2/search.json";
@@ -29,6 +33,17 @@ interface PpFiling {
   tax_prd_yr?: number;
   totcntrbgfts?: number;
   totfuncexpns?: number;
+  // Part VII officer fields — ProPublica returns up to 10 principals per filing
+  principalname0?: string;  principaltitle0?: string;
+  principalname1?: string;  principaltitle1?: string;
+  principalname2?: string;  principaltitle2?: string;
+  principalname3?: string;  principaltitle3?: string;
+  principalname4?: string;  principaltitle4?: string;
+  principalname5?: string;  principaltitle5?: string;
+  principalname6?: string;  principaltitle6?: string;
+  principalname7?: string;  principaltitle7?: string;
+  principalname8?: string;  principaltitle8?: string;
+  principalname9?: string;  principaltitle9?: string;
 }
 
 interface PpOrg {
@@ -36,9 +51,90 @@ interface PpOrg {
   filings_with_data?: PpFiling[];
 }
 
+// ── Officer title → buying authority score ────────────────────────────────────
+
+const TITLE_PATTERNS: Array<{ pattern: RegExp; score: number }> = [
+  { pattern: /\bCFO\b|\bchief financial\b/i,             score: 85 },
+  { pattern: /\bCOO\b|\bchief operating\b/i,              score: 85 },
+  { pattern: /\bVP\s+Finance\b|\bVice Pres.*Finance\b/i,  score: 75 },
+  { pattern: /\bCEO\b|\bchief exec\b/i,                   score: 70 },
+];
+
+function buyingScoreForTitle(title: string): number | null {
+  for (const { pattern, score } of TITLE_PATTERNS) {
+    if (pattern.test(title)) return score;
+  }
+  return null;
+}
+
+function splitName(fullName: string): { firstName: string; lastName: string } {
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length === 1) return { firstName: "", lastName: parts[0] };
+  return {
+    firstName: parts.slice(0, -1).join(" "),
+    lastName: parts[parts.length - 1],
+  };
+}
+
+async function upsertOfficerContacts(
+  facilityId: string,
+  filing: PpFiling,
+): Promise<number> {
+  let upserted = 0;
+  for (let i = 0; i < 10; i++) {
+    const name  = (filing as Record<string, unknown>)[`principalname${i}`] as string | undefined;
+    const title = (filing as Record<string, unknown>)[`principaltitle${i}`] as string | undefined;
+    if (!name || !title) continue;
+
+    const score = buyingScoreForTitle(title);
+    if (!score) continue;
+
+    const { firstName, lastName } = splitName(name);
+    if (!lastName) continue;
+
+    const existing = await db
+      .select({
+        id: facilityContacts.id,
+        buyingAuthorityScore: facilityContacts.buyingAuthorityScore,
+      })
+      .from(facilityContacts)
+      .where(
+        and(
+          eq(facilityContacts.facilityId, facilityId),
+          sql`lower(${facilityContacts.firstName}) = lower(${firstName})`,
+          sql`lower(${facilityContacts.lastName}) = lower(${lastName})`,
+        ),
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      const currentScore = existing[0].buyingAuthorityScore ?? 0;
+      if (score > currentScore) {
+        await db
+          .update(facilityContacts)
+          .set({ buyingAuthorityScore: score, title, confidenceScore: 70, updatedAt: new Date() })
+          .where(eq(facilityContacts.id, existing[0].id));
+        upserted++;
+      }
+    } else {
+      await db.insert(facilityContacts).values({
+        facilityId,
+        firstName,
+        lastName,
+        title,
+        buyingAuthorityScore: score,
+        confidenceScore: 70,
+      });
+      upserted++;
+    }
+  }
+  return upserted;
+}
+
 export interface IngestResult {
   facilitiesScanned: number;
   signalsInserted: number;
+  contactsUpserted: number;
   errors: number;
 }
 
@@ -49,6 +145,7 @@ export async function ingestPropublica990(
   const result: IngestResult = {
     facilitiesScanned: 0,
     signalsInserted: 0,
+    contactsUpserted: 0,
     errors: 0,
   };
 
@@ -64,7 +161,6 @@ export async function ingestPropublica990(
     let ein: number | undefined;
 
     try {
-      // Step 1 — find the EIN by searching for the facility name.
       const shortName = f.name.split(/[,\-]/)[0].trim().slice(0, 60);
       const searchParams = new URLSearchParams({ q: shortName });
       if (f.state) searchParams.set("state[id]", f.state);
@@ -78,14 +174,13 @@ export async function ingestPropublica990(
       }
       const searchJson = (await searchRes.json()) as PpSearchResult;
       const orgs = searchJson.organizations ?? [];
-      if (orgs.length === 0) continue; // Not found — skip silently, not an error.
+      if (orgs.length === 0) continue;
 
       ein = orgs[0].ein;
       if (!ein) continue;
 
       await sleep(150);
 
-      // Step 2 — fetch org details and 990 filings.
       const orgRes = await fetch(`${PP_ORG}/${ein}.json`, {
         headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
       });
@@ -152,6 +247,12 @@ export async function ingestPropublica990(
             });
             result.signalsInserted += 1;
           }
+        }
+
+        // Phase 9 — extract CFO/COO/VP Finance/CEO from most-recent filing only.
+        if (filing === filings[0]) {
+          const cnt = await upsertOfficerContacts(f.id, filing);
+          result.contactsUpserted += cnt;
         }
       }
 
