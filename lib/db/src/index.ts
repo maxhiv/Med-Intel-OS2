@@ -96,3 +96,4 @@ export async function withRLS<T>(
 }
 
 export * from "./schema";
+export { seedParentSystems } from "./seedSystemRelationships";

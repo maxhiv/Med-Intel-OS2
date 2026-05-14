@@ -43,6 +43,7 @@ import { ingestHcris } from "../services/hcrisIngestor";
 import { ingestHrsa } from "../services/hrsaIngestor";
 import { ingestUsda } from "../services/usdaIngestor";
 import { ingestMedicareUtil } from "../services/medicareUtilIngestor";
+import { propagateSystemSignals } from "../services/systemSignalPropagator";
 
 let started = false;
 const locks = new Set<string>();
@@ -196,6 +197,18 @@ export function startCron(): void {
           logger.error({ err, source: s.name }, "free api ingest source failed");
         }
       }
+    }),
+    { timezone: tz },
+  );
+
+  // 07:00 daily — propagate Tier 1 signals from child facilities up to their
+  // parent health systems and across siblings. Runs after the 06:00 ingestor
+  // batch so newly ingested signals are included in the same day's propagation.
+  cron.schedule(
+    "0 7 * * *",
+    guarded("propagateSystemSignals", async () => {
+      const r = await propagateSystemSignals();
+      logger.info(r, "system signal propagation complete");
     }),
     { timezone: tz },
   );

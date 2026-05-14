@@ -29,6 +29,7 @@ import BatchesPage from "@/pages/batches";
 import ReportsPage from "@/pages/reports";
 import AdminPage from "@/pages/admin/index";
 import SettingsPage from "@/pages/settings";
+import LeadsPage from "@/pages/leads";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
@@ -62,6 +63,7 @@ function Router() {
         <ProtectedRoute>
           <AppLayout>
             <Switch>
+              <Route path="/leads" component={LeadsPage} />
               <Route path="/dashboard" component={DashboardPage} />
               <Route path="/facilities" component={FacilitiesPage} />
               <Route path="/facilities/:id" component={FacilityDetailPage} />

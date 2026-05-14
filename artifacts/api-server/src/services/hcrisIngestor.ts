@@ -180,6 +180,18 @@ export async function ingestHcris(
             });
             result.signalsInserted += 1;
           }
+
+          // Populate fiscal year end month from the cost report end date.
+          // Only write if we're the authoritative source or no source is set.
+          if (rec.FY_END_DT) {
+            const fyeMonth = new Date(rec.FY_END_DT).getMonth() + 1;
+            await db
+              .update(facilities)
+              .set({ fiscalYearEndMonth: fyeMonth, fiscalYearEndSource: "hcris", updatedAt: new Date() })
+              .where(
+                sql`${facilities.id} = ${facilityId} AND (${facilities.fiscalYearEndSource} IS NULL OR ${facilities.fiscalYearEndSource} = 'hcris')`,
+              );
+          }
         }
       } catch (err) {
         logger.warn({ err, prvdrNum: rec.PRVDR_NUM }, "HCRIS record error");

@@ -45,6 +45,7 @@ const TIER3_SIGNALS = new Set([
   "job_posting",
   "news_expansion",
   "nih_grant",
+  "system_signal_propagated",
 ]);
 
 const WEIGHTS: Record<string, number> = {
@@ -75,6 +76,7 @@ const WEIGHTS: Record<string, number> = {
   compliance_citation: 4,
   nih_grant: 6,
   fiscal_year_end: 5,
+  system_signal_propagated: 15,
 };
 
 // ─── Engagement constants ─────────────────────────────────────────────────────
@@ -178,14 +180,26 @@ export async function computeSignalBreakdown(
   }
 
   const crossSourceBonuses: string[] = [];
-  if (typeSet.has("con_filed") && typeSet.has("bond_issued"))
-    crossSourceBonuses.push("CON + Bond Match");
-  if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed"))
-    crossSourceBonuses.push("Depreciation + CON Match");
-  if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr"))
-    crossSourceBonuses.push("High Utilization + Equipment Age");
+  if (typeSet.has("con_approved") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
+    crossSourceBonuses.push("CON Approved + Capital Confirmed");
+  if (typeSet.has("con_filed") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
+    crossSourceBonuses.push("CON Filed + Bond Financing");
   if (typeSet.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending"))
     crossSourceBonuses.push("RFP + Prior Award Match");
+  if (typeSet.has("grant_awarded") && typeSet.has("con_filed"))
+    crossSourceBonuses.push("Grant + CON Expansion");
+  if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed"))
+    crossSourceBonuses.push("Depreciation Spike + CON Filed");
+  if (typeSet.has("high_utilization") && typeSet.has("con_filed"))
+    crossSourceBonuses.push("High Utilization + CON Activity");
+  if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr"))
+    crossSourceBonuses.push("High Utilization + Equipment Age");
+  if (typeSet.has("adverse_event_spike") && typeSet.has("hcris_depreciation_spike"))
+    crossSourceBonuses.push("Adverse Events + Aging Equipment");
+  if (typeSet.has("clinical_trial") && typeSet.has("grant_awarded"))
+    crossSourceBonuses.push("Clinical Trial + Grant Award");
+  if (typeSet.has("system_signal_propagated") && (typeSet.has("con_filed") || typeSet.has("con_approved") || typeSet.has("bond_issuance") || typeSet.has("bond_issued")))
+    crossSourceBonuses.push("System-Wide Capital Signal");
 
   const topSignals = sigs
     .sort((a, b) => {
@@ -203,13 +217,47 @@ export async function computeSignalBreakdown(
   return { tier1Count, tier2Count, tier3Count, crossSourceBonuses, topSignals };
 }
 
+// ─── FYE timing bonus ─────────────────────────────────────────────────────────
+
+/**
+ * Returns a 0–20 bonus based on how close the facility is to its fiscal year
+ * end. Budget decisions accelerate in the 90 days before close.
+ *   ≤ 30 days → +20   ≤ 60 days → +15   ≤ 90 days → +10   ≤ 180 days → +5
+ */
+export function computeTimingBonus(fiscalYearEndMonth: number | null | undefined): number {
+  if (!fiscalYearEndMonth || fiscalYearEndMonth < 1 || fiscalYearEndMonth > 12) return 0;
+  const now = new Date();
+  const currentMonth = now.getMonth() + 1;
+  const currentYear = now.getFullYear();
+  let fyeYear = currentYear;
+  if (
+    fiscalYearEndMonth < currentMonth ||
+    (fiscalYearEndMonth === currentMonth && now.getDate() > 15)
+  ) {
+    fyeYear = currentYear + 1;
+  }
+  const fyeDate = new Date(fyeYear, fiscalYearEndMonth - 1, 1);
+  const daysUntil = Math.round((fyeDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+  if (daysUntil <= 30) return 20;
+  if (daysUntil <= 60) return 15;
+  if (daysUntil <= 90) return 10;
+  if (daysUntil <= 180) return 5;
+  return 0;
+}
+
 // ─── Core score computation ───────────────────────────────────────────────────
 
 /**
  * Compute the global, tenant-agnostic facility score from objective signals.
- * Includes cross-source bonuses defined in the CMX spec.
+ * Includes cross-source bonuses and FYE timing bonus defined in the CMX spec.
  */
 export async function computeFacilityScore(facilityId: string): Promise<number> {
+  const [facility] = await db
+    .select({ fiscalYearEndMonth: facilities.fiscalYearEndMonth })
+    .from(facilities)
+    .where(eq(facilities.id, facilityId))
+    .limit(1);
+
   const sigs = await db
     .select()
     .from(purchaseSignals)
@@ -253,10 +301,19 @@ export async function computeFacilityScore(facilityId: string): Promise<number> 
   if (contacts.length > 0) score += 5;
 
   // Cross-source bonuses
-  if (typeSet.has("con_filed") && typeSet.has("bond_issued")) score += 15;
-  if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed")) score += 10;
-  if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr")) score += 8;
+  if (typeSet.has("con_approved") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance"))) score += 20;
+  if (typeSet.has("con_filed") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance"))) score += 15;
   if (typeSet.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending")) score += 12;
+  if (typeSet.has("grant_awarded") && typeSet.has("con_filed")) score += 12;
+  if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed")) score += 10;
+  if (typeSet.has("high_utilization") && typeSet.has("con_filed")) score += 10;
+  if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr")) score += 8;
+  if (typeSet.has("adverse_event_spike") && typeSet.has("hcris_depreciation_spike")) score += 8;
+  if (typeSet.has("clinical_trial") && typeSet.has("grant_awarded")) score += 8;
+  if (typeSet.has("system_signal_propagated") && (typeSet.has("con_filed") || typeSet.has("con_approved") || typeSet.has("bond_issuance") || typeSet.has("bond_issued"))) score += 10;
+
+  // FYE timing bonus — budget decisions accelerate near fiscal year close
+  score += computeTimingBonus(facility?.fiscalYearEndMonth);
 
   return clampScore(score);
 }

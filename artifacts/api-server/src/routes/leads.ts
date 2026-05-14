@@ -1,0 +1,283 @@
+/**
+ * GET /leads — returns paginated lead cards for the current account.
+ *
+ * Each card includes: tier (A/B/C), recommended action, top signals,
+ * cross-source bonus matches, contacts, and FYE timing fields.
+ */
+import { Router, type IRouter } from "express";
+import { eq, and, gte, inArray, sql, desc } from "drizzle-orm";
+import {
+  db,
+  facilities,
+  purchaseSignals,
+  facilityContacts,
+  accountFacilities,
+} from "@workspace/db";
+import { requireAccount } from "../middlewares/auth";
+import { computeSignalBreakdown, computeTimingBonus } from "../services/signalScorer";
+
+const router: IRouter = Router();
+
+// ─── Tier logic ───────────────────────────────────────────────────────────────
+
+type LeadTier = "A" | "B" | "C";
+
+function computeTier(score: number): LeadTier {
+  if (score >= 70) return "A";
+  if (score >= 50) return "B";
+  return "C";
+}
+
+function computeRecommendedAction(
+  score: number,
+  signalTypes: Set<string>,
+): { label: string; urgency: "high" | "medium" | "low" } {
+  if (score >= 70) {
+    if (signalTypes.has("con_approved") || signalTypes.has("rfp_posted")) {
+      return { label: "Schedule Discovery Call — Active procurement window", urgency: "high" };
+    }
+    if (signalTypes.has("bond_issued") || signalTypes.has("bond_issuance")) {
+      return { label: "Contact CFO/Buyer — Capital approved", urgency: "high" };
+    }
+    if (signalTypes.has("con_filed")) {
+      return { label: "Reach out now — CON filed, decision approaching", urgency: "high" };
+    }
+    return { label: "Prioritize outreach — high-intent signals detected", urgency: "high" };
+  }
+  if (score >= 50) {
+    if (signalTypes.has("hcris_depreciation_spike")) {
+      return { label: "Send Equipment ROI Overview + Depreciation Report", urgency: "medium" };
+    }
+    return { label: "Send Equipment ROI Overview", urgency: "medium" };
+  }
+  return { label: "Enroll in Drip Nurture Sequence", urgency: "low" };
+}
+
+function budgetWindowStatus(daysUntil: number | null): string {
+  if (daysUntil === null) return "unknown";
+  if (daysUntil <= 30) return "closing";
+  if (daysUntil <= 90) return "active";
+  if (daysUntil <= 180) return "approaching";
+  return "open";
+}
+
+function daysUntilFYE(fiscalYearEndMonth: number | null | undefined): number | null {
+  if (!fiscalYearEndMonth || fiscalYearEndMonth < 1 || fiscalYearEndMonth > 12) return null;
+  const now = new Date();
+  const currentMonth = now.getMonth() + 1;
+  const currentYear = now.getFullYear();
+  let fyeYear = currentYear;
+  if (fiscalYearEndMonth < currentMonth || (fiscalYearEndMonth === currentMonth && now.getDate() > 15)) {
+    fyeYear = currentYear + 1;
+  }
+  const fyeDate = new Date(fyeYear, fiscalYearEndMonth - 1, 1);
+  return Math.round((fyeDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+// ─── GET /leads ───────────────────────────────────────────────────────────────
+
+router.get("/leads", requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+
+  const minScore = Math.max(0, parseInt(String(req.query.minScore ?? "40"), 10));
+  const tierFilter = String(req.query.tierFilter ?? "").toUpperCase() as LeadTier | "";
+  const stateFilter = String(req.query.state ?? "").toUpperCase().slice(0, 2) || null;
+  const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10)));
+  const offset = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10));
+
+  // Compute effective min score based on tier filter
+  let effectiveMinScore = minScore;
+  if (tierFilter === "A") effectiveMinScore = Math.max(minScore, 70);
+  else if (tierFilter === "B") effectiveMinScore = Math.max(minScore, 50);
+
+  // Query facilities tracked by this account with a score threshold
+  const rows = await db
+    .select({
+      id: facilities.id,
+      name: facilities.name,
+      city: facilities.city,
+      state: facilities.state,
+      facilityType: facilities.facilityType,
+      systemName: facilities.systemName,
+      parentSystemId: facilities.parentSystemId,
+      signalScore: facilities.signalScore,
+      fiscalYearEndMonth: facilities.fiscalYearEndMonth,
+      fiscalYearEndSource: facilities.fiscalYearEndSource,
+      beds: facilities.beds,
+      ownership: facilities.ownership,
+    })
+    .from(facilities)
+    .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
+    .where(
+      and(
+        eq(accountFacilities.accountId, accountId),
+        gte(facilities.signalScore, effectiveMinScore),
+        stateFilter ? eq(facilities.state, stateFilter as "IL") : undefined,
+      ),
+    )
+    .orderBy(desc(facilities.signalScore))
+    .limit(limit)
+    .offset(offset);
+
+  if (rows.length === 0) {
+    res.json({ leads: [], total: rows.length, offset, limit });
+    return;
+  }
+
+  const facilityIds = rows.map((r) => r.id);
+
+  // Batch-fetch all active signals
+  const allSigs = await db
+    .select()
+    .from(purchaseSignals)
+    .where(and(inArray(purchaseSignals.facilityId, facilityIds), eq(purchaseSignals.isActive, true)));
+
+  const sigsByFacility = new Map<string, typeof allSigs>();
+  for (const sig of allSigs) {
+    if (!sigsByFacility.has(sig.facilityId)) sigsByFacility.set(sig.facilityId, []);
+    sigsByFacility.get(sig.facilityId)!.push(sig);
+  }
+
+  // Batch-fetch contacts sorted by buying authority
+  const allContacts = await db
+    .select({
+      id: facilityContacts.id,
+      facilityId: facilityContacts.facilityId,
+      firstName: facilityContacts.firstName,
+      lastName: facilityContacts.lastName,
+      title: facilityContacts.title,
+      email: facilityContacts.email,
+      phone: facilityContacts.phone,
+      buyingAuthorityScore: facilityContacts.buyingAuthorityScore,
+      humanVerified: facilityContacts.humanVerified,
+    })
+    .from(facilityContacts)
+    .where(inArray(facilityContacts.facilityId, facilityIds))
+    .orderBy(desc(facilityContacts.buyingAuthorityScore));
+
+  const contactsByFacility = new Map<string, typeof allContacts>();
+  for (const c of allContacts) {
+    if (!contactsByFacility.has(c.facilityId)) contactsByFacility.set(c.facilityId, []);
+    if (contactsByFacility.get(c.facilityId)!.length < 3) {
+      contactsByFacility.get(c.facilityId)!.push(c);
+    }
+  }
+
+  const SIGNAL_WEIGHTS: Record<string, number> = {
+    con_approved: 40, rfp_posted: 40, con_filed: 35, bond_issued: 35,
+    hcris_depreciation_spike: 25, grant_awarded: 25, equipment_age_7yr: 20,
+    high_utilization: 15, clinical_trial: 15, sec_capex_flag: 18,
+    system_signal_propagated: 15,
+  };
+
+  const leads = rows
+    .filter((f) => {
+      const score = f.signalScore ?? 0;
+      if (tierFilter === "A" && score < 70) return false;
+      if (tierFilter === "B" && (score < 50 || score >= 70)) return false;
+      if (tierFilter === "C" && (score < 40 || score >= 50)) return false;
+      return true;
+    })
+    .map((f) => {
+      const score = f.signalScore ?? 0;
+      const sigs = sigsByFacility.get(f.id) ?? [];
+      const typeSet = new Set(sigs.map((s) => s.signalType));
+      const tier = computeTier(score);
+      const { label: recommendedAction, urgency } = computeRecommendedAction(score, typeSet);
+      const days = daysUntilFYE(f.fiscalYearEndMonth);
+      const timingBonus = computeTimingBonus(f.fiscalYearEndMonth);
+
+      // Top 3 signals by weight
+      const topSignals = sigs
+        .sort((a, b) => (SIGNAL_WEIGHTS[b.signalType] ?? 0) - (SIGNAL_WEIGHTS[a.signalType] ?? 0))
+        .slice(0, 3)
+        .map((s) => ({ type: s.signalType, detectedAt: s.detectedAt, confidence: s.confidence ?? 50 }));
+
+      // Cross-source matches
+      const crossSourceMatches: string[] = [];
+      if (typeSet.has("con_approved") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
+        crossSourceMatches.push("CON Approved + Capital Confirmed");
+      if (typeSet.has("con_filed") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
+        crossSourceMatches.push("CON Filed + Bond Financing");
+      if (typeSet.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending"))
+        crossSourceMatches.push("RFP + Prior Award Match");
+      if (typeSet.has("grant_awarded") && typeSet.has("con_filed"))
+        crossSourceMatches.push("Grant + CON Expansion");
+      if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed"))
+        crossSourceMatches.push("Depreciation Spike + CON Filed");
+      if (typeSet.has("system_signal_propagated") && (typeSet.has("con_filed") || typeSet.has("con_approved")))
+        crossSourceMatches.push("System-Wide Capital Signal");
+
+      return {
+        facilityId: f.id,
+        name: f.name,
+        city: f.city,
+        state: f.state,
+        facilityType: f.facilityType,
+        systemName: f.systemName,
+        parentSystemId: f.parentSystemId,
+        beds: f.beds,
+        ownership: f.ownership,
+        score,
+        tier,
+        recommendedAction,
+        urgency,
+        topSignals,
+        crossSourceMatches,
+        contacts: contactsByFacility.get(f.id) ?? [],
+        fye: {
+          month: f.fiscalYearEndMonth,
+          source: f.fiscalYearEndSource,
+          daysUntil: days,
+          timingBonus,
+          budgetWindowStatus: budgetWindowStatus(days),
+        },
+      };
+    });
+
+  res.json({ leads, total: leads.length, offset, limit });
+});
+
+// ─── GET /leads/summary ────────────────────────────────────────────────────────
+
+router.get("/leads/summary", requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+
+  const [tierA] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(facilities)
+    .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
+    .where(and(eq(accountFacilities.accountId, accountId), gte(facilities.signalScore, 70)));
+
+  const [tierB] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(facilities)
+    .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
+    .where(
+      and(
+        eq(accountFacilities.accountId, accountId),
+        gte(facilities.signalScore, 50),
+        sql`${facilities.signalScore} < 70`,
+      ),
+    );
+
+  const [tierC] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(facilities)
+    .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
+    .where(
+      and(
+        eq(accountFacilities.accountId, accountId),
+        gte(facilities.signalScore, 40),
+        sql`${facilities.signalScore} < 50`,
+      ),
+    );
+
+  res.json({
+    tierA: tierA?.count ?? 0,
+    tierB: tierB?.count ?? 0,
+    tierC: tierC?.count ?? 0,
+  });
+});
+
+export default router;

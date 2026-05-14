@@ -22,6 +22,8 @@ import {
 } from "@workspace/db";
 import { getReviewThreshold } from "../services/conFilingsIngestor";
 import { recomputeAllScores } from "../services/signalScorer";
+import { seedParentSystems } from "@workspace/db";
+import { propagateSystemSignals } from "../services/systemSignalPropagator";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { listAllSources } from "../services/enrichment";
 import { backfillConFilingFacilities } from "../services/conFacilityMatcher";
@@ -1233,6 +1235,36 @@ router.post(
       .where(eq(conFilings.id, id))
       .returning();
     res.json(updated);
+  },
+);
+
+// ─── Parent system seeding ───────────────────────────────────────────────────
+
+router.post(
+  "/admin/facilities/seed-parent-systems",
+  requirePlatformAdmin,
+  async (_req, res) => {
+    try {
+      const result = await seedParentSystems();
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "seed_failed", detail: String(err) });
+    }
+  },
+);
+
+// ─── System signal propagation ───────────────────────────────────────────────
+
+router.post(
+  "/admin/signals/propagate-system",
+  requirePlatformAdmin,
+  async (_req, res) => {
+    try {
+      const result = await propagateSystemSignals();
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "propagation_failed", detail: String(err) });
+    }
   },
 );
 

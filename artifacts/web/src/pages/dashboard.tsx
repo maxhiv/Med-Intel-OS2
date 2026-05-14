@@ -1,10 +1,37 @@
-import { useGetDashboardSummary, useGetRecentSignals, useGetTopFacilities } from "@workspace/api-client-react";
+import { useGetDashboardSummary, useGetRecentSignals, useGetTopFacilities, customFetch } from "@workspace/api-client-react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Building2, Users, Target, Activity, CheckCircle2, AlertTriangle, ArrowRight, MailCheck, MailX } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Building2, Users, Target, Activity, CheckCircle2, AlertTriangle, ArrowRight, MailCheck, MailX, Crosshair, Zap } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
+import { cn } from "@/lib/utils";
+
+type LeadTier = "A" | "B" | "C";
+
+interface DashLead {
+  facilityId: string;
+  name: string;
+  state: string | null;
+  score: number;
+  tier: LeadTier;
+  recommendedAction: string;
+  urgency: "high" | "medium" | "low";
+  crossSourceMatches: string[];
+}
+
+interface LeadsResponse {
+  leads: DashLead[];
+  total: number;
+}
+
+function tierBadge(tier: LeadTier) {
+  if (tier === "A") return "bg-red-500/15 text-red-400 border-red-500/30";
+  if (tier === "B") return "bg-amber-500/15 text-amber-400 border-amber-500/30";
+  return "bg-blue-500/15 text-blue-400 border-blue-500/30";
+}
 
 export default function DashboardPage() {
   const { data: summary, isLoading: loadingSummary } = useGetDashboardSummary({
@@ -18,6 +45,14 @@ export default function DashboardPage() {
     { limit: 5 },
     { query: { refetchInterval: 60_000 } },
   );
+
+  const { data: leadsData, isLoading: loadingLeads } = useQuery<LeadsResponse>({
+    queryKey: ["leads-dashboard"],
+    queryFn: () => customFetch<LeadsResponse>("/api/leads?limit=5&minScore=40"),
+    refetchInterval: 5 * 60 * 1000,
+  });
+
+  const topLeads = leadsData?.leads ?? [];
 
   return (
     <div className="space-y-6">
@@ -116,6 +151,83 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Today's Top Leads */}
+      <Card className="bg-card border-primary/20">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Crosshair className="h-4 w-4 text-primary" />
+              Today's Top Leads
+            </CardTitle>
+            <CardDescription>Highest-intent facilities ranked by purchase signals</CardDescription>
+          </div>
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/leads">View All <ArrowRight className="ml-1 h-3 w-3" /></Link>
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {loadingLeads ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
+            </div>
+          ) : topLeads.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
+              <Crosshair className="h-8 w-8 mb-2 opacity-20" />
+              <p className="text-sm">No leads yet — track facilities to generate leads</p>
+              <Button variant="outline" size="sm" className="mt-3" asChild>
+                <Link href="/facilities">Browse Facilities</Link>
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {topLeads.map((lead) => (
+                <div
+                  key={lead.facilityId}
+                  className={cn(
+                    "flex items-center justify-between border-b border-border pb-2 last:border-0 last:pb-0 gap-3",
+                  )}
+                >
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <Badge
+                      variant="outline"
+                      className={cn("text-xs font-bold px-1.5 py-0 shrink-0 border", lead.tier === "A" ? "bg-red-500/15 text-red-400 border-red-500/30" : lead.tier === "B" ? "bg-amber-500/15 text-amber-400 border-amber-500/30" : "bg-blue-500/15 text-blue-400 border-blue-500/30")}
+                    >
+                      {lead.tier}
+                    </Badge>
+                    <div className="min-w-0">
+                      <Link
+                        href={`/facilities/${lead.facilityId}`}
+                        className="text-sm font-medium hover:underline hover:text-primary leading-tight line-clamp-1 block"
+                      >
+                        {lead.name}
+                      </Link>
+                      <p className="text-xs text-muted-foreground truncate">{lead.recommendedAction}</p>
+                    </div>
+                    {lead.crossSourceMatches.length > 0 && (
+                      <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30 shrink-0 hidden sm:flex items-center gap-0.5">
+                        <Zap className="h-2.5 w-2.5" />
+                        {lead.crossSourceMatches.length}
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={cn(
+                      "text-lg font-bold tabular-nums",
+                      lead.score >= 70 ? "text-red-400" : lead.score >= 50 ? "text-amber-400" : "text-blue-400",
+                    )}>
+                      {lead.score}
+                    </span>
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" asChild>
+                      <Link href={`/facilities/${lead.facilityId}`}>View</Link>
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="bg-card">
         <CardHeader className="flex flex-row items-center justify-between space-y-0">

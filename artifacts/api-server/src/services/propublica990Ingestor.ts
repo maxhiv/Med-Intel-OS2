@@ -31,6 +31,7 @@ interface PpSearchResult {
 
 interface PpFiling {
   tax_prd_yr?: number;
+  tax_prd?: string;
   totcntrbgfts?: number;
   totfuncexpns?: number;
   // Part VII officer fields — ProPublica returns up to 10 principals per filing
@@ -220,6 +221,21 @@ export async function ingestPropublica990(
             isActive: true,
           });
           result.signalsInserted += 1;
+        }
+
+        // Write fiscal year end month if not already set from a higher-priority
+        // source (hcris is higher priority; irs_990 only fills the gap).
+        const fyeMonthFromPeriod = filing.tax_prd
+          ? parseInt(filing.tax_prd.slice(-2), 10)
+          : undefined;
+        const fyeMonth = fyeMonthFromPeriod;
+        if (fyeMonth && fyeMonth >= 1 && fyeMonth <= 12) {
+          await db
+            .update(facilities)
+            .set({ fiscalYearEndMonth: fyeMonth, fiscalYearEndSource: "irs_990", updatedAt: new Date() })
+            .where(
+              sql`${facilities.id} = ${f.id} AND ${facilities.fiscalYearEndSource} IS NULL`,
+            );
         }
 
         // Large-grants signal.

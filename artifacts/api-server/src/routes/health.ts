@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
-import { sql } from "drizzle-orm";
-import { db, facilities, accountFacilities, conFilings } from "@workspace/db";
+import { sql, gte } from "drizzle-orm";
+import { db, facilities, accountFacilities, conFilings, purchaseSignals } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { getIngestorTelemetry } from "../lib/ingestorTelemetry";
 
@@ -54,6 +54,26 @@ router.get("/health", async (_req, res) => {
     dbStatus = "down";
   }
 
+  let signalsCount = 0;
+  let highScoreFacilities = 0;
+
+  if (dbStatus === "ok") {
+    try {
+      const [sigRow] = await db
+        .select({ c: sql<number>`count(*)::int` })
+        .from(purchaseSignals);
+      signalsCount = sigRow?.c ?? 0;
+
+      const [hsRow] = await db
+        .select({ c: sql<number>`count(*)::int` })
+        .from(facilities)
+        .where(gte(facilities.signalScore, 70));
+      highScoreFacilities = hsRow?.c ?? 0;
+    } catch {
+      // non-critical
+    }
+  }
+
   const disableCron = process.env.DISABLE_CRON === "true";
   const conTelemetry = getIngestorTelemetry("conFilings");
 
@@ -64,6 +84,8 @@ router.get("/health", async (_req, res) => {
     facilitiesCount,
     accountFacilitiesLinked,
     conFilingsCount,
+    signalsCount,
+    highScoreFacilities,
     cronStatus: {
       nextRun: disableCron ? null : "~04:30 UTC daily",
     },
