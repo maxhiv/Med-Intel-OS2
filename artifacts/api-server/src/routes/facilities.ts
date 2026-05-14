@@ -3,6 +3,7 @@ import {
   sql,
   eq,
   and,
+  asc,
   desc,
   ilike,
   gte,
@@ -125,6 +126,8 @@ router.get("/facilities", requireAccount, async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
 
+  const sortByParam = typeof req.query.sortBy === "string" ? req.query.sortBy.trim() : "score_desc";
+
   const conds: SQL[] = [];
   if (state) conds.push(eq(facilities.state, state));
   if (facilityType) conds.push(eq(facilities.facilityType, facilityType));
@@ -133,6 +136,13 @@ router.get("/facilities", requireAccount, async (req, res) => {
   if (search) conds.push(ilike(facilities.name, `%${search}%`));
   if (trackedOnly) conds.push(isNotNull(accountFacilities.facilityId));
   const where = conds.length > 0 ? and(...conds) : undefined;
+
+  const orderClause =
+    sortByParam === "score_asc"
+      ? asc(facilities.signalScore)
+      : sortByParam === "name"
+      ? asc(facilities.name)
+      : desc(facilities.signalScore);
 
   const rows = await db
     .select({
@@ -148,7 +158,7 @@ router.get("/facilities", requireAccount, async (req, res) => {
       ),
     )
     .where(where)
-    .orderBy(desc(facilities.signalScore))
+    .orderBy(orderClause)
     .limit(limit)
     .offset(offset);
 

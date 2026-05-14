@@ -179,11 +179,16 @@ export default function FacilitiesPage() {
   const { toast } = useToast();
   const limit = 50;
 
+  const serverSortBy =
+    sortBy === "signal_asc" ? "score_asc" : sortBy === "name" ? "name" : "score_desc";
+
   const { data: facilitiesRes, isLoading, refetch } = useListFacilities({
     search: search || undefined,
     state: state !== "all" ? state : undefined,
     facilityType: facilityType !== "all" ? facilityType : undefined,
     trackedOnly: trackedOnly ? "true" : undefined,
+    minScore: highPriorityOnly ? 60 : undefined,
+    sortBy: serverSortBy,
     limit,
     offset: page * limit,
   } as Parameters<typeof useListFacilities>[0]);
@@ -223,19 +228,7 @@ export default function FacilitiesPage() {
   const total = facilitiesRes?.total ?? 0;
   const totalPages = Math.ceil(total / limit);
 
-  let displayData = facilitiesRes?.data ?? [];
-
-  if (highPriorityOnly) {
-    displayData = displayData.filter((f) => (f.signalScore ?? 0) >= 60);
-  }
-
-  if (sortBy === "signal_desc") {
-    displayData = [...displayData].sort((a, b) => (b.signalScore ?? 0) - (a.signalScore ?? 0));
-  } else if (sortBy === "signal_asc") {
-    displayData = [...displayData].sort((a, b) => (a.signalScore ?? 0) - (b.signalScore ?? 0));
-  } else if (sortBy === "name") {
-    displayData = [...displayData].sort((a, b) => a.name.localeCompare(b.name));
-  }
+  const displayData = facilitiesRes?.data ?? [];
 
   return (
     <div className="space-y-6">

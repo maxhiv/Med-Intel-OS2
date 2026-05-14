@@ -975,6 +975,8 @@ export type ListFacilitiesParams = {
   limit?: number;
   offset?: number;
   trackedOnly?: string;
+  /** Sort order: "score_desc" (default), "score_asc", "name" */
+  sortBy?: string;
 };
 
 export type ListConAlertNotificationsParams = {

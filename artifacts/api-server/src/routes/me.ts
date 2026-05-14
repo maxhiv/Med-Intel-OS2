@@ -34,8 +34,11 @@ router.get("/me", requireAuth, async (req, res) => {
 });
 
 // Dedicated sub-accounts listing for the current account.
-// Used by UI components (e.g. Pipeline modal) that need a fresh fetch rather
-// than relying on the cached /me payload.
+// This is the canonical account-scoped endpoint for UI use (e.g. Pipeline modal).
+// It returns only the sub-accounts belonging to the authenticated user's account,
+// equivalent to filtering /admin/sub-accounts by the current account_id.
+// Use /admin/sub-accounts (requirePlatformAdmin) when you need to query
+// sub-accounts across all accounts.
 router.get("/me/sub-accounts", requireAuth, requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
   const subs = await db
