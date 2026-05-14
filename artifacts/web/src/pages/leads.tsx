@@ -334,7 +334,7 @@ function SequenceSelectorDialog({
 
 // ─── Lead Card ────────────────────────────────────────────────────────────────
 
-function LeadCard({ lead }: { lead: Lead }) {
+function LeadCard({ lead, hasSubAccounts, hasSequences }: { lead: Lead; hasSubAccounts: boolean; hasSequences: boolean }) {
   const bw = budgetLabel(lead.fye.budgetWindowStatus);
   const [ghlOpen, setGhlOpen] = useState(false);
   const [seqOpen, setSeqOpen] = useState(false);
@@ -468,6 +468,8 @@ function LeadCard({ lead }: { lead: Lead }) {
                 variant="secondary"
                 className="flex-1 text-xs h-7 min-w-[120px]"
                 onClick={() => setGhlOpen(true)}
+                disabled={!hasSubAccounts}
+                title={!hasSubAccounts ? "No GHL sub-account configured" : undefined}
               >
                 <GitBranch className="mr-1 h-3 w-3" /> Add to GHL Pipeline
               </Button>
@@ -476,6 +478,8 @@ function LeadCard({ lead }: { lead: Lead }) {
                 variant="ghost"
                 className="flex-1 text-xs h-7 min-w-[100px] border border-border"
                 onClick={() => setSeqOpen(true)}
+                disabled={!hasSequences}
+                title={!hasSequences ? "No sequences configured" : undefined}
               >
                 <ListOrdered className="mr-1 h-3 w-3" /> Start Sequence
               </Button>
@@ -497,6 +501,11 @@ export default function LeadsPage() {
   const [stateFilter, setStateFilter] = useState<string>("");
   const [minScore, setMinScore] = useState<number>(40);
   const [equipmentType, setEquipmentType] = useState<string>("");
+
+  const { data: me } = useGetMe();
+  const { data: sequences } = useListSequences();
+  const hasSubAccounts = (me?.subAccounts ?? []).length > 0;
+  const hasSequences = (sequences ?? []).length > 0;
 
   const params = new URLSearchParams();
   if (tierFilter) params.set("tierFilter", tierFilter);
@@ -651,7 +660,7 @@ export default function LeadsPage() {
           </p>
           <div className="grid gap-4 md:grid-cols-2">
             {leads.map((lead) => (
-              <LeadCard key={lead.facilityId} lead={lead} />
+              <LeadCard key={lead.facilityId} lead={lead} hasSubAccounts={hasSubAccounts} hasSequences={hasSequences} />
             ))}
           </div>
         </>
