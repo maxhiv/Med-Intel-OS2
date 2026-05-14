@@ -10,6 +10,9 @@ export type ListConFilingsStatus =
   (typeof ListConFilingsStatus)[keyof typeof ListConFilingsStatus];
 
 export const ListConFilingsStatus = {
-  approved: "approved",
-  filed: "filed",
+  approved:     "approved",
+  denied:       "denied",
+  under_review: "under_review",
+  pending:      "pending",
+  filed:        "filed",
 } as const;

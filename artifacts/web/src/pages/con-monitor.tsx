@@ -243,16 +243,16 @@ function PipelineModal({ filingId, filingName, subAccounts, onClose }: PipelineM
 
 function exportCsv(rows: {
   state: string;
-  applicantName: string | null | undefined;
-  equipmentType: string | null | undefined;
-  modality: string | null | undefined;
-  statusNormalized: string | null | undefined;
-  status: string | null | undefined;
-  filingDate: Date | string | null | undefined;
-  decisionDate: Date | string | null | undefined;
-  requestedAmount: number | null | undefined;
-  approvedAmount: number | null | undefined;
-  filingUrl: string | null | undefined;
+  applicantName?: string | null | undefined;
+  equipmentType?: string | null | undefined;
+  modality?: string | null | undefined;
+  statusNormalized?: string | null | undefined;
+  status?: string | null | undefined;
+  filingDate?: Date | string | null | undefined;
+  decisionDate?: Date | string | null | undefined;
+  requestedAmount?: number | null | undefined;
+  approvedAmount?: number | null | undefined;
+  filingUrl?: string | null | undefined;
 }[]) {
   const headers = ["State","Applicant","Equipment Type","Modality","Status","Filed","Decision","Requested","Approved","URL"];
   const lines = [

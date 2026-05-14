@@ -318,11 +318,11 @@ export function useGetDashboardSummary<
   TData = Awaited<ReturnType<typeof getDashboardSummary>>,
   TError = ErrorType<unknown>,
 >(options?: {
-  query?: UseQueryOptions<
+  query?: Omit<UseQueryOptions<
     Awaited<ReturnType<typeof getDashboardSummary>>,
     TError,
     TData
-  >;
+  >, 'queryKey'>;
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetDashboardSummaryQueryOptions(options);
@@ -417,11 +417,11 @@ export function useGetRecentSignals<
 >(
   params?: GetRecentSignalsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof getRecentSignals>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -517,11 +517,11 @@ export function useGetTopFacilities<
 >(
   params?: GetTopFacilitiesParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof getTopFacilities>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -1533,11 +1533,11 @@ export function useListConAlertNotifications<
 >(
   params?: ListConAlertNotificationsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof listConAlertNotifications>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -2842,11 +2842,11 @@ export function useListDrafts<
 >(
   params?: ListDraftsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof listDrafts>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
