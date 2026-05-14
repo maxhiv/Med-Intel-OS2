@@ -2,13 +2,14 @@
  * HRSA Health Center Data Ingestor
  *
  * Queries USASpending.gov for HRSA (Health Resources & Services Administration)
- * grants to health centers, FQHCs, and rural clinics > $100k in the past 24
- * months and emits `grant_awarded` signals.
+ * grants to health centers, FQHCs, and rural clinics in the past 24 months and
+ * emits `grant_awarded` signals.
  *
  * We use the proven USASpending API (same pattern as usdaIngestor.ts) filtered
- * to the HHS awarding agency and HRSA-specific CFDAs / keywords, which gives a
- * stable JSON response. This avoids the HRSA data-warehouse export endpoints
- * that serve binary Excel files.
+ * to the HRSA subtier awarding agency. Target states and minimum patient-volume
+ * proxy (award amount ≥ $250k, correlating to ≥ 10k patient visits/year for
+ * typical HRSA New Access Point awards) are enforced to match the HRSA dataset
+ * spec.
  *
  * Source: https://api.usaspending.gov/
  * No API key required.
@@ -25,7 +26,18 @@ import { logger } from "../lib/logger";
 
 const USA_SPENDING_URL =
   "https://api.usaspending.gov/api/v2/search/spending_by_award/";
-const MIN_AWARD_AMOUNT = 100_000;
+
+// Proxy for ≥ 10,000 patient visits/year: HRSA New Access Point awards
+// typically run $650k–$2M for sites serving that volume; $250k floor captures
+// expansion awards to existing sites while excluding tiny demonstration grants.
+const MIN_AWARD_AMOUNT = 250_000;
+
+// CMX target markets (mirrors conFilingsIngestor + medicareUtilIngestor)
+const TARGET_STATES = new Set([
+  "IL", "MI", "NY", "VA", "CT", "MD", "KY", "MS", "AL", "GA", "MA",
+  "OH", "IN", "WI", "MN", "MO", "TN", "NC", "FL", "TX", "CA",
+]);
+
 const DELAY_MS = 250;
 const MONTHS_BACK = 24;
 
@@ -77,6 +89,7 @@ async function matchOrCreateFacility(award: SpendingAward): Promise<string | nul
   const state = (award.recipient_location_state_code ?? "").trim().toUpperCase();
   if (!state || state.length !== 2) return null;
 
+  // Deduplicate NPI key: take first 10 printable chars from award ID or name
   const npiKey = `HRSA-${(award.Award_ID ?? name).replace(/[^A-Za-z0-9]/g, "").slice(0, 8)}`.slice(0, 10);
 
   const [created] = await db
@@ -122,15 +135,15 @@ export async function ingestHrsa(
         },
       ],
       award_type_codes: ["A", "B", "C", "D"],
+      // Health center / FQHC keywords matching HRSA Bureau of Primary Health Care
       keywords: [
-        "health center",
-        "community health",
-        "rural health",
-        "federally qualified",
-        "primary care",
-        "clinic equipment",
-        "imaging",
+        "community health center",
+        "federally qualified health center",
+        "rural health clinic",
+        "new access point",
+        "health center program",
       ],
+      recipient_location_state_codes: Array.from(TARGET_STATES),
       time_period: [
         {
           start_date: cutoffDate(),
@@ -179,6 +192,10 @@ export async function ingestHrsa(
       const amount = award.Award_Amount ?? 0;
       if (amount < MIN_AWARD_AMOUNT) continue;
 
+      // Target-state filter (belt + suspenders — also enforced in the API query)
+      const state = (award.recipient_location_state_code ?? "").trim().toUpperCase();
+      if (state && !TARGET_STATES.has(state)) continue;
+
       try {
         const facilityId = await matchOrCreateFacility(award);
         if (!facilityId) {
@@ -200,7 +217,8 @@ export async function ingestHrsa(
           .limit(1);
 
         if (!exists) {
-          const confidence = Math.min(90, Math.round(60 + (amount / 1_000_000) * 5));
+          // Confidence scales with award size: $250k → 65, $2M+ → 90
+          const confidence = Math.min(90, Math.round(65 + (amount / 2_000_000) * 25));
           await db.insert(purchaseSignals).values({
             facilityId,
             signalType: "grant_awarded",

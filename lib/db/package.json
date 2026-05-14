@@ -10,8 +10,10 @@
   "scripts": {
     "ensure-extensions": "tsx src/ensure-extensions.ts",
     "push": "tsx src/ensure-extensions.ts && drizzle-kit push --config ./drizzle.config.ts",
-    "seed": "tsx src/seed.ts",
-    "push-force": "tsx src/ensure-extensions.ts && drizzle-kit push --force --config ./drizzle.config.ts"
+    "push-force": "tsx src/ensure-extensions.ts && drizzle-kit push --force --config ./drizzle.config.ts",
+    "generate": "drizzle-kit generate --config ./drizzle.config.ts",
+    "migrate": "tsx src/migrate.ts",
+    "seed": "tsx src/seed.ts"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",
