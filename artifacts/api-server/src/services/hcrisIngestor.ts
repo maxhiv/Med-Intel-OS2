@@ -176,6 +176,7 @@ export async function ingestHcris(
               signalValue,
               confidence,
               source: "hcris",
+              metadata: null,
               isActive: true,
             });
             result.signalsInserted += 1;

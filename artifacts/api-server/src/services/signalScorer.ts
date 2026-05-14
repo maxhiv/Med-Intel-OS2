@@ -179,27 +179,9 @@ export async function computeSignalBreakdown(
     else tier3Count++;
   }
 
-  const crossSourceBonuses: string[] = [];
-  if (typeSet.has("con_approved") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
-    crossSourceBonuses.push("CON Approved + Capital Confirmed");
-  if (typeSet.has("con_filed") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
-    crossSourceBonuses.push("CON Filed + Bond Financing");
-  if (typeSet.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending"))
-    crossSourceBonuses.push("RFP + Prior Award Match");
-  if (typeSet.has("grant_awarded") && typeSet.has("con_filed"))
-    crossSourceBonuses.push("Grant + CON Expansion");
-  if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed"))
-    crossSourceBonuses.push("Depreciation Spike + CON Filed");
-  if (typeSet.has("high_utilization") && typeSet.has("con_filed"))
-    crossSourceBonuses.push("High Utilization + CON Activity");
-  if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr"))
-    crossSourceBonuses.push("High Utilization + Equipment Age");
-  if (typeSet.has("adverse_event_spike") && typeSet.has("hcris_depreciation_spike"))
-    crossSourceBonuses.push("Adverse Events + Aging Equipment");
-  if (typeSet.has("clinical_trial") && typeSet.has("grant_awarded"))
-    crossSourceBonuses.push("Clinical Trial + Grant Award");
-  if (typeSet.has("system_signal_propagated") && (typeSet.has("con_filed") || typeSet.has("con_approved") || typeSet.has("bond_issuance") || typeSet.has("bond_issued")))
-    crossSourceBonuses.push("System-Wide Capital Signal");
+  const crossSourceBonuses: string[] = CROSS_SOURCE_BONUS_RULES
+    .filter((r) => r.matches(typeSet, sigs))
+    .map((r) => r.label);
 
   const topSignals = sigs
     .sort((a, b) => {
@@ -216,6 +198,75 @@ export async function computeSignalBreakdown(
 
   return { tier1Count, tier2Count, tier3Count, crossSourceBonuses, topSignals };
 }
+
+// ─── Cross-source bonus matrix ────────────────────────────────────────────────
+
+/**
+ * Named cross-source bonus rules (Section 9 of the CMX spec).
+ * Exported so the /leads endpoint can surface matched label strings.
+ * Each rule declares: the condition predicate, the human-readable label,
+ * and the integer points added to the facility score.
+ */
+export interface CrossSourceBonusRule {
+  label: string;
+  points: number;
+  matches(typeSet: Set<string>, sigs: Array<{ source: string }>): boolean;
+}
+
+export const CROSS_SOURCE_BONUS_RULES: CrossSourceBonusRule[] = [
+  {
+    label: "CON Approved + Capital Confirmed",
+    points: 20,
+    matches: (t) => t.has("con_approved") && (t.has("bond_issued") || t.has("bond_issuance")),
+  },
+  {
+    label: "CON Filed + Bond Financing",
+    points: 15,
+    matches: (t) => t.has("con_filed") && (t.has("bond_issued") || t.has("bond_issuance")),
+  },
+  {
+    label: "RFP + Prior Award Match",
+    points: 12,
+    matches: (t, sigs) => t.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending"),
+  },
+  {
+    label: "Grant + CON Expansion",
+    points: 12,
+    matches: (t) => t.has("grant_awarded") && t.has("con_filed"),
+  },
+  {
+    label: "Depreciation Spike + CON Filed",
+    points: 10,
+    matches: (t) => t.has("hcris_depreciation_spike") && t.has("con_filed"),
+  },
+  {
+    label: "High Utilization + CON Activity",
+    points: 10,
+    matches: (t) => t.has("high_utilization") && t.has("con_filed"),
+  },
+  {
+    label: "High Utilization + Equipment Age",
+    points: 8,
+    matches: (t) => t.has("high_utilization") && t.has("equipment_age_7yr"),
+  },
+  {
+    label: "Adverse Events + Aging Equipment",
+    points: 8,
+    matches: (t) => t.has("adverse_event_spike") && t.has("hcris_depreciation_spike"),
+  },
+  {
+    label: "Clinical Trial + Grant Award",
+    points: 8,
+    matches: (t) => t.has("clinical_trial") && t.has("grant_awarded"),
+  },
+  {
+    label: "System-Wide Capital Signal",
+    points: 10,
+    matches: (t) =>
+      t.has("system_signal_propagated") &&
+      (t.has("con_filed") || t.has("con_approved") || t.has("bond_issuance") || t.has("bond_issued")),
+  },
+];
 
 // ─── FYE timing bonus ─────────────────────────────────────────────────────────
 
@@ -300,17 +351,10 @@ export async function computeFacilityScore(facilityId: string): Promise<number> 
     );
   if (contacts.length > 0) score += 5;
 
-  // Cross-source bonuses
-  if (typeSet.has("con_approved") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance"))) score += 20;
-  if (typeSet.has("con_filed") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance"))) score += 15;
-  if (typeSet.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending")) score += 12;
-  if (typeSet.has("grant_awarded") && typeSet.has("con_filed")) score += 12;
-  if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed")) score += 10;
-  if (typeSet.has("high_utilization") && typeSet.has("con_filed")) score += 10;
-  if (typeSet.has("high_utilization") && typeSet.has("equipment_age_7yr")) score += 8;
-  if (typeSet.has("adverse_event_spike") && typeSet.has("hcris_depreciation_spike")) score += 8;
-  if (typeSet.has("clinical_trial") && typeSet.has("grant_awarded")) score += 8;
-  if (typeSet.has("system_signal_propagated") && (typeSet.has("con_filed") || typeSet.has("con_approved") || typeSet.has("bond_issuance") || typeSet.has("bond_issued"))) score += 10;
+  // Cross-source bonuses — driven by the shared CROSS_SOURCE_BONUS_RULES matrix
+  for (const rule of CROSS_SOURCE_BONUS_RULES) {
+    if (rule.matches(typeSet, sigs)) score += rule.points;
+  }
 
   // FYE timing bonus — budget decisions accelerate near fiscal year close
   score += computeTimingBonus(facility?.fiscalYearEndMonth);

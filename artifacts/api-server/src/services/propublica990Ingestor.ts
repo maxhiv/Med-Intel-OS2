@@ -218,6 +218,7 @@ export async function ingestPropublica990(
             signalValue: fyValue,
             confidence: 70,
             source: "propublica_990",
+            metadata: null,
             isActive: true,
           });
           result.signalsInserted += 1;
@@ -260,6 +261,7 @@ export async function ingestPropublica990(
               signalValue: grantValue,
               confidence: 65,
               source: "propublica_990",
+              metadata: null,
               isActive: true,
             });
             result.signalsInserted += 1;
