@@ -1,0 +1,863 @@
+You are continuing development of the CMX LeadStack Intelligence Platform — 
+a medical equipment sales intelligence tool for Chicago Medical Exchange (CMX) 
+and capital equipment medical device reps. The monorepo uses pnpm workspaces, 
+Express (API), React 19/Vite (frontend), Drizzle ORM (PostgreSQL), and 
+TanStack React Query. TypeScript strict mode is on everywhere.
+
+Read the codebase carefully before making any changes. Work through every 
+section below in order. Do not stop until all sections are complete.
+
+This prompt is organized around a core strategic insight:
+
+  A single signal is a hint.
+  Two confirming signals from independent sources is a qualified lead.
+  Three is a hot lead.
+
+Every change below exists to make that confluence detection faster, more 
+accurate, and more actionable for a sales rep in the field.
+
+==========================================================================
+SECTION 1 — PARENT HEALTH SYSTEM SIGNAL PROPAGATION
+==========================================================================
+
+WHY THIS MATTERS:
+Right now, when Northwestern Lake Forest Hospital files a CON application,
+that signal is stored against that one facility record. But the CFO who
+controls the capital budget works at Northwestern University Health System
+and makes purchasing decisions for all 12 facilities in the network. A bond
+issued by "Northwestern University Health System" via SEC EDGAR never 
+propagates to any of the child hospitals because the ingestor matches on
+facility name, not parent system. This means a rep looking at Lake Forest 
+Hospital sees score: 22, when the real cross-system score should be 74+.
+Competitors using manual research catch this; our platform currently misses it.
+
+WHAT TO BUILD:
+
+--- 1A. Add parentSystemId to facilities ---
+
+Add a new nullable column to the facilities table:
+  parentSystemId  uuid  REFERENCES facilities(id) ON DELETE SET NULL
+
+Create a Drizzle migration for this column.
+Run db:generate then db:migrate.
+
+Also add:
+  systemName  text  nullable  -- the canonical parent system name
+  (e.g. "Northwestern University Health System")
+
+--- 1B. Seed known parent-child relationships ---
+
+In lib/db/src/seed.ts (or a new file lib/db/src/seedSystemRelationships.ts),
+add a function seedParentSystems() that upserts the following 20 major 
+health system relationships. For each, find or create a "parent" facility 
+record (facilityType = 'health_system') and link known children by name ILIKE:
+
+Health systems to seed:
+  "CommonSpirit Health"           → children: any facility ILIKE '%dignity health%' OR '%CHI%' OR '%Mercy%'
+  "Advocate Aurora Health"        → children: ILIKE '%advocate%' OR '%aurora%'
+  "HCA Healthcare"                → children: ILIKE '%HCA%' OR '%TriStar%' OR '%Centennial%'
+  "Ascension Health"              → children: ILIKE '%ascension%' OR '%St. Vincent%' OR '%Seton%'
+  "Trinity Health"                → children: ILIKE '%trinity%' OR '%Mercy%' OR '%Saint Joseph%'
+  "Tenet Healthcare"              → children: ILIKE '%tenet%' OR '%Saint Mary%' OR '%Hahnemann%'
+  "Mayo Clinic"                   → children: ILIKE '%mayo%'
+  "Cleveland Clinic"              → children: ILIKE '%cleveland clinic%'
+  "Johns Hopkins"                 → children: ILIKE '%johns hopkins%' OR '%Hopkins%'
+  "Mass General Brigham"          → children: ILIKE '%massachusetts general%' OR '%brigham%' OR '%MGH%'
+  "Northwestern Medicine"         → children: ILIKE '%northwestern%' OR '%cadence%'
+  "RUSH System"                   → children: ILIKE '%rush%'
+  "University of Chicago Medicine"→ children: ILIKE '%uchicago%' OR '%university of chicago%'
+  "Loyola Medicine"               → children: ILIKE '%loyola%'
+  "Northshore University Health"  → children: ILIKE '%northshore%' OR '%NorthShore%'
+  "Presence Health"               → children: ILIKE '%presence%'
+  "OSF Healthcare"                → children: ILIKE '%OSF%'
+  "Sinai Health System"           → children: ILIKE '%sinai%' AND state = 'IL'
+  "Beaumont Health"               → children: ILIKE '%beaumont%'
+  "Spectrum Health"               → children: ILIKE '%spectrum%' OR '%Corewell%'
+
+The seed function should:
+  - INSERT the parent facility if it doesn't exist (NPI = null, 
+    facilityType = 'health_system', name = system name above)
+  - UPDATE facilities SET parentSystemId = parent.id WHERE name ILIKE pattern
+  - Log how many children were linked per system
+
+Add a POST /admin/facilities/seed-parent-systems endpoint that runs this
+function. Requires platform_admin role. Returns { systemsCreated, childrenLinked }.
+
+--- 1C. Signal propagation job ---
+
+Create a new service file:
+artifacts/api-server/src/services/systemSignalPropagator.ts
+
+Export a function: propagateSystemSignals()
+
+Logic:
+  1. Find all parent facilities (WHERE parentSystemId IS NULL AND facilityType = 'health_system')
+  2. For each parent, find all child facilities (WHERE parentSystemId = parent.id)
+  3. For each child, find all Tier 1 signals (signalType IN ('con_filed','con_approved',
+     'bond_issuance','bond_issued','grant_awarded','nih_grant','rfp_posted'))
+  4. For each Tier 1 signal on a child, upsert the SAME signal onto EVERY OTHER
+     sibling facility with:
+       - confidence = original.confidence * 0.80  (20% discount for indirect match)
+       - metadata = { ...original.metadata, propagatedFrom: child.id, propagatedFromName: child.name }
+       - signalType = 'system_signal_propagated' (add this to signalTypeEnum if not present)
+     Use ON CONFLICT DO NOTHING on (facilityId, signalType, signalValue) to stay idempotent
+  5. Also upsert the signal onto the parent facility itself with 0.90 confidence
+  6. After propagation, call recomputeAllScores() so parent system scores reflect children
+
+Register this in cron/index.ts to run daily at 07:00 (after the 06:00 ingest jobs):
+  cron.schedule('0 7 * * *', async () => {
+    await propagateSystemSignals()
+  })
+
+Also add POST /admin/signals/propagate-system as a manual trigger endpoint.
+
+--- 1D. Update signalScorer.ts ---
+
+Add 'system_signal_propagated' to the WEIGHTS map with weight: 15
+(it's a secondary confirmation signal, not a primary one)
+
+In the cross-source bonus logic, add:
+  If a facility has a 'system_signal_propagated' signal AND a direct 
+  Tier 1 signal of the same type on the parent → add +10 bonus
+
+==========================================================================
+SECTION 2 — COMPOSITE LEAD CARDS
+==========================================================================
+
+WHY THIS MATTERS:
+The current signals page shows a chronological list of individual signals.
+A rep looking at it sees: "Grant awarded - St. Mary's - $450K" and then
+20 rows later "CON PENDING - St. Mary's - MRI - $3.2M". They have to 
+mentally connect these. In practice they don't — they just work their CRM 
+list and miss the confluence. A "Lead Card" groups every signal for a 
+facility into a single decision surface: here's what we know, here's the 
+score, here's what to do today. This is the single biggest workflow 
+improvement for reps.
+
+WHAT TO BUILD:
+
+--- 2A. Backend: GET /leads endpoint ---
+
+Create artifacts/api-server/src/routes/leads.ts
+
+GET /leads
+Query params: minScore (number, default 40), limit (number, default 25), 
+  offset (number, default 0), state (string), tierFilter ('A'|'B'|'C'|'all')
+
+For each facility with signalScore >= minScore:
+  - Fetch ALL purchase signals in the past 24 months, grouped by signalType
+  - Compute lead tier:
+      TIER_A: has (con_filed OR con_approved) AND (bond_issuance OR bond_issued 
+              OR grant_awarded OR nih_grant OR rfp_posted)
+      TIER_B: has CON signal OR (grant/bond + eol_equipment) OR 
+              (adverse_event_spike + hcris_depreciation_spike)
+      TIER_C: has any Tier 1 signal OR signalScore >= 40 without Tier A/B criteria
+  - Compute recommendedAction based on highest-tier signal:
+      con_approved + bond → "URGENT: Capital confirmed + CON approved. Call this week."
+      con_approved only → "CON approved — outreach window is now. 30-day close cycle."
+      con_filed + bond → "Pre-position: CON pending with capital secured. Reach out now."
+      rfp_posted → "Active RFP — respond within 48 hours or lose."
+      bond_issuance only → "Capital available. Identify equipment need in discovery."
+      grant_awarded only → "Grant confirmed. Ask about capital equipment allocation."
+      eol_equipment + high_util → "Throughput pressure + aging equipment. ROI conversation."
+      adverse_event_spike → "Equipment failures on record. Empathy-led replacement outreach."
+      fiscal_year_end → "FYE approaching — qualify budget before close."
+      default → "Relationship building. Monitor for Tier 1 signals."
+  - Compute topSignals: top 3 signals sorted by (weight * confidence) DESC
+  - Compute crossSourceMatches: array of matched pairs, e.g.:
+      [{ type: "CON + Bond", label: "CON PENDING + Bond Issued", bonus: 15 }]
+  - Include facility contacts (up to 3, sorted by buyingAuthorityScore DESC)
+  - Include facilityName, city, state, facilityType, signalScore, parentSystemName
+
+Response shape:
+{
+  leads: [{
+    facilityId, facilityName, city, state, facilityType,
+    parentSystemName, signalScore, leadTier,
+    recommendedAction, urgencyDays,
+    topSignals: [{ signalType, signalDate, confidence, metadata }],
+    crossSourceMatches: [{ type, label, bonus }],
+    signalBreakdown: { tier1Count, tier2Count, tier3Count, propagatedCount },
+    contacts: [{ name, title, email, phone, buyingAuthorityScore }],
+    latestConFiling: { status, modality, projectCost, filedDate, permitNumber, sourceUrl } | null
+  }],
+  total, page, limit
+}
+
+Register the router in artifacts/api-server/src/index.ts
+
+--- 2B. Frontend: /leads page ---
+
+Create artifacts/web/src/pages/leads.tsx
+
+This is the primary daily workflow page for reps. Route: /leads
+Add to sidebar nav as "Lead Cards" (first item after Dashboard).
+
+Layout: 
+  - Top: summary bar showing "X Tier A | Y Tier B | Z Tier C leads"
+  - Filter bar: Tier (A/B/C/All), State, Min Score slider (40-100), 
+    Equipment Type (MRI/CT/PET/LinAc/Robot/All)
+  - Lead cards in a responsive 1-col (mobile) / 2-col (desktop) grid
+
+Each Lead Card shows:
+  TOP BAR: Tier badge (A=red, B=orange, C=yellow) | Score ring (number, colored)
+            | Facility name | City, State | Parent system (if any, grayed)
+  
+  BODY:
+    Recommended Action box (full width, colored by urgency):
+      red bg = "URGENT: ..." 
+      orange bg = "30-day window..."
+      yellow bg = "90-day pipeline..."
+      gray bg = "Relationship building..."
+    
+    Signal stack (list of top 3 signals with icons):
+      🏥 CON PENDING — MRI — $3.2M (IL HFSRB, filed Jan 15 2025)
+      💰 Bond Issued — $45M Series A (SEC EDGAR, Dec 2024)
+      📉 HCRIS Depreciation Spike — 67% (CMS Cost Report, FY2024)
+    
+    Cross-source matches (if any):
+      ✓ CON + Bond Match (+15 pts)  ✓ Depreciation + CON Match (+10 pts)
+    
+    Contacts strip (up to 2 contacts):
+      [Name] • [Title] • [Authority: 85] • [Email icon] [Phone icon]
+    
+  FOOTER:
+    [View Full Profile] [Add to GHL Pipeline] [Start Sequence]
+
+Clicking "View Full Profile" navigates to /facilities/:id
+Clicking "Add to GHL Pipeline" opens the sub-account selector modal from the CON Monitor page (reuse that component)
+Clicking "Start Sequence" opens a sequence selector modal
+
+Use @tanstack/react-query with queryKey ['leads', filters] for data fetching.
+Auto-refresh every 5 minutes.
+
+==========================================================================
+SECTION 3 — FISCAL YEAR ALIGNMENT LAYER
+==========================================================================
+
+WHY THIS MATTERS:
+A score-70 lead at 60 days before fiscal year end is worth 3x the rep 
+attention of a score-80 lead at 15 days after FYE close. Capital equipment 
+budgets are approved in Q3/Q4 of a hospital's fiscal year. If a rep reaches 
+out after the budget is locked, they get pushed to "next year" and lose 12 
+months. Most hospitals use Oct 1 FYE (federal fiscal year), but non-profits 
+can use June 30 or Dec 31. This data is already in the CMS records we're 
+ingesting — we're just not using it.
+
+WHAT TO BUILD:
+
+--- 3A. Add fiscalYearEndMonth to facilities ---
+
+Add column:
+  fiscalYearEndMonth  integer  nullable  -- 1-12, e.g. 9 = September 30 FYE
+  fiscalYearEndSource text     nullable  -- 'cms', 'irs_990', 'manual'
+
+Create and run migration.
+
+--- 3B. Populate FYE from CMS data ---
+
+Update cmsDataIngestor.ts: when processing a CMS record, check if the 
+facility record has a `certificationDate` or similar field that implies 
+fiscal year. Many CMS records include `fiscal_year_begin` in the dataset.
+
+If a FYE date is found, UPDATE facilities SET fiscalYearEndMonth = X, 
+fiscalYearEndSource = 'cms'.
+
+Also update propublica990Ingestor.ts: 990 forms include `tax_period` 
+(e.g. "201912" = December). Parse the month and UPDATE fiscalYearEndMonth 
+if not already set.
+
+--- 3C. Time-adjusted score modifier ---
+
+In signalScorer.ts, add a function: computeTimingBonus(facility):
+
+  const now = new Date()
+  const fye = facility.fiscalYearEndMonth
+  if (!fye) return 0
+  
+  // Days until next FYE
+  const currentYear = now.getFullYear()
+  let fyeDate = new Date(currentYear, fye - 1, 1) // first day of FYE month
+  if (fyeDate < now) fyeDate = new Date(currentYear + 1, fye - 1, 1)
+  const daysUntilFYE = Math.floor((fyeDate.getTime() - now.getTime()) / 86400000)
+  
+  if (daysUntilFYE <= 30) return 20   // Budget decision happening NOW
+  if (daysUntilFYE <= 60) return 15   // Active budget season
+  if (daysUntilFYE <= 90) return 10   // Budget planning window
+  if (daysUntilFYE <= 120) return 5   // Early positioning window
+  return 0
+
+Apply this bonus in computeFacilityScore() by adding computeTimingBonus() 
+to the final score (cap total score at 100).
+
+--- 3D. Surface FYE timing in the Lead Card ---
+
+In the GET /leads response, add:
+  fiscalYearEndMonth: number | null
+  daysUntilFYE: number | null
+  timingBonus: number
+  budgetWindowStatus: 'NOW' | 'ACTIVE' | 'PLANNING' | 'EARLY' | 'OFFSEASON' | null
+
+In the Lead Card UI, add a timing badge next to the score ring:
+  "NOW" = red pill "Budget Season NOW"
+  "ACTIVE" = orange pill "Budget Season Active"
+  "PLANNING" = yellow pill "Budget Planning"
+  "EARLY" = gray pill "60-90 Days Out"
+  null = nothing shown
+
+==========================================================================
+SECTION 4 — HCRIS COST REPORT INGESTOR
+==========================================================================
+
+WHY THIS MATTERS:
+HCRIS (Healthcare Cost Report Information System) is published by CMS and 
+contains every Medicare-certified hospital's audited financial statements — 
+publicly available, no key required. The single most actionable number for 
+capital equipment reps is the depreciation ratio: (medical equipment 
+depreciation) / (total assets). When this ratio exceeds 40%, a facility's 
+equipment is statistically in replacement cycle. No competitor is computing 
+this from public data. It is the equivalent of a credit score for equipment 
+replacement likelihood.
+
+WHAT TO BUILD:
+
+File: artifacts/api-server/src/services/hcrisIngestor.ts
+
+Source: CMS HCRIS API
+  https://data.cms.gov/provider-compliance/cost-report/hospital-provider-cost-report/api
+(JSON REST, no API key, paginated via $limit/$offset SODA parameters)
+
+Function signature: ingestHcris({ limit = 50 }: { limit?: number })
+Returns: { signalsInserted: number, facilitiesUpdated: number, errors: number }
+
+Implementation:
+
+1. Fetch cost report records:
+   GET https://data.cms.gov/resource/jcxf-uc9e.json?$limit=50&$offset=0
+   (adjust the dataset ID if the SODA endpoint differs — check the API page)
+   Sort by: $order=fy_end_dt DESC to get most recent reports first
+
+2. For each record, attempt facility match:
+   First: match by PRVDR_NUM against facilities.cmsId (exact)
+   Second: if no match, try facilities.name ILIKE '%' || PROVIDER_NAME || '%'
+   If no match: skip and increment errors counter.
+
+3. Parse financial fields (field names vary by CMS version — use fallbacks):
+   providerNum    = record.prvdr_num
+   providerName   = record.provider_name || record.prvdr_name
+   fyBegin        = record.fy_bgn_dt || record.fiscal_year_begin_date
+   fyEnd          = record.fy_end_dt || record.fiscal_year_end_date
+   totalAssets    = parseFloat(record.tot_assets_eoy_amt || '0')
+   netPatientRev  = parseFloat(record.net_patient_rev_amt || '0')
+   totalOpEx      = parseFloat(record.tot_operating_expense_amt || '0')
+   
+   For depreciation, try these fields in order:
+     record.cap_depr_depl_amort_amt
+     record.dep_depr_amort_and_depl
+     record.total_depreciation_and_amortization
+   Use the first non-zero value found. If none found, set depreciationAmt = 0.
+
+4. Compute depreciation ratio:
+   const depRatio = totalAssets > 0 ? depreciationAmt / totalAssets : 0
+
+5. Upsert into financial_documents table:
+   {
+     facilityId: matched facility id,
+     docType: 'hcris_cost_report',
+     docDate: fyEnd,
+     parsedJson: { providerNum, providerName, fyBegin, fyEnd,
+                   totalAssets, netPatientRev, totalOpEx, 
+                   depreciationAmt, depRatio },
+     source: 'cms_hcris'
+   }
+   ON CONFLICT (facilityId, docType, docDate) DO UPDATE SET parsedJson = EXCLUDED.parsedJson
+
+6. If depRatio > 0.40, insert purchase signal:
+   {
+     facilityId, 
+     signalType: 'hcris_depreciation_spike',
+     confidence: Math.min(0.95, 0.60 + depRatio),  -- scales from 60% to 95%
+     signalValue: `hcris_depr_${providerNum}_${fyEnd}`,  -- idempotency key
+     sourceUrl: 'https://data.cms.gov/provider-compliance/cost-report/hospital-provider-cost-report',
+     metadata: { depRatio, depRatioPct: Math.round(depRatio * 100), fyEnd, providerNum }
+   }
+   ON CONFLICT (facilityId, signalType, signalValue) DO NOTHING
+
+7. If depRatio > 0.40, also UPDATE facilities SET:
+   fiscalYearEndMonth = new Date(fyEnd).getMonth() + 1,
+   fiscalYearEndSource = 'hcris'
+   (only if fiscalYearEndSource is null or 'hcris')
+
+8. Add 250ms sleep between facility API calls to be polite.
+
+Register in cron/index.ts at 06:00 alongside other ingestors.
+Register in POST /signals/ingest/free-apis endpoint as 'hcris'.
+
+Add 'hcris_depreciation_spike' to signalTypeEnum in lib/db/src/schema/enums.ts if not present.
+Run db:generate then db:migrate.
+
+Add to WEIGHTS map in signalScorer.ts:
+  hcris_depreciation_spike: 25
+
+Add cross-source bonus in signalScorer.ts:
+  HCRIS depreciation spike + CON filed/approved: +10 bonus
+  HCRIS depreciation spike + EOL equipment: +8 bonus
+
+==========================================================================
+SECTION 5 — MEDICARE UTILIZATION INGESTOR
+==========================================================================
+
+WHY THIS MATTERS:
+A facility performing 3,000 MRI scans per year on a 12-year-old 1.5T scanner
+has two problems: throughput bottleneck and patient experience. The ROI case 
+for a 3T upgrade writes itself — reduced scan time = more patients = more 
+revenue. This is the financial argument that gets a CFO to approve a $3M 
+capital purchase. Without utilization data, reps are guessing at whether 
+a facility is volume-constrained. With it, they walk in with the math done.
+
+WHAT TO BUILD:
+
+File: artifacts/api-server/src/services/medicareUtilIngestor.ts
+
+Source: CMS Medicare Physician & Other Practitioners by Provider and Service
+  https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners/medicare-physician-other-practitioners-by-provider-and-service/api
+
+Function signature: ingestMedicareUtil({ limit = 50 }: { limit?: number })
+Returns: { signalsInserted: number, errors: number }
+
+High-value HCPCS codes to monitor (imaging procedures):
+  70553 — MRI Brain with contrast
+  70551 — MRI Brain without contrast  
+  71250 — CT Thorax (Chest) without contrast
+  71260 — CT Thorax with contrast
+  78816 — PET whole body
+  77067 — Screening mammography bilateral
+  70470 — CT Head/Brain with and without contrast
+  72148 — MRI Lumbar Spine without contrast
+  73721 — MRI lower extremity joint without contrast
+  70553 — MRI Brain w/wo contrast
+
+Implementation:
+
+1. Fetch data for each target HCPCS code:
+   GET https://data.cms.gov/resource/[dataset-id].json?
+       $where=hcpcs_cd='70553'&$limit=200&$order=tot_srvcs DESC
+
+   Find the correct Socrata resource ID by checking:
+   https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners
+
+2. For each provider record where tot_srvcs > 500:
+   - Match facility by rndrng_npi against facilities.npi (exact match)
+   - If no match by NPI, skip
+   
+3. If matched and tot_srvcs > 500:
+   const confidence = Math.min(1.0, tot_srvcs / 5000)
+   
+   Insert purchase_signal:
+   {
+     facilityId,
+     signalType: 'high_utilization',
+     confidence,
+     signalValue: `util_${rndrng_npi}_${hcpcs_cd}_${year}`,  -- idempotency key
+     metadata: {
+       hcpcsCode, hcpcsDescription,
+       totalServices: tot_srvcs,
+       uniqueBeneficiaries: tot_benes,
+       avgSubmittedCharge: avg_sbmtd_chrg,
+       year
+     },
+     sourceUrl: 'https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners'
+   }
+   ON CONFLICT (facilityId, signalType, signalValue) DO NOTHING
+
+4. Add 200ms sleep between HCPCS code fetches.
+
+Register in cron at 06:00. Register in POST /signals/ingest/free-apis.
+
+Add 'high_utilization' to signalTypeEnum if not present.
+Add to WEIGHTS map: high_utilization: 15
+Add cross-source bonus:
+  high_utilization + eol_equipment: +8 bonus
+
+==========================================================================
+SECTION 6 — SAM.GOV FEDERAL RFP INGESTOR
+==========================================================================
+
+WHY THIS MATTERS:
+Federal hospitals (VA, DoD, Indian Health Service, Federal Bureau of Prisons 
+health) and federally-funded community health centers post capital equipment 
+RFPs on SAM.gov. An RFP is the highest possible buying signal — the facility 
+has approved budget, defined specs, and is actively soliciting bids. Response 
+within 48 hours of posting is critical; most CMX competitors are not 
+monitoring SAM.gov because it requires API setup. This is a competitive moat.
+
+WHAT TO BUILD:
+
+File: artifacts/api-server/src/services/samGovIngestor.ts
+
+Source: SAM.gov Opportunities API v2
+  https://api.sam.gov/opportunities/v2/search
+  Requires free API key from api.sam.gov (register with .gov or business email)
+  
+Env var: SAM_GOV_API_KEY (add to .env.example with comment)
+If SAM_GOV_API_KEY is not set, log warning and return { signalsInserted: 0, errors: 0 }
+
+Function signature: ingestSamGov({ limit = 50 }: { limit?: number })
+Returns: { signalsInserted: number, errors: number }
+
+Target NAICS codes:
+  334517 — Irradiation Apparatus Manufacturing
+  334510 — Electromedical and Electrotherapeutic Apparatus
+  423450 — Medical and Hospital Equipment Merchant Wholesalers
+  339112 — Surgical and Medical Instrument Manufacturing
+
+Implementation:
+
+1. For each NAICS code, fetch:
+   GET https://api.sam.gov/opportunities/v2/search
+     ?api_key={SAM_GOV_API_KEY}
+     &naicsCode={naics}
+     &postedFrom={30 days ago formatted as MM/DD/YYYY}
+     &postedTo={today formatted as MM/DD/YYYY}
+     &status=active
+     &limit=10
+
+2. For each opportunity in response.opportunitiesData:
+   - Extract: noticeId, title, postedDate, responseDeadLine, 
+     organizationName, placeOfPerformanceCity, placeOfPerformanceCities.state,
+     naicsCode, description (slice to 500 chars), uiLink
+
+   - Attempt facility match by organizationName ILIKE pattern against facilities.name
+     (use pg_trgm similarity if available: similarity(facilities.name, orgName) > 0.4)
+
+   - Insert purchase_signal regardless of facility match (facilityId = null if no match):
+     {
+       facilityId: matched?.id || null,
+       signalType: 'rfp_posted',
+       confidence: 0.95,  -- RFPs are the highest confidence signal
+       signalValue: `sam_${noticeId}`,  -- idempotency key
+       sourceUrl: uiLink,
+       metadata: { noticeId, title, naicsCode, organizationName,
+                   city: placeOfPerformanceCity, state, 
+                   responseDeadline: responseDeadLine,
+                   description: description?.slice(0, 500) }
+     }
+     ON CONFLICT (signalType, signalValue) DO NOTHING
+   
+   Note: for unmatched SAM.gov RFPs (facilityId = null), create a stub 
+   facility record:
+     INSERT INTO facilities (name, city, state, facilityType, source)
+     VALUES (orgName, city, state, 'federal', 'sam_gov')
+     ON CONFLICT DO NOTHING
+   Then link the signal.
+
+3. Add 300ms sleep between NAICS code fetches.
+
+Add 'rfp_posted' to signalTypeEnum if not present.
+Add to WEIGHTS: rfp_posted: 40
+Register in cron and POST /signals/ingest/free-apis.
+
+Slack alert: if SLACK_CON_WEBHOOK_URL is set and a new rfp_posted signal 
+is created, send:
+  "🚨 Federal RFP Posted: *[title]* — [orgName] ([city], [state])
+   NAICS: [naicsCode] | Deadline: [responseDeadline]
+   <[uiLink]|View on SAM.gov>"
+
+==========================================================================
+SECTION 7 — EMMA MUNICIPAL BOND INGESTOR
+==========================================================================
+
+WHY THIS MATTERS:
+Non-profit hospital systems (which are the majority of US hospitals) do not
+file SEC bonds. They issue tax-exempt municipal bonds through EMMA (MSRB's 
+Electronic Municipal Market Access). A hospital issuing a $50M revenue bond 
+has capital available for equipment. This signal is invisible to competitors 
+who only watch SEC EDGAR. Critical access hospitals, county hospitals, and 
+rural systems — exactly the markets CMX focuses on — almost exclusively use 
+municipal bonds, never SEC-registered offerings.
+
+WHAT TO BUILD:
+
+File: artifacts/api-server/src/services/emmaIngestor.ts
+
+Source: MSRB EMMA API
+  Base: https://emma.msrb.org/api/
+
+If the MSRB EMMA API is unreliable or returns errors, fall back to:
+  Use USASpending.gov to find municipal bond-related transactions, OR
+  Scrape EMMA search results using Cheerio (npm package, already check if 
+  available in package.json — add if not)
+
+Primary approach — try EMMA search endpoint:
+  GET https://emma.msrb.org/api/SecSearch.aspx
+    ?type=O&category=bond&keywords=hospital+imaging+equipment+capital&pageSize=25
+
+Secondary approach — MSRB issuer search by type:
+  GET https://emma.msrb.org/api/IssuerSearch.aspx
+    ?issuerType=0&state={stateAbbr}&pageSize=50
+  (issuerType=0 appears to be "all" — test with CT, IL, NY first)
+  Then filter returned issuers where name contains health/hospital/medical/care
+
+For each bond issuance found where principalAmount > 5000000:
+  - Extract: issuerName, cusip, issueDescription, principalAmount, 
+    datedDate (issue date), state
+  - Match to facility by issuerName ILIKE pattern
+  - Upsert financial_documents:
+    { facilityId, docType: 'municipal_bond', docDate: datedDate,
+      parsedJson: { cusip, issuerName, principalAmount, issueDescription },
+      source: 'msrb_emma' }
+    ON CONFLICT (facilityId, docType, docDate) DO NOTHING
+  - Insert purchase_signal:
+    { signalType: 'bond_issued', confidence: 0.80,
+      signalValue: `emma_${cusip}`,
+      metadata: { principalAmount, issuerName, cusip, issueDescription } }
+    ON CONFLICT DO NOTHING
+
+Handle MSRB API errors gracefully — the API is unofficial and may 429 or 
+return HTML. Wrap every call in try/catch and return partial results.
+
+Add 'bond_issued' to signalTypeEnum if not present (may already exist as 'bond_issuance').
+Add to WEIGHTS: bond_issued: 35
+Register in cron and POST /signals/ingest/free-apis.
+
+==========================================================================
+SECTION 8 — SEC EDGAR PARENT SYSTEM FIX
+==========================================================================
+
+WHY THIS MATTERS:
+The existing secEdgarIngestor.ts matches bonds to facilities by facility name.
+This misses the majority of hospital bonds, which are issued by parent health 
+systems ("Northwestern University Health System Revenue Bonds") not individual 
+facilities. Without this fix, we get maybe 10% coverage of real hospital 
+bond activity. With it, we get close to 100% for the systems we track.
+
+WHAT TO BUILD:
+
+Update artifacts/api-server/src/services/secEdgarIngestor.ts:
+
+Change the matching logic:
+  OLD: search EDGAR by each individual facility's name
+  NEW: search EDGAR by BOTH facility name AND parent system name
+
+Specifically:
+  1. For each facility, if facility.parentSystemId is not null:
+     - Fetch parent facility name
+     - Search EDGAR for BOTH the facility name AND the parent system name
+     - De-duplicate results by EDGAR accession number
+  2. When a bond is matched via parent system name rather than direct facility name:
+     - Set confidence = 0.85 (slightly lower than direct match 0.92)
+     - Add metadata field: matchedVia: 'parent_system', parentSystemName: name
+  3. Propagate the signal to ALL sibling facilities via the systemSignalPropagator
+     (call propagateSystemSignals() after ingest completes, or let the 07:00 job handle it)
+
+Also extend the EDGAR search terms for healthcare bonds:
+  Current terms: '424B3', '424B5', 'S-1'
+  Add: 'S-11', '424B4', 'FWP' (free writing prospectuses for hospital bonds)
+  Filter form types: type=424B3 OR type=424B5 OR type=S-1 OR type=FWP
+
+==========================================================================
+SECTION 9 — LEAD SCORE CROSS-SOURCE BONUSES (COMPLETE MATRIX)
+==========================================================================
+
+WHY THIS MATTERS:
+Individual signals tell you something. Signal confluence tells you it's time
+to act. The cross-source bonus matrix encodes the intelligence that a trained
+sales rep develops over 10 years — certain combinations of signals reliably 
+predict a purchase. Encoding this in the scorer means a first-year rep has 
+senior-rep intelligence from day one.
+
+WHAT TO BUILD:
+
+Update artifacts/api-server/src/services/signalScorer.ts
+
+Replace/extend the existing cross-source bonus logic with this COMPLETE matrix:
+
+const CROSS_SOURCE_BONUSES = [
+  // Tier 1 × Tier 1 combinations (highest value)
+  {
+    name: "CON Approved + Bond",
+    requires: { any: ['con_approved'], and: ['bond_issuance','bond_issued','rfp_posted'] },
+    bonus: 20,
+    label: "CON Approved + Capital Confirmed"
+  },
+  {
+    name: "CON Filed + Bond",
+    requires: { any: ['con_filed'], and: ['bond_issuance','bond_issued'] },
+    bonus: 15,
+    label: "CON Pending + Capital Available"
+  },
+  {
+    name: "RFP + Prior Award",
+    requires: { any: ['rfp_posted'], and: ['grant_awarded','nih_grant'] },
+    bonus: 12,
+    label: "Active RFP + Funding History"
+  },
+  
+  // Tier 1 × Tier 2 combinations
+  {
+    name: "HCRIS + CON",
+    requires: { any: ['hcris_depreciation_spike'], and: ['con_filed','con_approved'] },
+    bonus: 10,
+    label: "Depreciation Spike + CON Filed"
+  },
+  {
+    name: "High Util + EOL",
+    requires: { any: ['high_utilization'], and: ['eol_equipment','510k_clearance_old'] },
+    bonus: 8,
+    label: "Volume Pressure + Aging Equipment"
+  },
+  {
+    name: "Grant + CON",
+    requires: { any: ['grant_awarded','nih_grant'], and: ['con_filed','con_approved'] },
+    bonus: 12,
+    label: "Grant Awarded + CON Filed"
+  },
+  
+  // Tier 2 × Tier 2 combinations
+  {
+    name: "Adverse + Depreciation",
+    requires: { any: ['adverse_event_spike'], and: ['hcris_depreciation_spike'] },
+    bonus: 8,
+    label: "Equipment Failures + Financial Stress"
+  },
+  {
+    name: "Clinical Trial + Grant",
+    requires: { any: ['clinical_trial'], and: ['grant_awarded','nih_grant'] },
+    bonus: 8,
+    label: "Research Expansion + Funding"
+  },
+  {
+    name: "High Util + CON",
+    requires: { any: ['high_utilization'], and: ['con_filed','con_approved'] },
+    bonus: 10,
+    label: "Volume Demand + Regulatory Intent"
+  },
+
+  // System propagation bonus (Section 1)
+  {
+    name: "System Propagated + Direct",
+    requires: { any: ['system_signal_propagated'], and: ['con_filed','con_approved','bond_issuance','bond_issued'] },
+    bonus: 10,
+    label: "Parent System Activity + Direct Signal"
+  },
+
+  // Timing bonus (FYE within 90 days adds to any Tier 1)
+  // Note: timing bonus is computed separately in computeTimingBonus()
+]
+
+Implement the bonus check by iterating CROSS_SOURCE_BONUSES, checking if
+the facility's active signal types satisfy each rule's `any` and `and` 
+conditions, and summing all applicable bonuses. Cap total score at 100.
+
+Return an array of matched bonus labels in the API response for display 
+in the Lead Card UI.
+
+==========================================================================
+SECTION 10 — PRODUCTION WIRING & NAVIGATION
+==========================================================================
+
+--- 10A. Sidebar navigation update ---
+
+Update the sidebar in artifacts/web/src/components/ (find the sidebar component)
+to reflect this final nav order:
+
+  Lead Cards         (/leads)          ← NEW, top priority
+  Dashboard          (/dashboard)
+  ── INTELLIGENCE ──
+  Facilities         (/facilities)
+  Signals            (/signals)
+  CON Monitor        (/con-monitor)
+  CON States         (/con-states)
+  Data Sources       (/data-sources)
+  ── OUTREACH ──
+  Contacts           (/contacts)
+  Campaigns          (/campaigns)
+  Sequences          (/sequences)
+  Drafts             (/drafts)
+  Batches            (/batches)
+  Reports            (/reports)
+  ── SYSTEM ──
+  Settings           (/settings)
+  Admin              (/admin)  ← only show if isPlatformAdmin
+
+--- 10B. Dashboard update ---
+
+Update artifacts/web/src/pages/dashboard.tsx to add a 
+"Today's Top Leads" widget:
+  - Calls GET /leads?minScore=60&limit=5&tierFilter=A
+  - Shows top 5 lead cards in compact format (name, tier badge, score, 
+    recommended action, one top signal)
+  - Link to "View All Leads →" at bottom
+
+--- 10C. Health check update ---
+
+Update GET /healthz (or /health) response to include:
+  {
+    status: "ok",
+    db: "connected", 
+    uptime: process.uptime(),
+    ingestors: {
+      lastRun: <timestamp from a metadata table or in-memory cache>,
+      registered: ["nppes","fda_510k","fda_recalls","fda_maude","fda_classification",
+                   "propublica_990","cms","sec_edgar","usa_spending","clinical_trials",
+                   "con_filings","hcris","medicare_util","sam_gov","emma","hrsa","usda"]
+    },
+    facilitiesCount: <count from db>,
+    leadsCount: <count of facilities with signalScore >= 40>,
+    tierACounts: <count of Tier A leads>
+  }
+
+--- 10D. Environment variables ---
+
+Ensure .env.example includes all of the following with descriptive comments:
+
+  DATABASE_URL=              # PostgreSQL connection string (required)
+  CLERK_SECRET_KEY=          # Clerk auth backend key (required)
+  VITE_CLERK_PUBLISHABLE_KEY= # Clerk auth frontend key (required)
+  CRM_ENCRYPTION_KEY=        # 32-byte hex key for AES-256-GCM (required)
+  SAM_GOV_API_KEY=           # Free key from api.sam.gov — required for federal RFP monitoring
+  SLACK_CON_WEBHOOK_URL=     # Optional — Slack webhook for CON + RFP alerts
+  FDA_API_KEY=               # Optional — increases FDA API rate limits
+  NODE_ENV=development       # development | production
+
+==========================================================================
+IMPORTANT CONSTRAINTS (READ BEFORE WRITING ANY CODE)
+==========================================================================
+
+1. ALL ingestors must be idempotent. Every signal insert uses a unique 
+   signalValue field as a natural key with ON CONFLICT DO NOTHING.
+   Re-running any ingestor twice must produce zero duplicate records.
+
+2. ALL ingestors must handle network failures per-record. Wrap each HTTP 
+   call in try/catch. Log the error with the facility name/id. Continue 
+   to the next record. Never let one bad response abort the full run.
+
+3. Rate limit every ingestor: minimum 200ms between HTTP calls. Use:
+   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+4. All new API endpoints must use requireAccount middleware (or requireAdmin
+   for admin-only routes). Never expose data without auth.
+
+5. All new frontend pages must use @tanstack/react-query hooks. No raw 
+   fetch() calls in components.
+
+6. New schema columns require Drizzle migrations — never ALTER TABLE directly.
+   Run db:generate then db:migrate after every schema change.
+
+7. TypeScript strict mode is on. No `any` types. No @ts-ignore comments.
+
+8. The account_facilities tenant isolation must be maintained. Never query 
+   purchase_signals, facilities, or contacts without an account_id filter 
+   when inside a tenant-scoped request. The /leads endpoint is tenant-scoped.
+
+9. Parent system facilities (facilityType = 'health_system') should NOT 
+   appear in tenant facility lists unless explicitly linked via account_facilities.
+   They exist only as relationship anchors for signal propagation.
+
+10. Build and typecheck must pass cleanly at the end:
+    pnpm run typecheck && pnpm -r --if-present run build
+    Fix every TypeScript error. Do not suppress them.
+
+Start with Section 1 (parent system propagation) as it is foundational —
+Sections 3, 8, and 9 all depend on the parentSystemId column existing.
+Then proceed in order through Section 10.
