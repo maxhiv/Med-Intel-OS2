@@ -33,27 +33,16 @@ import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
 
-// Determine Clerk configuration at runtime from the actual hostname so that
-// the same static bundle works correctly in every environment:
-//
-//   Production (.replit.app):
-//     - pass "" fallback → publishableKeyFromHost derives pk_live_<base64(hostname$)>
-//     - set proxyUrl so Clerk API calls route through our /api/__clerk middleware
-//
-//   Dev / preview (.replit.dev or localhost):
-//     - pass the VITE_CLERK_PUBLISHABLE_KEY env var (pk_test_...) as fallback
-//     - no proxyUrl (proxy middleware is production-only)
-//
-// This avoids baking domain-specific values into the bundle at build time.
-const _hostname = typeof window !== "undefined" ? window.location.hostname : "";
-const _isProductionDomain = _hostname.endsWith(".replit.app");
+// publishableKeyFromHost derives the correct key for the current domain.
+// VITE_CLERK_PUBLISHABLE_KEY is the test key in dev and is automatically
+// swapped to the live key by Replit at publish time — do not edit manually.
 const clerkPubKey = publishableKeyFromHost(
-  _hostname,
-  _isProductionDomain ? "" : (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? ""),
+  window.location.hostname,
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
 );
-const clerkProxyUrl = _isProductionDomain
-  ? `https://${_hostname}/api/__clerk`
-  : undefined;
+// Empty in dev (proxy is production-only). Automatically set by Replit at
+// publish time to https://<app-domain>/api/__clerk — do not set manually.
+const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 function stripBase(path: string): string {
@@ -110,7 +99,7 @@ function ClerkProviderWithRoutes() {
       routerPush={(to) => setLocation(stripBase(to))}
       routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
       appearance={{
-        baseTheme: document.documentElement.classList.contains("dark") ? dark : undefined,
+        theme: dark,
         variables: {
           colorPrimary: "hsl(175 40% 20%)",
         },
