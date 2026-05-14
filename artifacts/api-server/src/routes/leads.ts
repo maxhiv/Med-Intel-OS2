@@ -86,16 +86,27 @@ router.get("/leads", requireAccount, async (req, res) => {
   const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10)));
   const offset = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10));
 
-  // Compute effective min score based on tier filter
+  // Compute effective score bounds based on tier filter — all bounds go into SQL
+  // so that COUNT and paginated rows see the exact same predicate.
   let effectiveMinScore = minScore;
-  if (tierFilter === "A") effectiveMinScore = Math.max(minScore, 70);
-  else if (tierFilter === "B") effectiveMinScore = Math.max(minScore, 50);
+  let tierUpperBound: ReturnType<typeof sql<boolean>> | undefined;
+  if (tierFilter === "A") {
+    effectiveMinScore = Math.max(minScore, 70);
+    // A has no upper bound
+  } else if (tierFilter === "B") {
+    effectiveMinScore = Math.max(minScore, 50);
+    tierUpperBound = sql<boolean>`${facilities.signalScore} < 70`;
+  } else if (tierFilter === "C") {
+    effectiveMinScore = Math.max(minScore, 40);
+    tierUpperBound = sql<boolean>`${facilities.signalScore} < 50`;
+  }
 
-  // Shared WHERE predicate — equipment filter pushed into SQL via EXISTS so
-  // it is applied before ORDER BY / LIMIT / OFFSET, ensuring correct pagination.
+  // Shared WHERE predicate — all filters including tier bounds, equipment
+  // EXISTS, and state are resolved in SQL before ORDER BY / LIMIT / OFFSET.
   const whereClause = and(
     eq(accountFacilities.accountId, accountId),
     gte(facilities.signalScore, effectiveMinScore),
+    tierUpperBound,
     stateFilter ? eq(facilities.state, stateFilter as "IL") : undefined,
     equipmentTypeFilter
       ? exists(
@@ -200,60 +211,52 @@ router.get("/leads", requireAccount, async (req, res) => {
     system_signal_propagated: 15,
   };
 
-  const leads = rows
-    .filter((f) => {
-      const score = f.signalScore ?? 0;
-      if (tierFilter === "A" && score < 70) return false;
-      if (tierFilter === "B" && (score < 50 || score >= 70)) return false;
-      if (tierFilter === "C" && (score < 40 || score >= 50)) return false;
-      return true;
-    })
-    .map((f) => {
-      const score = f.signalScore ?? 0;
-      const sigs = sigsByFacility.get(f.id) ?? [];
-      const typeSet = new Set(sigs.map((s) => s.signalType));
-      const tier = computeTier(score);
-      const { label: recommendedAction, urgency } = computeRecommendedAction(score, typeSet);
-      const days = daysUntilFYE(f.fiscalYearEndMonth);
-      const timingBonus = computeTimingBonus(f.fiscalYearEndMonth);
+  const leads = rows.map((f) => {
+    const score = f.signalScore ?? 0;
+    const sigs = sigsByFacility.get(f.id) ?? [];
+    const typeSet = new Set(sigs.map((s) => s.signalType));
+    const tier = computeTier(score);
+    const { label: recommendedAction, urgency } = computeRecommendedAction(score, typeSet);
+    const days = daysUntilFYE(f.fiscalYearEndMonth);
+    const timingBonus = computeTimingBonus(f.fiscalYearEndMonth);
 
-      // Top 3 signals by weight
-      const topSignals = sigs
-        .sort((a, b) => (SIGNAL_WEIGHTS[b.signalType] ?? 0) - (SIGNAL_WEIGHTS[a.signalType] ?? 0))
-        .slice(0, 3)
-        .map((s) => ({ type: s.signalType, detectedAt: s.detectedAt, confidence: s.confidence ?? 50 }));
+    // Top 3 signals by weight
+    const topSignals = sigs
+      .sort((a, b) => (SIGNAL_WEIGHTS[b.signalType] ?? 0) - (SIGNAL_WEIGHTS[a.signalType] ?? 0))
+      .slice(0, 3)
+      .map((s) => ({ type: s.signalType, detectedAt: s.detectedAt, confidence: s.confidence ?? 50 }));
 
-      // Cross-source matches — driven by the shared CROSS_SOURCE_BONUS_RULES matrix
-      const crossSourceMatches: string[] = CROSS_SOURCE_BONUS_RULES
-        .filter((r) => r.matches(typeSet, sigs))
-        .map((r) => r.label);
+    // Cross-source matches — driven by the shared CROSS_SOURCE_BONUS_RULES matrix
+    const crossSourceMatches: string[] = CROSS_SOURCE_BONUS_RULES
+      .filter((r) => r.matches(typeSet, sigs))
+      .map((r) => r.label);
 
-      return {
-        facilityId: f.id,
-        name: f.name,
-        city: f.city,
-        state: f.state,
-        facilityType: f.facilityType,
-        systemName: f.systemName,
-        parentSystemId: f.parentSystemId,
-        beds: f.beds,
-        ownership: f.ownership,
-        score,
-        tier,
-        recommendedAction,
-        urgency,
-        topSignals,
-        crossSourceMatches,
-        contacts: contactsByFacility.get(f.id) ?? [],
-        fye: {
-          month: f.fiscalYearEndMonth,
-          source: f.fiscalYearEndSource,
-          daysUntil: days,
-          timingBonus,
-          budgetWindowStatus: budgetWindowStatus(days),
-        },
-      };
-    });
+    return {
+      facilityId: f.id,
+      name: f.name,
+      city: f.city,
+      state: f.state,
+      facilityType: f.facilityType,
+      systemName: f.systemName,
+      parentSystemId: f.parentSystemId,
+      beds: f.beds,
+      ownership: f.ownership,
+      score,
+      tier,
+      recommendedAction,
+      urgency,
+      topSignals,
+      crossSourceMatches,
+      contacts: contactsByFacility.get(f.id) ?? [],
+      fye: {
+        month: f.fiscalYearEndMonth,
+        source: f.fiscalYearEndSource,
+        daysUntil: days,
+        timingBonus,
+        budgetWindowStatus: budgetWindowStatus(days),
+      },
+    };
+  });
 
   res.json({ leads, total, offset, limit });
 });
