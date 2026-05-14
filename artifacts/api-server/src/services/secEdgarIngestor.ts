@@ -2,10 +2,10 @@
  * SEC EDGAR ingestor — free public source, no API key required.
  *
  * Searches the EDGAR full-text search index for prospectus and shelf-offering
- * filings (424B3, 424B5, S-1) filed under the facility's health-system parent
- * name within the past year. A debt or equity offering signals that the system
- * has capital available for major equipment purchases — a `bond_issuance`
- * purchase signal.
+ * filings (424B3, 424B5, S-1, S-11, 424B4, FWP) by both the facility's own
+ * name and its parent health system's name (when parentSystemId is populated).
+ * Results are de-duplicated by accession number. Parent-system matches are
+ * tagged with source = 'sec_edgar_parent' and confidence = 85.
  *
  * Docs: https://efts.sec.gov/LATEST/search-index (EDGAR EFTS)
  */
@@ -14,6 +14,7 @@ import { db, facilities, purchaseSignals } from "@workspace/db";
 import { logger } from "../lib/logger";
 
 const EDGAR_SEARCH = "https://efts.sec.gov/LATEST/search-index";
+const EDGAR_FORMS = "424B3,424B5,S-1,S-11,424B4,FWP";
 const DELAY_MS = 200;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -44,6 +45,27 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Search EDGAR for a single term; returns up to `maxHits` accession numbers. */
+async function searchEdgar(term: string, maxHits = 5): Promise<string[]> {
+  const params = new URLSearchParams({
+    q: `"${term}"`,
+    forms: EDGAR_FORMS,
+    dateRange: "custom",
+    startdt: oneYearAgo(),
+    enddt: today(),
+  });
+  const res = await fetch(`${EDGAR_SEARCH}?${params}`, {
+    headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
+  });
+  if (!res.ok) return [];
+  const json = (await res.json()) as EdgarResponse;
+  const hits = json.hits?.hits ?? [];
+  return hits
+    .slice(0, maxHits)
+    .map((h) => h._source?.accession_no ?? "")
+    .filter(Boolean);
+}
+
 export interface IngestResult {
   facilitiesScanned: number;
   signalsInserted: number;
@@ -66,32 +88,51 @@ export async function ingestSecEdgar(
     .orderBy(sql`${facilities.lastScrapedAt} NULLS FIRST`)
     .limit(limit);
 
+  // Build a parent-name cache so we don't re-fetch the same parent for siblings.
+  const parentNameCache = new Map<string, string>();
+
   for (const f of targets) {
     result.facilitiesScanned += 1;
     try {
-      // Prefer the health-system parent name for broader EDGAR match coverage.
-      const searchTerm = (f.systemName ?? f.name).split(/[,\-]/)[0].trim();
-      const params = new URLSearchParams({
-        q: `"${searchTerm}"`,
-        forms: "424B3,424B5,S-1,S-11,424B4,FWP",
-        dateRange: "custom",
-        startdt: oneYearAgo(),
-        enddt: today(),
-      });
-      const res = await fetch(`${EDGAR_SEARCH}?${params}`, {
-        headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
-      });
-      if (!res.ok) {
-        if (res.status !== 404) result.errors += 1;
-        continue;
-      }
-      const json = (await res.json()) as EdgarResponse;
-      const hits = json.hits?.hits ?? [];
-      if (hits.length === 0) continue;
+      // ── Search 1: facility's own name (or systemName if set) ──────────────
+      const facilityTerm = (f.systemName ?? f.name).split(/[,\-]/)[0].trim();
+      const facilityHits = await searchEdgar(facilityTerm, 5);
 
-      for (const hit of hits.slice(0, 3)) {
-        const accession = hit._source?.accession_no;
-        if (!accession) continue;
+      // ── Search 2: parent health system name (if parentSystemId set) ───────
+      let parentHits: string[] = [];
+      let parentSystemName: string | null = null;
+      if (f.parentSystemId) {
+        if (parentNameCache.has(f.parentSystemId)) {
+          parentSystemName = parentNameCache.get(f.parentSystemId) ?? null;
+        } else {
+          const [parent] = await db
+            .select({ name: facilities.name })
+            .from(facilities)
+            .where(eq(facilities.id, f.parentSystemId))
+            .limit(1);
+          parentSystemName = parent?.name ?? null;
+          if (parentSystemName) parentNameCache.set(f.parentSystemId, parentSystemName);
+        }
+        if (parentSystemName) {
+          const parentTerm = parentSystemName.split(/[,\-]/)[0].trim();
+          // Only do a second search if parent name differs meaningfully from facility search term
+          if (parentTerm.toLowerCase() !== facilityTerm.toLowerCase()) {
+            await sleep(DELAY_MS);
+            parentHits = await searchEdgar(parentTerm, 5);
+          }
+        }
+      }
+
+      // ── De-duplicate across both searches ────────────────────────────────
+      const facilityAccessions = new Set(facilityHits);
+      // parentHits that aren't already in facility hits
+      const parentOnlyAccessions = parentHits.filter((a) => !facilityAccessions.has(a));
+
+      // ── Upsert signals ────────────────────────────────────────────────────
+      for (const accession of [...facilityHits.slice(0, 3), ...parentOnlyAccessions.slice(0, 3)]) {
+        const isParentMatch = !facilityAccessions.has(accession);
+        const confidence = isParentMatch ? 85 : (f.systemName && f.systemName !== f.name ? 85 : 72);
+        const source = isParentMatch ? "sec_edgar_parent" : "sec_edgar";
 
         const [exists] = await db
           .select({ id: purchaseSignals.id })
@@ -106,13 +147,12 @@ export async function ingestSecEdgar(
           .limit(1);
         if (exists) continue;
 
-        const usedSystemName = !!f.systemName && f.systemName !== f.name;
         await db.insert(purchaseSignals).values({
           facilityId: f.id,
           signalType: "bond_issuance",
           signalValue: accession,
-          confidence: usedSystemName ? 85 : 72,
-          source: "sec_edgar",
+          confidence,
+          source,
           isActive: true,
         });
         result.signalsInserted += 1;
