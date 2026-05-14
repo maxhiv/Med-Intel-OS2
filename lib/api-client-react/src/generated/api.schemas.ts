@@ -974,6 +974,7 @@ export type ListFacilitiesParams = {
    */
   limit?: number;
   offset?: number;
+  trackedOnly?: string;
 };
 
 export type ListConAlertNotificationsParams = {

@@ -7,6 +7,8 @@ import {
   ilike,
   gte,
   inArray,
+  isNotNull,
+  getTableColumns,
   type SQL,
 } from "drizzle-orm";
 import {
@@ -49,31 +51,32 @@ router.get("/facilities", requireAccount, async (req, res) => {
   const facilityType = req.query.facilityType as string | undefined;
   const minScore = req.query.minScore ? Number(req.query.minScore) : undefined;
   const search = req.query.search as string | undefined;
+  const trackedOnly = req.query.trackedOnly === "true";
   const limit = Math.min(Number(req.query.limit) || 50, 200);
   const offset = Number(req.query.offset) || 0;
 
-  const owned = await db
-    .select({ id: accountFacilities.facilityId })
-    .from(accountFacilities)
-    .where(eq(accountFacilities.accountId, accountId));
-  const facIds = owned.map((o) => o.id);
-
-  if (facIds.length === 0) {
-    res.json({ data: [], total: 0, limit, offset });
-    return;
-  }
-
-  const conds: SQL[] = [inArray(facilities.id, facIds)];
+  const conds: SQL[] = [];
   if (state) conds.push(eq(facilities.state, state));
   if (facilityType) conds.push(eq(facilities.facilityType, facilityType));
   if (typeof minScore === "number")
     conds.push(gte(facilities.signalScore, minScore));
   if (search) conds.push(ilike(facilities.name, `%${search}%`));
-  const where = and(...conds);
+  if (trackedOnly) conds.push(isNotNull(accountFacilities.facilityId));
+  const where = conds.length > 0 ? and(...conds) : undefined;
 
   const rows = await db
-    .select()
+    .select({
+      ...getTableColumns(facilities),
+      tracked: sql<boolean>`${accountFacilities.facilityId} IS NOT NULL`,
+    })
     .from(facilities)
+    .leftJoin(
+      accountFacilities,
+      and(
+        eq(accountFacilities.facilityId, facilities.id),
+        eq(accountFacilities.accountId, accountId),
+      ),
+    )
     .where(where)
     .orderBy(desc(facilities.signalScore))
     .limit(limit)
@@ -82,6 +85,13 @@ router.get("/facilities", requireAccount, async (req, res) => {
   const [{ c }] = await db
     .select({ c: sql<number>`count(*)::int` })
     .from(facilities)
+    .leftJoin(
+      accountFacilities,
+      and(
+        eq(accountFacilities.facilityId, facilities.id),
+        eq(accountFacilities.accountId, accountId),
+      ),
+    )
     .where(where);
 
   res.json({ data: rows, total: c, limit, offset });
