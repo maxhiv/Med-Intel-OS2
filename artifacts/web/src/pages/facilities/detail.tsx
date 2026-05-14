@@ -3,11 +3,16 @@ import { useState } from "react";
 import {
   useGetFacility,
   useSyncFacilityFromNpi,
+  useUpdateFacility,
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Building2, Activity, Users, AlertTriangle, Plus, Phone, Mail, MapPin,
   TrendingUp, FileSearch, Stethoscope, RefreshCw, DollarSign, Microscope,
@@ -130,10 +135,39 @@ export default function FacilityDetailPage() {
   const params = useParams();
   const id = params.id as string;
   const { toast } = useToast();
-  const [_editing, setEditing] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editType, setEditType] = useState("");
+  const [editBeds, setEditBeds] = useState("");
 
   const { data: facility, isLoading, refetch } = useGetFacility(id);
   const syncFacility = useSyncFacilityFromNpi();
+  const updateFacility = useUpdateFacility();
+
+  const handleOpenEdit = () => {
+    if (facility) {
+      setEditName(facility.name ?? "");
+      setEditType(facility.facilityType ?? "");
+      setEditBeds(String(facility.beds ?? ""));
+    }
+    setEditOpen(true);
+  };
+
+  const handleSaveEdit = () => {
+    updateFacility.mutate(
+      { id, data: { name: editName.trim() || undefined, facilityType: editType || undefined, beds: editBeds ? Number(editBeds) : undefined } },
+      {
+        onSuccess: () => {
+          toast({ title: "Facility updated" });
+          setEditOpen(false);
+          refetch();
+        },
+        onError: (err) => {
+          toast({ title: "Error", description: err.message, variant: "destructive" });
+        },
+      },
+    );
+  };
 
   const handleSync = () => {
     syncFacility.mutate(
@@ -199,7 +233,7 @@ export default function FacilityDetailPage() {
           <Button variant="outline" onClick={handleSync} disabled={syncFacility.isPending}>
             {syncFacility.isPending ? "Syncing…" : "Sync from NPI"}
           </Button>
-          <Button onClick={() => setEditing(true)}>Edit Facility</Button>
+          <Button onClick={handleOpenEdit}>Edit Facility</Button>
         </div>
       </div>
 
@@ -463,6 +497,46 @@ export default function FacilityDetailPage() {
           </Tabs>
         </div>
       </div>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Facility</DialogTitle>
+            <DialogDescription>Update facility name, type, and bed count.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="fac-name">Name</Label>
+              <Input id="fac-name" value={editName} onChange={(e) => setEditName(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="fac-type">Facility Type</Label>
+              <Select value={editType} onValueChange={setEditType}>
+                <SelectTrigger id="fac-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Hospital">Hospital</SelectItem>
+                  <SelectItem value="Ambulatory Surgery Center">Ambulatory Surgery Center</SelectItem>
+                  <SelectItem value="Imaging Center">Imaging Center</SelectItem>
+                  <SelectItem value="Cancer Center">Cancer Center</SelectItem>
+                  <SelectItem value="Dialysis Center">Dialysis Center</SelectItem>
+                  <SelectItem value="Critical Access Hospital">Critical Access Hospital</SelectItem>
+                  <SelectItem value="Physician Office">Physician Office</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="fac-beds">Beds</Label>
+              <Input id="fac-beds" type="number" min={0} value={editBeds} onChange={(e) => setEditBeds(e.target.value)} placeholder="Leave blank if not applicable" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveEdit} disabled={updateFacility.isPending}>
+              {updateFacility.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
