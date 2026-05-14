@@ -46,7 +46,10 @@ function classificationStyles(c: string): string {
 
 export default function DraftsPage() {
   const [status, setStatus] = useState<DraftStatus>("pending");
-  const { data: draftsRes, isLoading, refetch } = useListDrafts({ status, limit: 50 });
+  const { data: draftsRes, isLoading, refetch } = useListDrafts(
+    { status, limit: 50 },
+    { query: { refetchInterval: 120_000 } },
+  );
   const drafts = draftsRes?.data || [];
   const { toast } = useToast();
 

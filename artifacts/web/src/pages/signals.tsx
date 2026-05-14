@@ -1,19 +1,84 @@
+import { useEffect, useRef, useState } from "react";
 import { useGetRecentSignals } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { getGetRecentSignalsQueryKey } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Activity, AlertTriangle, Building2, ExternalLink } from "lucide-react";
+import { Activity, AlertTriangle, ArrowUp, Building2, ExternalLink } from "lucide-react";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 
 export default function SignalsPage() {
-  const { data: signals, isLoading } = useGetRecentSignals({ limit: 100 });
+  const queryClient = useQueryClient();
+  const { data: signals, isLoading } = useGetRecentSignals(
+    { limit: 100 },
+    { query: { refetchInterval: 60_000 } },
+  );
+
+  const [newCount, setNewCount] = useState(0);
+  const connectedRef = useRef(false);
+
+  useEffect(() => {
+    if (connectedRef.current) return;
+    connectedRef.current = true;
+
+    const es = new EventSource("/api/stream/signals");
+
+    es.addEventListener("signals", (e) => {
+      try {
+        const incoming = JSON.parse(e.data) as unknown[];
+        if (incoming.length > 0) {
+          setNewCount((n) => n + incoming.length);
+        }
+      } catch {
+        // ignore malformed event
+      }
+    });
+
+    es.addEventListener("error", () => {
+      // Browser will auto-reconnect on transient failures.
+    });
+
+    return () => {
+      es.close();
+      connectedRef.current = false;
+    };
+  }, []);
+
+  const loadNew = () => {
+    setNewCount(0);
+    // Invalidate all recent-signals queries (signals page + dashboard widget).
+    queryClient.invalidateQueries({ queryKey: getGetRecentSignalsQueryKey() });
+  };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Signals</h1>
-        <p className="text-muted-foreground">Monitor platform-wide purchase intelligence.</p>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Signals</h1>
+            <p className="text-muted-foreground">Monitor platform-wide purchase intelligence.</p>
+          </div>
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground mt-1">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+            </span>
+            Live
+          </span>
+        </div>
       </div>
+
+      {newCount > 0 && (
+        <button
+          type="button"
+          onClick={loadNew}
+          className="w-full flex items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/5 py-2.5 text-sm font-medium text-primary hover:bg-primary/10 transition-colors"
+        >
+          <ArrowUp className="h-4 w-4" />
+          {newCount} new {newCount === 1 ? "signal" : "signals"} — click to load
+        </button>
+      )}
 
       <Card className="bg-card">
         <CardHeader>
@@ -51,7 +116,7 @@ export default function SignalsPage() {
                         {new Date(signal.detectedAt || '').toLocaleDateString()}
                       </span>
                     </div>
-                    
+
                     <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
                       <Building2 className="h-4 w-4" />
                       <Link href={`/facilities/${signal.facilityId}`} className="hover:text-primary transition-colors hover:underline">
