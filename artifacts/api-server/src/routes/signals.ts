@@ -42,7 +42,8 @@ const NORMALIZED_STATUS_SQL = sql<"approved" | "denied" | "under_review" | "pend
   END
 `;
 
-router.get("/signals/con-filings", requireAccount, async (req, res) => {
+// Canonical path is /con-filings; /signals/con-filings is the legacy alias.
+router.get(["/signals/con-filings", "/con-filings"], requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const offset = Math.max(Number(req.query.offset) || 0, 0);
@@ -166,7 +167,7 @@ router.get("/signals/con-filings", requireAccount, async (req, res) => {
 });
 
 // Per-state filing counts — used by the CON States page for real activity numbers.
-router.get("/signals/con-filings/state-counts", requireAccount, async (_req, res) => {
+router.get(["/signals/con-filings/state-counts", "/con-filings/state-counts"], requireAccount, async (_req, res) => {
   const rows = await db
     .select({
       state: conFilings.state,
