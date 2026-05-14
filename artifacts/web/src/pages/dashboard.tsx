@@ -223,14 +223,12 @@ export default function DashboardPage() {
                       >
                         {lead.name}
                       </Link>
-                      {lead.topSignals?.[0] ? (
-                        <p className="text-xs text-muted-foreground truncate">
+                      <p className="text-xs text-muted-foreground truncate">{lead.recommendedAction}</p>
+                      {lead.topSignals?.[0] && (
+                        <p className="text-xs text-primary/60 truncate">
                           {SIGNAL_LABELS[lead.topSignals[0].type] ?? lead.topSignals[0].type.replace(/_/g, " ")}
-                          {" · "}
-                          {lead.topSignals[0].confidence}% confidence
+                          {" · "}{lead.topSignals[0].confidence}%
                         </p>
-                      ) : (
-                        <p className="text-xs text-muted-foreground truncate">{lead.recommendedAction}</p>
                       )}
                     </div>
                     {lead.crossSourceMatches.length > 0 && (
