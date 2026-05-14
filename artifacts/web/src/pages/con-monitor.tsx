@@ -328,10 +328,14 @@ export default function ConMonitorPage() {
   const { data: me } = useGetMe();
   const isAdmin = me?.isPlatformAdmin ?? false;
 
-  const stateParam = selectedStates.length === 1 ? selectedStates[0] : undefined;
-
   const { data, isLoading, refetch } = useListConFilings({
-    state: stateParam,
+    // Multi-state: pass comma-separated to server for true server-side filtering.
+    // Single-state: use ?state= for backwards compat with existing query key shape.
+    ...(selectedStates.length > 1
+      ? { states: selectedStates.join(",") }
+      : selectedStates.length === 1
+      ? { state: selectedStates[0] }
+      : {}),
     status: statusFilter !== "all" ? (statusFilter as "approved" | "denied" | "under_review" | "pending" | "filed") : undefined,
     equipmentType: equipmentTypeFilter || undefined,
     fromDate: fromDate || undefined,
@@ -339,10 +343,7 @@ export default function ConMonitorPage() {
     limit: 200,
   });
 
-  const allRows = data?.data ?? [];
-  const rows = selectedStates.length > 1
-    ? allRows.filter((r) => selectedStates.includes(r.state))
-    : allRows;
+  const rows = data?.data ?? [];
 
   const hasFilters =
     selectedStates.length > 0 ||

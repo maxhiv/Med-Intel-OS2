@@ -995,6 +995,8 @@ export type ListConFilingsParams = {
    * @maxLength 2
    */
   state?: string;
+  /** Comma-separated list of 2-letter state codes for multi-state server-side filtering. */
+  states?: string;
   status?: ListConFilingsStatus;
   equipmentType?: string;
   fromDate?: string;

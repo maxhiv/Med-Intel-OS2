@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { sql, desc, eq, and, ilike, type SQL } from "drizzle-orm";
+import { sql, desc, eq, and, ilike, inArray, type SQL } from "drizzle-orm";
 import { db, conFilings, facilities, accountFacilities, subAccounts } from "@workspace/db";
 import { requirePlatformAdmin, requireAccount } from "../middlewares/auth";
 import { decodeStoredCredentials } from "../services/encryption";
@@ -52,8 +52,19 @@ router.get("/signals/con-filings", requireAccount, async (req, res) => {
   const fromDateRaw = typeof req.query.fromDate === "string" ? req.query.fromDate.trim() : "";
   const toDateRaw = typeof req.query.toDate === "string" ? req.query.toDate.trim() : "";
 
+  // Multi-state: ?states=IL,NY,CT (comma-separated) takes precedence over ?state.
+  const statesRaw = typeof req.query.states === "string" ? req.query.states.trim().toUpperCase() : "";
+  const stateList = statesRaw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length === 2);
+
   const filters: SQL[] = [];
-  if (stateRaw.length === 2) {
+  if (stateList.length > 1) {
+    filters.push(inArray(conFilings.state, stateList));
+  } else if (stateList.length === 1) {
+    filters.push(eq(conFilings.state, stateList[0]));
+  } else if (stateRaw.length === 2) {
     filters.push(eq(conFilings.state, stateRaw));
   }
   if (statusRaw === "approved") {
