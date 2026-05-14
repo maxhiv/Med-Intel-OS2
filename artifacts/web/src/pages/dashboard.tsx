@@ -184,7 +184,7 @@ export default function DashboardPage() {
             <CardDescription>Highest-intent facilities ranked by purchase signals</CardDescription>
           </div>
           <Button variant="outline" size="sm" asChild>
-            <Link href="/leads">View All <ArrowRight className="ml-1 h-3 w-3" /></Link>
+            <Link href="/leads">View All Leads <ArrowRight className="ml-1 h-3 w-3" /></Link>
           </Button>
         </CardHeader>
         <CardContent>
