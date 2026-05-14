@@ -1,11 +1,15 @@
 /**
  * SEC EDGAR ingestor — free public source, no API key required.
  *
- * Searches the EDGAR full-text search index for prospectus and shelf-offering
- * filings (424B3, 424B5, S-1, S-11, 424B4, FWP) by both the facility's own
- * name and its parent health system's name (when parentSystemId is populated).
- * Results are de-duplicated by accession number. Parent-system matches are
- * tagged with source = 'sec_edgar_parent' and confidence = 85.
+ * Performs two EDGAR searches per facility:
+ *   1. The facility's own name (confidence 72 on a direct hit).
+ *   2. The parent health system's name when parentSystemId is populated
+ *      (confidence 85; source = 'sec_edgar_parent', encoding matchedVia =
+ *      'parent_system').
+ *
+ * Accession numbers are de-duplicated across both searches so each filing is
+ * written at most once per facility. Form types: 424B3, 424B5, S-1, S-11,
+ * 424B4, FWP.
  *
  * Docs: https://efts.sec.gov/LATEST/search-index (EDGAR EFTS)
  */
@@ -45,7 +49,6 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Search EDGAR for a single term; returns up to `maxHits` accession numbers. */
 async function searchEdgar(term: string, maxHits = 5): Promise<string[]> {
   const params = new URLSearchParams({
     q: `"${term}"`,
@@ -88,52 +91,55 @@ export async function ingestSecEdgar(
     .orderBy(sql`${facilities.lastScrapedAt} NULLS FIRST`)
     .limit(limit);
 
-  // Build a parent-name cache so we don't re-fetch the same parent for siblings.
+  // Cache parent system names to avoid re-fetching for sibling facilities.
   const parentNameCache = new Map<string, string>();
 
   for (const f of targets) {
     result.facilitiesScanned += 1;
     try {
-      // ── Search 1: facility's own name (or systemName if set) ──────────────
-      const facilityTerm = (f.systemName ?? f.name).split(/[,\-]/)[0].trim();
-      const facilityHits = await searchEdgar(facilityTerm, 5);
+      // Search by facility's own name.
+      const facilityTerm = f.name.split(/[,\-]/)[0].trim();
+      const directAccessions = new Set(await searchEdgar(facilityTerm, 5));
 
-      // ── Search 2: parent health system name (if parentSystemId set) ───────
-      let parentHits: string[] = [];
-      let parentSystemName: string | null = null;
+      // Search by parent health system name when parentSystemId is populated.
+      let parentOnlyAccessions: string[] = [];
       if (f.parentSystemId) {
-        if (parentNameCache.has(f.parentSystemId)) {
-          parentSystemName = parentNameCache.get(f.parentSystemId) ?? null;
-        } else {
+        let parentName = parentNameCache.get(f.parentSystemId);
+        if (!parentName) {
           const [parent] = await db
             .select({ name: facilities.name })
             .from(facilities)
             .where(eq(facilities.id, f.parentSystemId))
             .limit(1);
-          parentSystemName = parent?.name ?? null;
-          if (parentSystemName) parentNameCache.set(f.parentSystemId, parentSystemName);
+          parentName = parent?.name;
+          if (parentName) parentNameCache.set(f.parentSystemId, parentName);
         }
-        if (parentSystemName) {
-          const parentTerm = parentSystemName.split(/[,\-]/)[0].trim();
-          // Only do a second search if parent name differs meaningfully from facility search term
+        if (parentName) {
+          const parentTerm = parentName.split(/[,\-]/)[0].trim();
           if (parentTerm.toLowerCase() !== facilityTerm.toLowerCase()) {
             await sleep(DELAY_MS);
-            parentHits = await searchEdgar(parentTerm, 5);
+            const all = await searchEdgar(parentTerm, 5);
+            parentOnlyAccessions = all.filter((a) => !directAccessions.has(a));
           }
         }
       }
 
-      // ── De-duplicate across both searches ────────────────────────────────
-      const facilityAccessions = new Set(facilityHits);
-      // parentHits that aren't already in facility hits
-      const parentOnlyAccessions = parentHits.filter((a) => !facilityAccessions.has(a));
+      // Upsert: direct accessions at confidence 72, parent-system accessions at 85.
+      // source = 'sec_edgar_parent' encodes matchedVia = 'parent_system'.
+      const toInsert: Array<{ accession: string; confidence: number; source: string }> = [
+        ...[...directAccessions].slice(0, 3).map((a) => ({
+          accession: a,
+          confidence: 72,
+          source: "sec_edgar",
+        })),
+        ...parentOnlyAccessions.slice(0, 3).map((a) => ({
+          accession: a,
+          confidence: 85,
+          source: "sec_edgar_parent",
+        })),
+      ];
 
-      // ── Upsert signals ────────────────────────────────────────────────────
-      for (const accession of [...facilityHits.slice(0, 3), ...parentOnlyAccessions.slice(0, 3)]) {
-        const isParentMatch = !facilityAccessions.has(accession);
-        const confidence = isParentMatch ? 85 : (f.systemName && f.systemName !== f.name ? 85 : 72);
-        const source = isParentMatch ? "sec_edgar_parent" : "sec_edgar";
-
+      for (const { accession, confidence, source } of toInsert) {
         const [exists] = await db
           .select({ id: purchaseSignals.id })
           .from(purchaseSignals)
