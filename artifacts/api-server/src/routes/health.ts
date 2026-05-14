@@ -55,35 +55,41 @@ router.get("/health", async (_req, res) => {
 
   const disableCron = process.env.DISABLE_CRON === "true";
 
+  const ingestorStatus = (key?: string) => ({
+    lastRun: null as string | null,
+    status: (key && !process.env[key]) ? "disabled_no_key" : "scheduled",
+  });
+
   res.json({
     status: dbStatus === "ok" ? "ok" : "degraded",
-    uptimeSeconds,
+    uptime: uptimeSeconds,
     db: dbStatus,
-    cronEnabled: !disableCron,
+    cronStatus: {
+      enabled: !disableCron,
+      nextRun: disableCron ? null : "~04:30 UTC daily",
+    },
     ingestors: {
-      clinicalTrials: "scheduled",
-      conFilings: "scheduled",
-      nppes: "scheduled",
-      fda510k: "scheduled",
-      fdaRecalls: "scheduled",
-      fdaMaude: "scheduled",
-      fdaClassification: "scheduled",
-      propublica990: "scheduled",
-      cmsData: "scheduled",
-      secEdgar: "scheduled",
-      usaSpending: "scheduled",
-      samGov: process.env.SAM_GOV_API_KEY ? "scheduled" : "disabled_no_key",
-      emmaBonds: "scheduled",
-      hcris: "scheduled",
-      hrsa: "scheduled",
-      usda: "scheduled",
-      medicareUtil: "scheduled",
+      clinicalTrials:     ingestorStatus(),
+      conFilings:         ingestorStatus(),
+      nppes:              ingestorStatus(),
+      fda510k:            ingestorStatus(),
+      fdaRecalls:         ingestorStatus(),
+      fdaMaude:           ingestorStatus(),
+      fdaClassification:  ingestorStatus(),
+      propublica990:      ingestorStatus(),
+      cmsData:            ingestorStatus(),
+      secEdgar:           ingestorStatus(),
+      usaSpending:        ingestorStatus(),
+      samGov:             ingestorStatus("SAM_GOV_API_KEY"),
+      emmaBonds:          ingestorStatus(),
+      hcris:              ingestorStatus(),
+      hrsa:               ingestorStatus(),
+      usda:               ingestorStatus(),
+      medicareUtil:       ingestorStatus(),
     },
-    stats: {
-      facilitiesCount,
-      accountFacilitiesLinked,
-      conFilingsCount,
-    },
+    facilitiesCount,
+    accountFacilitiesLinked,
+    conFilingsCount,
   });
 });
 

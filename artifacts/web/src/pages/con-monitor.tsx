@@ -1,15 +1,24 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSearch } from "wouter";
 import { useListConFilings, useGetMe } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Monitor, ExternalLink, Building2, AlertTriangle, Download, Plus, CheckCircle2 } from "lucide-react";
+import { Monitor, ExternalLink, Building2, AlertTriangle, Download, Plus, CheckCircle2, RefreshCw, ChevronDown, Play, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+
+const TIER_A_STATES = ["IL", "NY", "CT", "MI", "NC", "MA", "MD", "VA", "GA", "OH", "MN"];
+
+const CMX_ALL_STATES = [
+  "AL","CA","CT","FL","GA","IL","IN","KY","MA","MD","MI","MN","MO","MS","NC","NY","OH","TN","TX","VA","WA","WI",
+];
 
 function formatDate(value: string | Date | null | undefined): string {
   if (!value) return "—";
@@ -51,6 +60,84 @@ function StatusBadge({
   );
 }
 
+function StateMultiSelect({
+  selectedStates,
+  onChange,
+}: {
+  selectedStates: string[];
+  onChange: (states: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const toggle = (state: string) => {
+    if (selectedStates.includes(state)) {
+      onChange(selectedStates.filter((s) => s !== state));
+    } else {
+      onChange([...selectedStates, state]);
+    }
+  };
+
+  const label =
+    selectedStates.length === 0
+      ? "All states"
+      : selectedStates.length <= 3
+        ? selectedStates.join(", ")
+        : `${selectedStates.length} states`;
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 min-w-[130px] justify-between font-normal"
+          data-testid="select-state"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronDown className="h-4 w-4 ml-1 opacity-50 shrink-0" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-52 p-2" align="start">
+        <div className="flex gap-1 mb-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs flex-1"
+            onClick={() => onChange([])}
+          >
+            All
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs flex-1"
+            onClick={() => onChange([...TIER_A_STATES])}
+          >
+            Tier A
+          </Button>
+        </div>
+        <div className="max-h-64 overflow-y-auto space-y-0.5">
+          {CMX_ALL_STATES.map((s) => (
+            <label
+              key={s}
+              className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 cursor-pointer text-sm"
+            >
+              <Checkbox
+                checked={selectedStates.includes(s)}
+                onCheckedChange={() => toggle(s)}
+              />
+              <span className="font-mono font-medium">{s}</span>
+              {TIER_A_STATES.includes(s) && (
+                <span className="text-xs text-red-500 ml-auto">A</span>
+              )}
+            </label>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 interface PipelineModalProps {
   filingId: string;
   filingName: string;
@@ -68,7 +155,7 @@ function PipelineModal({ filingId, filingName, subAccounts, onClose }: PipelineM
     if (!selectedSubAccount) return;
     setIsPushing(true);
     try {
-      const res = await fetch(`/api/signals/con-filings/${filingId}/push-to-crm`, {
+      const res = await fetch(`/api/con-filings/${filingId}/push-to-crm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subAccountId: selectedSubAccount }),
@@ -79,7 +166,7 @@ function PipelineModal({ filingId, filingName, subAccounts, onClose }: PipelineM
         throw new Error(body.error ?? `HTTP ${res.status}`);
       }
       setPushed(true);
-      toast({ title: "Added to Pipeline", description: `CON filing pushed to CRM as an opportunity.` });
+      toast({ title: "Added to Pipeline", description: "CON filing pushed to CRM as an opportunity." });
       setTimeout(onClose, 1200);
     } catch (err) {
       toast({ title: "Push failed", description: String(err), variant: "destructive" });
@@ -95,9 +182,7 @@ function PipelineModal({ filingId, filingName, subAccounts, onClose }: PipelineM
           <DialogTitle className="flex items-center gap-2">
             <Plus className="h-5 w-5" /> Add to Pipeline
           </DialogTitle>
-          <DialogDescription>
-            Create a CRM opportunity from this CON filing.
-          </DialogDescription>
+          <DialogDescription>Create a CRM opportunity from this CON filing.</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
@@ -184,27 +269,38 @@ function exportCsv(rows: {
 
 export default function ConMonitorPage() {
   const searchString = useSearch();
-  const params = new URLSearchParams(searchString);
-  const initialState = params.get("state") ?? "all";
+  const { toast } = useToast();
 
-  const [stateFilter, setStateFilter] = useState<string>(initialState);
+  const params = new URLSearchParams(searchString);
+  const initialState = params.get("state");
+
+  const [selectedStates, setSelectedStates] = useState<string[]>(
+    initialState ? [initialState] : [],
+  );
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [equipmentTypeFilter, setEquipmentTypeFilter] = useState<string>("");
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
   const [pipelineModal, setPipelineModal] = useState<{ id: string; name: string } | null>(null);
+  const [runningIngest, setRunningIngest] = useState<string | null>(null);
 
+  const initializedRef = useRef(false);
   useEffect(() => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
     const p = new URLSearchParams(searchString);
     const s = p.get("state");
-    if (s) setStateFilter(s);
+    if (s) setSelectedStates([s]);
   }, [searchString]);
 
   const { data: me } = useGetMe();
   const subAccounts = me?.subAccounts ?? [];
+  const isAdmin = me?.isPlatformAdmin ?? false;
 
-  const { data, isLoading } = useListConFilings({
-    state: stateFilter !== "all" ? stateFilter : undefined,
+  const stateParam = selectedStates.length === 1 ? selectedStates[0] : undefined;
+
+  const { data, isLoading, refetch } = useListConFilings({
+    state: stateParam,
     status: statusFilter !== "all" ? (statusFilter as "approved" | "filed") : undefined,
     equipmentType: equipmentTypeFilter || undefined,
     fromDate: fromDate || undefined,
@@ -212,16 +308,85 @@ export default function ConMonitorPage() {
     limit: 200,
   });
 
-  const rows = data?.data ?? [];
-  const stateOptions = data?.states ?? [];
+  const allRows = data?.data ?? [];
+  const rows = selectedStates.length > 1
+    ? allRows.filter((r) => selectedStates.includes(r.state))
+    : allRows;
+
+  const hasFilters =
+    selectedStates.length > 0 ||
+    statusFilter !== "all" ||
+    !!equipmentTypeFilter ||
+    !!fromDate ||
+    !!toDate;
+
+  const triggerIngest = async (label: string) => {
+    setRunningIngest(label);
+    try {
+      const res = await fetch("/api/signals/ingest/con-filings", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await res.json() as { inserted?: number; updated?: number };
+      toast({
+        title: `${label} refresh complete`,
+        description: `Ingested ${body.inserted ?? 0} new filing(s).`,
+      });
+      refetch();
+    } catch (err) {
+      toast({ title: "Ingest failed", description: String(err), variant: "destructive" });
+    } finally {
+      setRunningIngest(null);
+    }
+  };
+
+  const PER_STATE_REFRESH_STATES = ["CT", "IL", "NY"];
+  const showPerStateRefresh = isAdmin && selectedStates.length === 1 && PER_STATE_REFRESH_STATES.includes(selectedStates[0]);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">CON Monitor</h1>
-        <p className="text-muted-foreground">
-          Live Certificate-of-Need pipeline across all tracked states — filter, review, and push to CRM in one place.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">CON Monitor</h1>
+          <p className="text-muted-foreground">
+            Live Certificate-of-Need pipeline across all tracked states — filter, review, and push to CRM in one place.
+          </p>
+        </div>
+        {isAdmin && (
+          <div className="flex flex-wrap gap-2 items-center">
+            {showPerStateRefresh && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => triggerIngest(`${selectedStates[0]} filings`)}
+                disabled={!!runningIngest}
+                className="text-xs"
+              >
+                {runningIngest ? (
+                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                )}
+                Refresh {selectedStates[0]}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => triggerIngest("All 11 Tier A States")}
+              disabled={!!runningIngest}
+              className="text-xs border-red-200 text-red-700 hover:bg-red-50"
+            >
+              {runningIngest === "All 11 Tier A States" ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+              ) : (
+                <Play className="h-3.5 w-3.5 mr-1" />
+              )}
+              Run All 11 Tier A States
+            </Button>
+          </div>
+        )}
       </div>
 
       <Card>
@@ -231,7 +396,9 @@ export default function ConMonitorPage() {
               <div>
                 <CardTitle>CON Filings Monitor</CardTitle>
                 <CardDescription>
-                  {data ? `${data.total} total filing${data.total === 1 ? "" : "s"}` : "Loading…"}
+                  {data
+                    ? `${rows.length} filing${rows.length === 1 ? "" : "s"} shown${data.total !== rows.length ? ` of ${data.total} total` : ""}`
+                    : "Loading…"}
                 </CardDescription>
               </div>
               <Button
@@ -245,21 +412,14 @@ export default function ConMonitorPage() {
               </Button>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <Select value={stateFilter} onValueChange={setStateFilter}>
-                <SelectTrigger className="w-[130px]" data-testid="select-state">
-                  <SelectValue placeholder="State" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All states</SelectItem>
-                  {stateOptions.map((s) => (
-                    <SelectItem key={s} value={s}>{s}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="flex flex-wrap gap-2 items-center">
+              <StateMultiSelect
+                selectedStates={selectedStates}
+                onChange={setSelectedStates}
+              />
 
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[150px]" data-testid="select-status">
+                <SelectTrigger className="w-[150px] h-9" data-testid="select-status">
                   <SelectValue placeholder="Status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -271,7 +431,7 @@ export default function ConMonitorPage() {
 
               <Input
                 placeholder="Equipment type…"
-                className="w-[180px]"
+                className="w-[180px] h-9"
                 value={equipmentTypeFilter}
                 onChange={(e) => setEquipmentTypeFilter(e.target.value)}
                 data-testid="input-equipment-type"
@@ -279,7 +439,7 @@ export default function ConMonitorPage() {
 
               <Input
                 type="date"
-                className="w-[150px]"
+                className="w-[150px] h-9"
                 value={fromDate}
                 onChange={(e) => setFromDate(e.target.value)}
                 title="From date"
@@ -288,19 +448,19 @@ export default function ConMonitorPage() {
 
               <Input
                 type="date"
-                className="w-[150px]"
+                className="w-[150px] h-9"
                 value={toDate}
                 onChange={(e) => setToDate(e.target.value)}
                 title="To date"
                 data-testid="input-to-date"
               />
 
-              {(stateFilter !== "all" || statusFilter !== "all" || equipmentTypeFilter || fromDate || toDate) && (
+              {hasFilters && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    setStateFilter("all");
+                    setSelectedStates([]);
                     setStatusFilter("all");
                     setEquipmentTypeFilter("");
                     setFromDate("");
@@ -309,6 +469,21 @@ export default function ConMonitorPage() {
                 >
                   Clear filters
                 </Button>
+              )}
+
+              {selectedStates.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {selectedStates.map((s) => (
+                    <Badge
+                      key={s}
+                      variant="secondary"
+                      className="cursor-pointer hover:bg-destructive/10 text-xs font-mono"
+                      onClick={() => setSelectedStates(selectedStates.filter((x) => x !== s))}
+                    >
+                      {s} ×
+                    </Badge>
+                  ))}
+                </div>
               )}
             </div>
           </div>
@@ -341,7 +516,12 @@ export default function ConMonitorPage() {
                     const amount = row.approvedAmount ?? row.requestedAmount;
                     return (
                       <tr key={row.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors" data-testid={`row-con-${row.id}`}>
-                        <td className="p-4 font-mono text-xs font-semibold">{row.state}</td>
+                        <td className="p-4">
+                          <span className="font-mono text-xs font-semibold">{row.state}</span>
+                          {TIER_A_STATES.includes(row.state) && (
+                            <span className="ml-1.5 text-xs text-red-500 font-medium">A</span>
+                          )}
+                        </td>
                         <td className="p-4">
                           <div className="font-medium text-foreground">{row.applicantName || "Unknown applicant"}</div>
                           {row.notes && (

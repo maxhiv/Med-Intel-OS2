@@ -143,12 +143,29 @@ router.get("/signals/con-filings", requireAccount, async (req, res) => {
   res.json({ data, total, limit, offset, states });
 });
 
+// Per-state filing counts — used by the CON States page for real activity numbers.
+router.get("/signals/con-filings/state-counts", requireAccount, async (_req, res) => {
+  const rows = await db
+    .select({
+      state: conFilings.state,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(conFilings)
+    .groupBy(conFilings.state)
+    .orderBy(conFilings.state);
+
+  const counts: Record<string, number> = {};
+  for (const r of rows) {
+    if (r.state) counts[r.state] = r.count;
+  }
+  res.json(counts);
+});
+
 // Push a CON filing as a pipeline opportunity to a GHL sub-account.
 // Body: { subAccountId: string, opportunityName?: string }
-router.post(
-  "/signals/con-filings/:id/push-to-crm",
-  requireAccount,
-  async (req, res) => {
+// Accessible at both /signals/con-filings/:id/push-to-crm (legacy) and
+// /con-filings/:id/push-to-crm (canonical per spec).
+async function handlePushToCrm(req: import("express").Request, res: import("express").Response) {
     const accountId = req.currentAccount!.id;
     const filingId = String(req.params.id);
     const subAccountId = typeof req.body?.subAccountId === "string" ? req.body.subAccountId.trim() : "";
@@ -252,8 +269,11 @@ router.post(
       logger.warn({ err, filingId, subAccountId }, "signals: push-to-crm failed");
       res.status(502).json({ ok: false, error: "push_failed", message: String(err) });
     }
-  },
-);
+}
+
+// Register push-to-crm at both paths: legacy and canonical per spec.
+router.post("/signals/con-filings/:id/push-to-crm", requireAccount, handlePushToCrm);
+router.post("/con-filings/:id/push-to-crm", requireAccount, handlePushToCrm);
 
 router.post("/signals/recompute", requirePlatformAdmin, async (_req, res) => {
   const result = await recomputeAllScores();

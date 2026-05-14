@@ -95,7 +95,11 @@ async function getSlackWebhookUrl(accountId: string): Promise<string | null> {
       .limit(1);
     const settings = (row?.settings as Record<string, unknown>) ?? {};
     const url = typeof settings.slackWebhookUrl === "string" ? settings.slackWebhookUrl.trim() : null;
-    const valid = url && url.startsWith("https://hooks.slack.com/") ? url : null;
+    const accountUrl = url && url.startsWith("https://hooks.slack.com/") ? url : null;
+    // Fall back to platform-wide env var when the account has no per-account webhook.
+    const envFallback = process.env.SLACK_CON_WEBHOOK_URL?.trim() ?? "";
+    const envUrl = envFallback.startsWith("https://hooks.slack.com/") ? envFallback : null;
+    const valid = accountUrl ?? envUrl ?? null;
     accountWebhookCache.set(accountId, valid);
     return valid;
   } catch {

@@ -17,7 +17,6 @@ export function AppLayout({ children }: AppLayoutProps) {
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { name: "Facilities", href: "/facilities", icon: Building2 },
     { name: "Signals", href: "/signals", icon: Radio },
-    { name: "CON Filings", href: "/con-filings", icon: FileSignature },
     { name: "CON Monitor", href: "/con-monitor", icon: Monitor },
     { name: "CON States", href: "/con-states", icon: MapPin },
     { name: "Data Sources", href: "/data-sources", icon: Database },
