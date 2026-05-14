@@ -5,6 +5,15 @@ import { requirePlatformAdmin, requireAccount } from "../middlewares/auth";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
 import { ingestConFilings } from "../services/conFilingsIngestor";
+import { ingestNppes } from "../services/nppesIngestor";
+import { ingestFda510k } from "../services/fda510kIngestor";
+import { ingestFdaRecalls } from "../services/fdaRecallsIngestor";
+import { ingestFdaMaude } from "../services/fdaMaudeIngestor";
+import { ingestFdaClassification } from "../services/fdaClassificationIngestor";
+import { ingestPropublica990 } from "../services/propublica990Ingestor";
+import { ingestCmsData } from "../services/cmsDataIngestor";
+import { ingestSecEdgar } from "../services/secEdgarIngestor";
+import { ingestUsaSpending } from "../services/usaSpendingIngestor";
 
 const router: IRouter = Router();
 
@@ -137,6 +146,56 @@ router.post(
   async (_req, res) => {
     const result = await ingestConFilings();
     res.json(result);
+  },
+);
+
+// Manually trigger any combination of the no-key free-API ingestors.
+// Use ?source={name} to run a single source; omit for all nine.
+// Valid sources: nppes, fda_510k, fda_recalls, fda_maude, fda_class,
+//   propublica_990, cms_data, sec_edgar, usa_spending
+router.post(
+  "/signals/ingest/free-apis",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const sourceParam =
+      typeof req.query.source === "string" ? req.query.source.trim() : "";
+
+    const ingestors: Record<
+      string,
+      () => Promise<{ facilitiesScanned: number; signalsInserted: number; errors: number }>
+    > = {
+      nppes:          () => ingestNppes({ limit: 50 }),
+      fda_510k:       () => ingestFda510k({ limit: 50 }),
+      fda_recalls:    () => ingestFdaRecalls({ limit: 50 }),
+      fda_maude:      () => ingestFdaMaude({ limit: 50 }),
+      fda_class:      () => ingestFdaClassification({ limit: 50 }),
+      propublica_990: () => ingestPropublica990({ limit: 40 }),
+      cms_data:       () => ingestCmsData({ limit: 50 }),
+      sec_edgar:      () => ingestSecEdgar({ limit: 40 }),
+      usa_spending:   () => ingestUsaSpending({ limit: 40 }),
+    };
+
+    if (sourceParam && !ingestors[sourceParam]) {
+      res.status(400).json({
+        error: "unknown_source",
+        valid: Object.keys(ingestors),
+      });
+      return;
+    }
+
+    const toRun = sourceParam
+      ? { [sourceParam]: ingestors[sourceParam] }
+      : ingestors;
+
+    const results: Record<string, unknown> = {};
+    for (const [name, fn] of Object.entries(toRun)) {
+      try {
+        results[name] = await fn();
+      } catch (err) {
+        results[name] = { error: String(err) };
+      }
+    }
+    res.json(results);
   },
 );
 
