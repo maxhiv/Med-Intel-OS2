@@ -196,19 +196,3 @@ export const requirePlatformAdmin: RequestHandler = (req, res, next) => {
   }
   next();
 };
-
-/**
- * Variant of requirePlatformAdmin that also allows requests from the local
- * loopback interface (127.0.0.1 / ::1). Used for ingest endpoints so that
- * internal scripts (e.g. refresh-all-sources.ts) can call them directly
- * without needing a Clerk session, while remote callers still require a
- * valid platform-admin session.
- */
-export const requirePlatformAdminOrLocalhost: RequestHandler = (req, res, next) => {
-  const addr = req.socket.remoteAddress ?? "";
-  if (addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1") {
-    next();
-    return;
-  }
-  requirePlatformAdmin(req, res, next);
-};
