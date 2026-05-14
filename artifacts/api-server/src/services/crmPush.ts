@@ -217,7 +217,7 @@ export async function pushDraftWithinBatch(
       .insert(crmContactsMap)
       .values({
         accountId: draft.accountId,
-        localContactId: draft.contactId,
+        localContactId: draft.contactId!,
         crmType: adapter.type,
         crmContactId: outcome.crmContactId,
         crmCompanyId: outcome.crmCompanyId ?? null,

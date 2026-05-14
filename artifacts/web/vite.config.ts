@@ -41,13 +41,18 @@ const clerkProxyUrl = (() => {
   return process.env.VITE_CLERK_PROXY_URL ?? "";
 })();
 
-// Replit provides CLERK_PUBLISHABLE_KEY (no VITE_ prefix) in production build
-// environments. Vite only forwards VITE_-prefixed vars automatically, so we
-// manually inject it here so ClerkProvider gets the live key in the bundle.
-const clerkPublishableKey =
-  process.env.VITE_CLERK_PUBLISHABLE_KEY ??
-  process.env.CLERK_PUBLISHABLE_KEY ??
-  "";
+// publishableKeyFromHost (from @clerk/react/internal) derives a pk_live_... key
+// from the hostname when the fallback is empty/undefined. In production, we
+// MUST pass an empty fallback so it derives the correct live key.
+// If we inject the VITE_CLERK_PUBLISHABLE_KEY secret (which holds the dev test
+// key pk_test_...), publishableKeyFromHost uses that test key on the production
+// domain instead — causing Clerk to fail silently with a blank sign-in page.
+const clerkPublishableKey = (() => {
+  // Production build: clear the key so the hostname-derived live key is used.
+  if (isBuild && process.env.REPLIT_DOMAINS) return "";
+  // Dev / non-Replit build: use the test key from the environment.
+  return process.env.VITE_CLERK_PUBLISHABLE_KEY ?? process.env.CLERK_PUBLISHABLE_KEY ?? "";
+})();
 
 export default defineConfig({
   base: basePath,
