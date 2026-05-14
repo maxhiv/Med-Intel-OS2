@@ -48,7 +48,7 @@ export default function DashboardPage() {
 
   const { data: leadsData, isLoading: loadingLeads } = useQuery<LeadsResponse>({
     queryKey: ["leads-dashboard"],
-    queryFn: () => customFetch<LeadsResponse>("/api/leads?limit=5&minScore=40"),
+    queryFn: () => customFetch<LeadsResponse>("/api/leads?minScore=60&limit=5&tierFilter=A"),
     refetchInterval: 5 * 60 * 1000,
   });
 

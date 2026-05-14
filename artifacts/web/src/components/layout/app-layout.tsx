@@ -1,37 +1,99 @@
 import { Link, useLocation } from "wouter";
 import { useGetMe } from "@workspace/api-client-react";
 import { UserButton } from "@clerk/react";
-import { Activity, LayoutDashboard, Building2, Radio, Users, Target, Layers, FileText, Settings, ShieldAlert, CheckCircle2, FileSignature, MapPin, Database, Monitor, Crosshair } from "lucide-react";
+import {
+  Activity,
+  LayoutDashboard,
+  Building2,
+  Radio,
+  Users,
+  Target,
+  Layers,
+  FileText,
+  Settings,
+  ShieldAlert,
+  CheckCircle2,
+  FileSignature,
+  MapPin,
+  Database,
+  Monitor,
+  Crosshair,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 
 interface AppLayoutProps {
   children: React.ReactNode;
+}
+
+interface NavItem {
+  name: string;
+  href: string;
+  icon: React.ElementType;
+}
+
+interface NavGroup {
+  label: string;
+  items: NavItem[];
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
   const [location] = useLocation();
   const { data: me, isLoading } = useGetMe();
 
-  const navigation = [
+  const topItems: NavItem[] = [
     { name: "Lead Cards", href: "/leads", icon: Crosshair },
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { name: "Facilities", href: "/facilities", icon: Building2 },
-    { name: "Signals", href: "/signals", icon: Radio },
-    { name: "CON Monitor", href: "/con-monitor", icon: Monitor },
-    { name: "CON States", href: "/con-states", icon: MapPin },
-    { name: "Data Sources", href: "/data-sources", icon: Database },
-    { name: "Contacts", href: "/contacts", icon: Users },
-    { name: "Campaigns", href: "/campaigns", icon: Target },
-    { name: "Sequences", href: "/sequences", icon: Layers },
-    { name: "Drafts", href: "/drafts", icon: FileText },
-    { name: "Batches", href: "/batches", icon: CheckCircle2 },
-    { name: "Reports", href: "/reports", icon: FileText },
-    { name: "Settings", href: "/settings", icon: Settings },
   ];
 
-  if (me?.isPlatformAdmin) {
-    navigation.push({ name: "Admin", href: "/admin", icon: ShieldAlert });
+  const groups: NavGroup[] = [
+    {
+      label: "Intelligence",
+      items: [
+        { name: "Facilities", href: "/facilities", icon: Building2 },
+        { name: "Signals", href: "/signals", icon: Radio },
+        { name: "CON Monitor", href: "/con-monitor", icon: Monitor },
+        { name: "CON States", href: "/con-states", icon: MapPin },
+        { name: "Data Sources", href: "/data-sources", icon: Database },
+      ],
+    },
+    {
+      label: "Outreach",
+      items: [
+        { name: "Contacts", href: "/contacts", icon: Users },
+        { name: "Campaigns", href: "/campaigns", icon: Target },
+        { name: "Sequences", href: "/sequences", icon: Layers },
+        { name: "Drafts", href: "/drafts", icon: FileSignature },
+        { name: "Batches", href: "/batches", icon: CheckCircle2 },
+        { name: "Reports", href: "/reports", icon: FileText },
+      ],
+    },
+    {
+      label: "System",
+      items: [
+        { name: "Settings", href: "/settings", icon: Settings },
+        ...(me?.isPlatformAdmin
+          ? [{ name: "Admin", href: "/admin", icon: ShieldAlert }]
+          : []),
+      ],
+    },
+  ];
+
+  function NavLink({ item }: { item: NavItem }) {
+    const isActive = location.startsWith(item.href);
+    return (
+      <Link
+        href={item.href}
+        className={cn(
+          "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+          isActive
+            ? "bg-sidebar-primary text-sidebar-primary-foreground"
+            : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        )}
+      >
+        <item.icon className="h-4 w-4 shrink-0" />
+        {item.name}
+      </Link>
+    );
   }
 
   return (
@@ -43,28 +105,26 @@ export function AppLayout({ children }: AppLayoutProps) {
             <span>MedIntel OS</span>
           </Link>
         </div>
-        <nav className="flex-1 overflow-y-auto p-4 space-y-1">
-          {navigation.map((item) => {
-            const isActive = location.startsWith(item.href);
-            return (
-              <Link
-                key={item.name}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-                )}
-              >
-                <item.icon className="h-4 w-4" />
-                {item.name}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+          {topItems.map((item) => (
+            <NavLink key={item.href} item={item} />
+          ))}
+
+          {groups.map((group) => (
+            <div key={group.label} className="pt-3">
+              <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+                {group.label}
+              </div>
+              <div className="space-y-0.5">
+                {group.items.map((item) => (
+                  <NavLink key={item.href} item={item} />
+                ))}
+              </div>
+            </div>
+          ))}
         </nav>
       </div>
-      
+
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-14 border-b border-border bg-card flex items-center justify-between px-4 lg:px-6">
           <div className="flex items-center md:hidden">
@@ -82,16 +142,19 @@ export function AppLayout({ children }: AppLayoutProps) {
             <UserButton appearance={{ elements: { avatarBox: "h-8 w-8" } }} />
           </div>
         </header>
-        
+
         <main className="flex-1 overflow-y-auto p-4 lg:p-8">
           {!isLoading && me && !me.account && location !== "/settings" ? (
-             <div className="flex flex-col items-center justify-center h-full text-center space-y-4 max-w-md mx-auto">
-               <ShieldAlert className="h-12 w-12 text-muted-foreground" />
-               <h2 className="text-xl font-semibold">No Account Assigned</h2>
-               <p className="text-muted-foreground">Your user profile is not associated with an account. Please contact your platform administrator.</p>
-             </div>
+            <div className="flex flex-col items-center justify-center h-full text-center space-y-4 max-w-md mx-auto">
+              <ShieldAlert className="h-12 w-12 text-muted-foreground" />
+              <h2 className="text-xl font-semibold">No Account Assigned</h2>
+              <p className="text-muted-foreground">
+                Your user profile is not associated with an account. Please contact your platform
+                administrator.
+              </p>
+            </div>
           ) : (
-             children
+            children
           )}
         </main>
       </div>

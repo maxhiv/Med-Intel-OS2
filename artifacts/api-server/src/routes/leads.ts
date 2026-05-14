@@ -14,7 +14,7 @@ import {
   accountFacilities,
 } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
-import { computeSignalBreakdown, computeTimingBonus } from "../services/signalScorer";
+import { computeTimingBonus, CROSS_SOURCE_BONUS_RULES } from "../services/signalScorer";
 
 const router: IRouter = Router();
 
@@ -64,13 +64,12 @@ function budgetWindowStatus(daysUntil: number | null): string {
 function daysUntilFYE(fiscalYearEndMonth: number | null | undefined): number | null {
   if (!fiscalYearEndMonth || fiscalYearEndMonth < 1 || fiscalYearEndMonth > 12) return null;
   const now = new Date();
-  const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
-  let fyeYear = currentYear;
-  if (fiscalYearEndMonth < currentMonth || (fiscalYearEndMonth === currentMonth && now.getDate() > 15)) {
-    fyeYear = currentYear + 1;
+  // Match computeTimingBonus: use end-of-day on the last day of the FYE month.
+  let fyeDate = new Date(currentYear, fiscalYearEndMonth, 0, 23, 59, 59, 999);
+  if (fyeDate < now) {
+    fyeDate = new Date(currentYear + 1, fiscalYearEndMonth, 0, 23, 59, 59, 999);
   }
-  const fyeDate = new Date(fyeYear, fiscalYearEndMonth - 1, 1);
   return Math.round((fyeDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 }
 
@@ -193,20 +192,10 @@ router.get("/leads", requireAccount, async (req, res) => {
         .slice(0, 3)
         .map((s) => ({ type: s.signalType, detectedAt: s.detectedAt, confidence: s.confidence ?? 50 }));
 
-      // Cross-source matches
-      const crossSourceMatches: string[] = [];
-      if (typeSet.has("con_approved") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
-        crossSourceMatches.push("CON Approved + Capital Confirmed");
-      if (typeSet.has("con_filed") && (typeSet.has("bond_issued") || typeSet.has("bond_issuance")))
-        crossSourceMatches.push("CON Filed + Bond Financing");
-      if (typeSet.has("rfp_posted") && sigs.some((s) => s.source === "usa_spending"))
-        crossSourceMatches.push("RFP + Prior Award Match");
-      if (typeSet.has("grant_awarded") && typeSet.has("con_filed"))
-        crossSourceMatches.push("Grant + CON Expansion");
-      if (typeSet.has("hcris_depreciation_spike") && typeSet.has("con_filed"))
-        crossSourceMatches.push("Depreciation Spike + CON Filed");
-      if (typeSet.has("system_signal_propagated") && (typeSet.has("con_filed") || typeSet.has("con_approved")))
-        crossSourceMatches.push("System-Wide Capital Signal");
+      // Cross-source matches — driven by the shared CROSS_SOURCE_BONUS_RULES matrix
+      const crossSourceMatches: string[] = CROSS_SOURCE_BONUS_RULES
+        .filter((r) => r.matches(typeSet, sigs))
+        .map((r) => r.label);
 
       return {
         facilityId: f.id,
