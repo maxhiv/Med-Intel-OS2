@@ -232,17 +232,17 @@ export const CROSS_SOURCE_BONUS_RULES: CrossSourceBonusRule[] = [
   {
     label: "Grant + CON Expansion",
     points: 12,
-    matches: (t) => t.has("grant_awarded") && t.has("con_filed"),
+    matches: (t) => t.has("grant_awarded") && (t.has("con_filed") || t.has("con_approved")),
   },
   {
-    label: "Depreciation Spike + CON Filed",
+    label: "Depreciation Spike + CON Activity",
     points: 10,
-    matches: (t) => t.has("hcris_depreciation_spike") && t.has("con_filed"),
+    matches: (t) => t.has("hcris_depreciation_spike") && (t.has("con_filed") || t.has("con_approved")),
   },
   {
     label: "High Utilization + CON Activity",
     points: 10,
-    matches: (t) => t.has("high_utilization") && t.has("con_filed"),
+    matches: (t) => t.has("high_utilization") && (t.has("con_filed") || t.has("con_approved")),
   },
   {
     label: "High Utilization + EOL Equipment",
@@ -260,11 +260,17 @@ export const CROSS_SOURCE_BONUS_RULES: CrossSourceBonusRule[] = [
     matches: (t) => t.has("clinical_trial") && t.has("grant_awarded"),
   },
   {
+    // "System Propagated + Direct" — any Tier 1 buying-intent signal co-present.
     label: "System-Wide Capital Signal",
     points: 10,
     matches: (t) =>
       t.has("system_signal_propagated") &&
-      (t.has("con_filed") || t.has("con_approved") || t.has("bond_issuance") || t.has("bond_issued")),
+      (t.has("con_filed") ||
+        t.has("con_approved") ||
+        t.has("bond_issued") ||
+        t.has("bond_issuance") ||
+        t.has("rfp_posted") ||
+        t.has("hcris_depreciation_spike")),
   },
 ];
 
