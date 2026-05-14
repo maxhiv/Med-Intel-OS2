@@ -226,7 +226,7 @@ export default function FacilitiesPage() {
   let displayData = facilitiesRes?.data ?? [];
 
   if (highPriorityOnly) {
-    displayData = displayData.filter((f) => (f.signalScore ?? 0) >= 61);
+    displayData = displayData.filter((f) => (f.signalScore ?? 0) >= 60);
   }
 
   if (sortBy === "signal_desc") {

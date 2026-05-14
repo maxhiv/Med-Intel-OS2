@@ -356,8 +356,7 @@ export default function ConMonitorPage() {
     }
   };
 
-  const PER_STATE_REFRESH_STATES = ["CT", "IL", "NY"];
-  const showPerStateRefresh = isAdmin && selectedStates.length === 1 && PER_STATE_REFRESH_STATES.includes(selectedStates[0]);
+  const PER_STATE_REFRESH_STATES = ["CT", "IL", "NY"] as const;
 
   return (
     <div className="space-y-6">
@@ -370,22 +369,23 @@ export default function ConMonitorPage() {
         </div>
         {isAdmin && (
           <div className="flex flex-wrap gap-2 items-center">
-            {showPerStateRefresh && (
+            {PER_STATE_REFRESH_STATES.map((stateCode) => (
               <Button
+                key={stateCode}
                 variant="outline"
                 size="sm"
-                onClick={() => triggerIngest(`${selectedStates[0]} filings`)}
+                onClick={() => triggerIngest(`${stateCode} filings`)}
                 disabled={!!runningIngest}
                 className="text-xs"
               >
-                {runningIngest ? (
+                {runningIngest === `${stateCode} filings` ? (
                   <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
                 ) : (
                   <RefreshCw className="h-3.5 w-3.5 mr-1" />
                 )}
-                Refresh {selectedStates[0]}
+                Refresh {stateCode}
               </Button>
-            )}
+            ))}
             <Button
               variant="outline"
               size="sm"
