@@ -11,6 +11,11 @@ import { cn } from "@/lib/utils";
 
 type LeadTier = "A" | "B" | "C";
 
+interface DashLeadSignal {
+  type: string;
+  confidence: number;
+}
+
 interface DashLead {
   facilityId: string;
   name: string;
@@ -20,7 +25,23 @@ interface DashLead {
   recommendedAction: string;
   urgency: "high" | "medium" | "low";
   crossSourceMatches: string[];
+  topSignals: DashLeadSignal[];
 }
+
+const SIGNAL_LABELS: Record<string, string> = {
+  con_filed: "CON Filed",
+  con_approved: "CON Approved",
+  bond_issued: "Bond Issued",
+  bond_issuance: "Bond Issued",
+  rfp_posted: "RFP Posted",
+  hcris_depreciation_spike: "Aging Equipment",
+  equipment_age_7yr: "Equipment Age 7+",
+  high_utilization: "High Utilization",
+  grant_awarded: "Grant Awarded",
+  clinical_trial: "Clinical Trial",
+  sec_capex_flag: "EDGAR CapEx",
+  system_signal_propagated: "System Signal",
+};
 
 interface LeadsResponse {
   leads: DashLead[];
@@ -202,7 +223,15 @@ export default function DashboardPage() {
                       >
                         {lead.name}
                       </Link>
-                      <p className="text-xs text-muted-foreground truncate">{lead.recommendedAction}</p>
+                      {lead.topSignals?.[0] ? (
+                        <p className="text-xs text-muted-foreground truncate">
+                          {SIGNAL_LABELS[lead.topSignals[0].type] ?? lead.topSignals[0].type.replace(/_/g, " ")}
+                          {" · "}
+                          {lead.topSignals[0].confidence}% confidence
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground truncate">{lead.recommendedAction}</p>
+                      )}
                     </div>
                     {lead.crossSourceMatches.length > 0 && (
                       <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30 shrink-0 hidden sm:flex items-center gap-0.5">

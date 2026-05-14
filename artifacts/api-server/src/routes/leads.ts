@@ -12,6 +12,7 @@ import {
   purchaseSignals,
   facilityContacts,
   accountFacilities,
+  equipmentRecords,
 } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
 import { computeTimingBonus, CROSS_SOURCE_BONUS_RULES } from "../services/signalScorer";
@@ -81,6 +82,7 @@ router.get("/leads", requireAccount, async (req, res) => {
   const minScore = Math.max(0, parseInt(String(req.query.minScore ?? "40"), 10));
   const tierFilter = String(req.query.tierFilter ?? "").toUpperCase() as LeadTier | "";
   const stateFilter = String(req.query.state ?? "").toUpperCase().slice(0, 2) || null;
+  const equipmentTypeFilter = (req.query.equipmentType as string | undefined) || null;
   const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10)));
   const offset = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10));
 
@@ -119,11 +121,30 @@ router.get("/leads", requireAccount, async (req, res) => {
     .offset(offset);
 
   if (rows.length === 0) {
-    res.json({ leads: [], total: rows.length, offset, limit });
+    res.json({ leads: [], total: 0, offset, limit });
     return;
   }
 
-  const facilityIds = rows.map((r) => r.id);
+  let facilityIds = rows.map((r) => r.id);
+
+  // Narrow to facilities with the requested equipment type.
+  if (equipmentTypeFilter && facilityIds.length > 0) {
+    const matchRows = await db
+      .selectDistinct({ facilityId: equipmentRecords.facilityId })
+      .from(equipmentRecords)
+      .where(
+        and(
+          inArray(equipmentRecords.facilityId, facilityIds),
+          eq(equipmentRecords.modality, equipmentTypeFilter),
+        ),
+      );
+    const matchSet = new Set(matchRows.map((r) => r.facilityId));
+    facilityIds = facilityIds.filter((id) => matchSet.has(id));
+    if (facilityIds.length === 0) {
+      res.json({ leads: [], total: 0, offset, limit });
+      return;
+    }
+  }
 
   // Batch-fetch all active signals
   const allSigs = await db
