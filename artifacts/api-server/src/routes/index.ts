@@ -15,6 +15,7 @@ import batchesRouter from "./batches";
 import reportsRouter from "./reports";
 import adminRouter from "./admin";
 import oauthRouter from "./oauth";
+import streamRouter from "./stream";
 
 const router: IRouter = Router();
 
@@ -26,6 +27,11 @@ router.use(webhooksRouter);
 
 // All routes below need user context.
 router.use(userContext);
+
+// SSE stream must be mounted before rlsTransactionMiddleware because SSE
+// connections are long-lived; wrapping them in a single Postgres transaction
+// would hold an idle connection open for the entire session lifetime.
+router.use(streamRouter);
 
 // Engage Postgres RLS for the rest of the request lifecycle so tenant
 // isolation is enforced at the database layer even if a route forgets its

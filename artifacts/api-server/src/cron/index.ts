@@ -28,6 +28,15 @@ import { ingestConFilings } from "../services/conFilingsIngestor";
 import { notifyConAlerts } from "../services/conAlertNotifier";
 import { rolloverSpendCounters } from "../services/monthRollover";
 import { classifyPendingReplies } from "../services/replyClassifier";
+import { ingestNppes } from "../services/nppesIngestor";
+import { ingestFda510k } from "../services/fda510kIngestor";
+import { ingestFdaRecalls } from "../services/fdaRecallsIngestor";
+import { ingestFdaMaude } from "../services/fdaMaudeIngestor";
+import { ingestFdaClassification } from "../services/fdaClassificationIngestor";
+import { ingestPropublica990 } from "../services/propublica990Ingestor";
+import { ingestCmsData } from "../services/cmsDataIngestor";
+import { ingestSecEdgar } from "../services/secEdgarIngestor";
+import { ingestUsaSpending } from "../services/usaSpendingIngestor";
 
 let started = false;
 const locks = new Set<string>();
@@ -148,6 +157,37 @@ export function startCron(): void {
     { timezone: "UTC" },
   );
 
+  // 06:00 daily — ingest free public APIs: NPPES NPI Registry, FDA 510(k),
+  // FDA Recalls, FDA MAUDE, FDA Device Classification, ProPublica 990,
+  // CMS Provider Data, SEC EDGAR, and USASpending.gov. All sources are
+  // no-key, rate-limit-polite (per-source delays), and idempotent by signal
+  // value so reruns produce no duplicate rows.
+  cron.schedule(
+    "0 6 * * *",
+    guarded("ingestFreeApis", async () => {
+      const sources: { name: string; fn: () => Promise<{ signalsInserted: number; errors: number }> }[] = [
+        { name: "nppes",          fn: () => ingestNppes({ limit: 50 }) },
+        { name: "fda_510k",       fn: () => ingestFda510k({ limit: 50 }) },
+        { name: "fda_recalls",    fn: () => ingestFdaRecalls({ limit: 50 }) },
+        { name: "fda_maude",      fn: () => ingestFdaMaude({ limit: 50 }) },
+        { name: "fda_class",      fn: () => ingestFdaClassification({ limit: 50 }) },
+        { name: "propublica_990", fn: () => ingestPropublica990({ limit: 40 }) },
+        { name: "cms_data",       fn: () => ingestCmsData({ limit: 50 }) },
+        { name: "sec_edgar",      fn: () => ingestSecEdgar({ limit: 40 }) },
+        { name: "usa_spending",   fn: () => ingestUsaSpending({ limit: 40 }) },
+      ];
+      for (const s of sources) {
+        try {
+          const r = await s.fn();
+          logger.info({ source: s.name, ...r }, "free api ingest source complete");
+        } catch (err) {
+          logger.error({ err, source: s.name }, "free api ingest source failed");
+        }
+      }
+    }),
+    { timezone: tz },
+  );
+
   // Every 2 minutes — classify any new inbound CRM replies with Anthropic so
   // the Drafts page can surface qualified replies and so unsubscribe /
   // not-interested replies pause the contact's sequence enrollment quickly.
@@ -160,6 +200,6 @@ export function startCron(): void {
   );
 
   logger.info(
-    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings, rolloverSpendCounters, classifyReplies",
+    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings, ingestFreeApis, rolloverSpendCounters, classifyReplies",
   );
 }

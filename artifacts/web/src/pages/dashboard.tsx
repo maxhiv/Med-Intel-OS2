@@ -7,14 +7,31 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis, Tooltip } from "recharts";
 
 export default function DashboardPage() {
-  const { data: summary, isLoading: loadingSummary } = useGetDashboardSummary();
-  const { data: signals, isLoading: loadingSignals } = useGetRecentSignals({ limit: 5 });
-  const { data: facilities, isLoading: loadingFacilities } = useGetTopFacilities({ limit: 5 });
+  const { data: summary, isLoading: loadingSummary } = useGetDashboardSummary({
+    query: { refetchInterval: 30_000 },
+  });
+  const { data: signals, isLoading: loadingSignals } = useGetRecentSignals(
+    { limit: 5 },
+    { query: { refetchInterval: 30_000 } },
+  );
+  const { data: facilities, isLoading: loadingFacilities } = useGetTopFacilities(
+    { limit: 5 },
+    { query: { refetchInterval: 60_000 } },
+  );
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+            </span>
+            Live
+          </span>
+        </div>
         <div className="flex gap-2">
           <Button variant="outline" asChild>
             <Link href="/facilities">Browse Facilities</Link>

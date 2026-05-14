@@ -62,7 +62,10 @@ function StatusBadge({
 
 function AlertsBanner() {
   const queryClient = useQueryClient();
-  const { data } = useListConAlertNotifications({ unread: true, limit: 25 });
+  const { data } = useListConAlertNotifications(
+    { unread: true, limit: 25 },
+    { query: { refetchInterval: 600_000 } },
+  );
 
   const invalidate = () =>
     queryClient.invalidateQueries({
