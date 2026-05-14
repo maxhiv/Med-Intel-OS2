@@ -59,17 +59,15 @@ router.get("/health", async (_req, res) => {
     status: dbStatus === "ok" ? "ok" : "degraded",
     uptime: uptimeSeconds,
     db: dbStatus,
+    facilitiesCount,
+    accountFacilitiesLinked,
+    conFilingsCount,
     cronStatus: {
       nextRun: disableCron ? null : "~04:30 UTC daily",
     },
     ingestors: {
       lastRun: null as string | null,
       status: disableCron ? "disabled" : "scheduled",
-    },
-    counts: {
-      facilities: facilitiesCount,
-      accountFacilitiesLinked,
-      conFilings: conFilingsCount,
     },
   });
 });

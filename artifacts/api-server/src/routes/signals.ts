@@ -207,25 +207,36 @@ async function handlePushToCrm(req: import("express").Request, res: import("expr
       return;
     }
 
-    const creds = decodeStoredCredentials<{ accessToken?: string; locationId?: string }>(
-      sub.crmCredentials ?? {},
-    );
-
-    const opportunityName =
-      opportunityNameOverride ||
-      `CON: ${filing.applicantName || "Unknown"} — ${filing.state} — ${filing.equipmentType || filing.modality || "Equipment"}`;
-
-    const monetaryValue = Number(filing.approvedAmount ?? filing.requestedAmount ?? 0);
-
     if (sub.crmType !== "ghl") {
       res.status(400).json({ error: "unsupported_crm_type_for_push", crmType: sub.crmType ?? null });
       return;
     }
 
+    const creds = decodeStoredCredentials<{ accessToken?: string; locationId?: string }>(
+      sub.crmCredentials ?? {},
+    );
+
     if (!creds.accessToken || !creds.locationId) {
       res.status(400).json({ error: "ghl_missing_credentials" });
       return;
     }
+
+    // Lookup matched facility (if any) to enrich the opportunity with site context.
+    let matchedFacility: { name: string | null; address1: string | null; city: string | null; state: string | null; npi: string } | null = null;
+    if (filing.facilityId) {
+      const [fac] = await db
+        .select({ name: facilities.name, address1: facilities.address1, city: facilities.city, state: facilities.state, npi: facilities.npi })
+        .from(facilities)
+        .where(eq(facilities.id, filing.facilityId))
+        .limit(1);
+      matchedFacility = fac ?? null;
+    }
+
+    const opportunityName =
+      opportunityNameOverride ||
+      `CON: ${filing.applicantName || matchedFacility?.name || "Unknown"} — ${filing.state} — ${filing.equipmentType || filing.modality || "Equipment"}`;
+
+    const monetaryValue = Number(filing.approvedAmount ?? filing.requestedAmount ?? 0);
 
     const ghlHeaders = {
       Authorization: `Bearer ${creds.accessToken}`,
@@ -249,7 +260,6 @@ async function handlePushToCrm(req: import("express").Request, res: import("expr
             const stage = pipeline.stages?.find((s) => /con.?pre.?qual/i.test(s.name));
             if (stage) { targetPipelineId = pipeline.id; targetStageId = stage.id; break; }
           }
-          // Fall back to first pipeline if no matching stage found.
           if (!targetPipelineId && pb.pipelines?.[0]) {
             targetPipelineId = pb.pipelines[0].id;
             targetStageId = pb.pipelines[0].stages?.[0]?.id ?? null;
@@ -259,16 +269,20 @@ async function handlePushToCrm(req: import("express").Request, res: import("expr
         logger.warn({ err }, "signals: GHL pipeline lookup failed, proceeding without stage");
       }
 
-      // Step 2: Upsert a contact from the filing applicant.
+      // Step 2: Upsert a contact from the filing applicant, enriched with matched facility address.
+      const contactPayload = {
+        locationId: creds.locationId,
+        companyName: filing.applicantName || matchedFacility?.name || "Unknown applicant",
+        source: "MedIntel OS — CON Filing",
+        tags: ["medintel-con", `state-${filing.state}`, `status-${filing.status?.toLowerCase().replace(/\s/g, "-") ?? "unknown"}`],
+        ...(matchedFacility?.address1 ? { address1: matchedFacility.address1 } : {}),
+        ...(matchedFacility?.city    ? { city:     matchedFacility.city }    : {}),
+        ...(matchedFacility?.state   ? { state:    matchedFacility.state }   : {}),
+      };
       const upsertRes = await fetch("https://services.leadconnectorhq.com/contacts/upsert", {
         method: "POST",
         headers: ghlHeaders,
-        body: JSON.stringify({
-          locationId: creds.locationId,
-          companyName: filing.applicantName || "Unknown applicant",
-          source: "MedIntel OS — CON Filing",
-          tags: ["medintel-con", `state-${filing.state}`, `status-${filing.status?.toLowerCase().replace(/\s/g, "-") ?? "unknown"}`],
-        }),
+        body: JSON.stringify(contactPayload),
       });
       if (!upsertRes.ok) {
         const errText = await upsertRes.text().catch(() => "");
@@ -279,38 +293,71 @@ async function handlePushToCrm(req: import("express").Request, res: import("expr
       const upsertBody = await upsertRes.json().catch(() => ({})) as { contact?: { id?: string }; id?: string };
       const crmContactId = upsertBody?.contact?.id ?? (upsertBody as { id?: string }).id ?? null;
 
-      // Step 3: Create the opportunity in the CON Pre-Qualified pipeline stage.
-      const oppRes = await fetch("https://services.leadconnectorhq.com/opportunities/", {
-        method: "POST",
-        headers: ghlHeaders,
-        body: JSON.stringify({
-          pipelineId: targetPipelineId,
-          ...(targetStageId ? { pipelineStageId: targetStageId } : {}),
-          locationId: creds.locationId,
-          name: opportunityName,
-          monetaryValue,
-          status: "open",
-          ...(crmContactId ? { contactId: crmContactId } : {}),
-          customFields: [
-            { key: "con_state",      field_value: filing.state },
-            { key: "equipment_type", field_value: filing.equipmentType || filing.modality || "" },
-            { key: "filing_date",    field_value: filing.filingDate ?? "" },
-            { key: "con_filing_id",  field_value: filingId },
-          ],
-        }),
-      });
+      // Step 3: Search for an existing GHL opportunity created from this filing (idempotent upsert).
+      let existingOpportunityId: string | null = null;
+      try {
+        const searchRes = await fetch(
+          `https://services.leadconnectorhq.com/opportunities/search?location_id=${encodeURIComponent(creds.locationId!)}&q=${encodeURIComponent(filingId)}`,
+          { headers: ghlHeaders },
+        );
+        if (searchRes.ok) {
+          const searchBody = await searchRes.json() as { opportunities?: Array<{ id: string; customFields?: Array<{ key: string; field_value: string }> }> };
+          const found = searchBody.opportunities?.find((o) =>
+            o.customFields?.some((cf) => cf.key === "con_filing_id" && cf.field_value === filingId),
+          );
+          if (found) existingOpportunityId = found.id;
+        }
+      } catch (err) {
+        logger.warn({ err }, "signals: GHL opportunity search failed, will create new");
+      }
+
+      const opportunityPayload = {
+        pipelineId: targetPipelineId,
+        ...(targetStageId  ? { pipelineStageId: targetStageId } : {}),
+        locationId: creds.locationId,
+        name: opportunityName,
+        monetaryValue,
+        status: "open",
+        ...(crmContactId   ? { contactId: crmContactId }        : {}),
+        customFields: [
+          { key: "con_state",       field_value: filing.state },
+          { key: "equipment_type",  field_value: filing.equipmentType || filing.modality || "" },
+          { key: "filing_date",     field_value: String(filing.filingDate ?? "") },
+          { key: "con_filing_id",   field_value: filingId },
+          { key: "facility_name",   field_value: matchedFacility?.name  ?? "" },
+          { key: "facility_npi",    field_value: matchedFacility?.npi   ?? "" },
+        ],
+      };
+
+      // Step 4: Update existing or create new opportunity.
+      let oppRes: Response;
+      let action: "created" | "updated";
+      if (existingOpportunityId) {
+        oppRes = await fetch(
+          `https://services.leadconnectorhq.com/opportunities/${existingOpportunityId}`,
+          { method: "PUT", headers: ghlHeaders, body: JSON.stringify(opportunityPayload) },
+        );
+        action = "updated";
+      } else {
+        oppRes = await fetch(
+          "https://services.leadconnectorhq.com/opportunities/",
+          { method: "POST", headers: ghlHeaders, body: JSON.stringify(opportunityPayload) },
+        );
+        action = "created";
+      }
+
       if (!oppRes.ok) {
         const errText = await oppRes.text().catch(() => "");
-        logger.warn({ status: oppRes.status, body: errText, filingId }, "signals: GHL opportunity create failed");
-        res.status(502).json({ ok: false, error: "ghl_opportunity_create_failed", ghlStatus: oppRes.status });
+        logger.warn({ status: oppRes.status, body: errText, filingId, action }, "signals: GHL opportunity upsert failed");
+        res.status(502).json({ ok: false, error: "ghl_opportunity_upsert_failed", ghlStatus: oppRes.status, action });
         return;
       }
       const oppBody = await oppRes.json().catch(() => ({})) as { opportunity?: { id?: string }; id?: string };
-      const opportunityId = (oppBody as { opportunity?: { id?: string } })?.opportunity?.id ?? (oppBody as { id?: string }).id ?? null;
+      const opportunityId = (oppBody as { opportunity?: { id?: string } })?.opportunity?.id ?? (oppBody as { id?: string }).id ?? existingOpportunityId;
 
-      logger.info({ filingId, subAccountId, targetPipelineId, targetStageId }, "signals: CON filing pushed to GHL as opportunity");
+      logger.info({ filingId, subAccountId, targetPipelineId, targetStageId, action }, "signals: CON filing pushed to GHL as opportunity");
 
-      res.json({ ok: true, crmContactId, opportunityId, opportunityName, monetaryValue, pipelineId: targetPipelineId, stageId: targetStageId });
+      res.json({ ok: true, action, crmContactId, opportunityId, opportunityName, monetaryValue, pipelineId: targetPipelineId, stageId: targetStageId, facilityLinked: !!matchedFacility });
     } catch (err) {
       logger.warn({ err, filingId, subAccountId }, "signals: push-to-crm failed");
       res.status(502).json({ ok: false, error: "push_failed", message: String(err) });
