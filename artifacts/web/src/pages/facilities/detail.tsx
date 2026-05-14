@@ -155,7 +155,7 @@ export default function FacilityDetailPage() {
 
   const handleSaveEdit = () => {
     updateFacility.mutate(
-      { id, data: { name: editName.trim() || undefined, facilityType: editType || undefined, beds: editBeds ? Number(editBeds) : undefined } },
+      { id, data: { name: editName.trim() || undefined, beds: editBeds ? Number(editBeds) : undefined } },
       {
         onSuccess: () => {
           toast({ title: "Facility updated" });

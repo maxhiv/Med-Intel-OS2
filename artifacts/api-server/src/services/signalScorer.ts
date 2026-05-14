@@ -245,9 +245,9 @@ export const CROSS_SOURCE_BONUS_RULES: CrossSourceBonusRule[] = [
     matches: (t) => t.has("high_utilization") && t.has("con_filed"),
   },
   {
-    label: "High Utilization + Equipment Age",
+    label: "High Utilization + EOL Equipment",
     points: 8,
-    matches: (t) => t.has("high_utilization") && t.has("equipment_age_7yr"),
+    matches: (t) => t.has("high_utilization") && (t.has("eol_equipment") || t.has("equipment_age_7yr")),
   },
   {
     label: "Adverse Events + Aging Equipment",

@@ -41,7 +41,8 @@ export default function ReportsPage() {
         data: {
           name: newName.trim(),
           description: newDescription.trim() || undefined,
-          reportType: newReportType,
+          category: newReportType,
+          dataSources: [],
         },
       },
       {

@@ -283,16 +283,16 @@ export const getGetDashboardSummaryQueryOptions = <
   TData = Awaited<ReturnType<typeof getDashboardSummary>>,
   TError = ErrorType<unknown>,
 >(options?: {
-  query?: UseQueryOptions<
+  query?: Omit<UseQueryOptions<
     Awaited<ReturnType<typeof getDashboardSummary>>,
     TError,
     TData
-  >;
+  >, 'queryKey'>;
   request?: SecondParameter<typeof customFetch>;
 }) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getGetDashboardSummaryQueryKey();
+  const queryKey = getGetDashboardSummaryQueryKey();
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof getDashboardSummary>>
@@ -378,18 +378,17 @@ export const getGetRecentSignalsQueryOptions = <
 >(
   params?: GetRecentSignalsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof getRecentSignals>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey =
-    queryOptions?.queryKey ?? getGetRecentSignalsQueryKey(params);
+  const queryKey = getGetRecentSignalsQueryKey(params);
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof getRecentSignals>>
@@ -478,18 +477,17 @@ export const getGetTopFacilitiesQueryOptions = <
 >(
   params?: GetTopFacilitiesParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof getTopFacilities>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey =
-    queryOptions?.queryKey ?? getGetTopFacilitiesQueryKey(params);
+  const queryKey = getGetTopFacilitiesQueryKey(params);
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof getTopFacilities>>
@@ -981,17 +979,17 @@ export const getGetFacilityContactsQueryOptions = <
 >(
   id: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof getFacilityContacts>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getGetFacilityContactsQueryKey(id);
+  const queryKey = getGetFacilityContactsQueryKey(id);
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof getFacilityContacts>>
@@ -1020,11 +1018,11 @@ export function useGetFacilityContacts<
 >(
   id: string,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof getFacilityContacts>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -1493,18 +1491,17 @@ export const getListConAlertNotificationsQueryOptions = <
 >(
   params?: ListConAlertNotificationsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof listConAlertNotifications>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey =
-    queryOptions?.queryKey ?? getListConAlertNotificationsQueryKey(params);
+  const queryKey = getListConAlertNotificationsQueryKey(params);
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof listConAlertNotifications>>
@@ -2808,17 +2805,17 @@ export const getListDraftsQueryOptions = <
 >(
   params?: ListDraftsParams,
   options?: {
-    query?: UseQueryOptions<
+    query?: Omit<UseQueryOptions<
       Awaited<ReturnType<typeof listDrafts>>,
       TError,
       TData
-    >;
+    >, 'queryKey'>;
     request?: SecondParameter<typeof customFetch>;
   },
 ) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getListDraftsQueryKey(params);
+  const queryKey = getListDraftsQueryKey(params);
 
   const queryFn: QueryFunction<Awaited<ReturnType<typeof listDrafts>>> = ({
     signal,

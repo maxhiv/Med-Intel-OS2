@@ -19,7 +19,7 @@ export default function ContactsPage() {
   const activeFacilityId = selectedFacility || (facilities.length > 0 ? facilities[0].id : "");
 
   const { data: contacts, isLoading: loadingContacts, refetch } = useGetFacilityContacts(activeFacilityId, {
-    query: { enabled: !!activeFacilityId, queryKey: [`/api/facilities/${activeFacilityId}/contacts`] }
+    query: { enabled: !!activeFacilityId }
   });
 
   const enrichContact = useEnrichContact();
