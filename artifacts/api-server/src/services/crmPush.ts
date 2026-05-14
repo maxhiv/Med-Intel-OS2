@@ -21,6 +21,7 @@ import {
   subAccounts,
   facilities,
   facilityContacts,
+  accountFacilities,
   crmContactsMap,
   type OutreachDraft,
   type SubAccount,
@@ -86,18 +87,52 @@ export async function resolveSubAccountForDraft(
 async function loadContactAndFacility(
   draft: OutreachDraft,
 ): Promise<{ contact: Contact; facility: Facility }> {
-  const [contact] = await db
-    .select()
-    .from(facilityContacts)
-    .where(eq(facilityContacts.id, draft.contactId));
-  const [facility] = await db
-    .select()
+  // CON-filing drafts are generated from CON Monitor, not from campaign enrollments.
+  // They intentionally have no contact/facility linkage and must NOT be routed through
+  // the batch CRM sync workflow. Use "Push to GHL" from the CON Monitor modal instead.
+  if (draft.conFilingId && (!draft.contactId || !draft.facilityId)) {
+    throw new CrmAdapterError({
+      code: "con_draft_not_batch_syncable",
+      message: "CON-filing email drafts do not have a campaign contact. Use 'Push to GHL' from the CON Monitor to send this draft.",
+      retryable: false,
+    });
+  }
+
+  // Scope both queries to the draft's account to prevent cross-tenant data access.
+  const [facilityRow] = await db
+    .select({ facility: facilities })
     .from(facilities)
-    .where(eq(facilities.id, draft.facilityId));
+    .innerJoin(
+      accountFacilities,
+      and(
+        eq(accountFacilities.facilityId, facilities.id),
+        eq(accountFacilities.accountId, draft.accountId),
+      ),
+    )
+    .where(eq(facilities.id, draft.facilityId!))
+    .limit(1);
+
+  const [contactRow] = await db
+    .select({ contact: facilityContacts })
+    .from(facilityContacts)
+    .innerJoin(facilities, eq(facilities.id, facilityContacts.facilityId))
+    .innerJoin(
+      accountFacilities,
+      and(
+        eq(accountFacilities.facilityId, facilities.id),
+        eq(accountFacilities.accountId, draft.accountId),
+      ),
+    )
+    .where(eq(facilityContacts.id, draft.contactId!))
+    .limit(1);
+
+  const facility = facilityRow?.facility;
+  const contact = contactRow?.contact;
+
   if (!contact || !facility) {
     throw new CrmAdapterError({
       code: "draft_missing_contact_or_facility",
-      message: "Draft references a contact or facility that no longer exists",
+      message: "Draft references a contact or facility that no longer exists, or is not accessible by this account",
       retryable: false,
     });
   }

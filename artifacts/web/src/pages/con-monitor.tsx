@@ -10,7 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Monitor, ExternalLink, Building2, AlertTriangle, Download, Plus, CheckCircle2, RefreshCw, ChevronDown, Play, Loader2 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Monitor, ExternalLink, Building2, AlertTriangle, Download, Plus, CheckCircle2, RefreshCw, ChevronDown, Play, Loader2, Mail, Copy, Check } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 
@@ -149,6 +150,274 @@ function StateMultiSelect({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+interface DraftEmailModalProps {
+  filingId: string;
+  filingName: string;
+  onClose: () => void;
+}
+
+function DraftEmailModal({ filingId, filingName, onClose }: DraftEmailModalProps) {
+  const { toast } = useToast();
+  const [draft, setDraft] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // GHL push state
+  const [showGhlSelector, setShowGhlSelector] = useState(false);
+  const [subAccounts, setSubAccounts] = useState<Array<{ id: string; name: string; crmType: string | null }>>([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [selectedSubAccount, setSelectedSubAccount] = useState("");
+  const [isPushingGhl, setIsPushingGhl] = useState(false);
+
+  const abortRef = useRef<AbortController | null>(null);
+
+  const subject = /^Subject:/i.test(draft) ? draft.split("\n")[0].replace(/^Subject:\s*/i, "").trim() : "";
+  const emailBody = /^Subject:/i.test(draft) ? draft.split("\n").slice(2).join("\n").trim() : draft;
+
+  const startStream = async () => {
+    setDraft("");
+    setIsStreaming(true);
+    setSaved(false);
+    setShowGhlSelector(false);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    try {
+      const res = await fetch(`/api/con-filings/${filingId}/draft-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        signal: ctrl.signal,
+      });
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errBody.error ?? `HTTP ${res.status}`);
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data: ")) continue;
+          let parsed: { content?: string; done?: boolean; error?: string };
+          try {
+            parsed = JSON.parse(line.slice(6));
+          } catch {
+            continue; // ignore malformed JSON chunks
+          }
+          // Stream errors bubble up to the outer catch so the toast is shown.
+          if (parsed.error) throw new Error(parsed.error);
+          if (parsed.content) setDraft((prev) => prev + parsed.content);
+          if (parsed.done) break;
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        toast({ title: "Generation failed", description: String(err), variant: "destructive" });
+      }
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
+  // Auto-start streaming when the modal opens — one-click UX
+  useEffect(() => {
+    startStream();
+    return () => { abortRef.current?.abort(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saveDraft = async () => {
+    if (!draft.trim()) return;
+    setIsSaving(true);
+    try {
+      const res = await fetch("/api/drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          subject: subject || null,
+          body: emailBody || draft,
+          conFilingId: filingId,
+          channel: "email",
+          aiModel: "claude-sonnet-4-6",
+          aiPromptVersion: "con-filing-v1",
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errBody.error ?? `HTTP ${res.status}`);
+      }
+      setSaved(true);
+      toast({ title: "Draft saved", description: "Email draft saved to your Drafts queue." });
+    } catch (err) {
+      toast({ title: "Save failed", description: String(err), variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const copyToClipboard = async () => {
+    await navigator.clipboard.writeText(draft);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const openGhlSelector = async () => {
+    setShowGhlSelector(true);
+    if (subAccounts.length > 0) return;
+    setLoadingAccounts(true);
+    try {
+      const r = await fetch("/api/me/sub-accounts", { credentials: "include" });
+      const body = await r.json() as { data?: Array<{ id: string; name: string; crmType: string | null }> };
+      const list = (body.data ?? []).filter((sa) => sa.crmType === "ghl");
+      setSubAccounts(list);
+      if (list.length > 0) setSelectedSubAccount(list[0].id);
+    } catch {
+      // ignore
+    } finally {
+      setLoadingAccounts(false);
+    }
+  };
+
+  const pushToGhl = async () => {
+    if (!selectedSubAccount || !draft.trim()) return;
+    setIsPushingGhl(true);
+    try {
+      const res = await fetch(`/api/con-filings/${filingId}/push-draft-to-ghl`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ subAccountId: selectedSubAccount, subject, body: emailBody || draft }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errBody.error ?? `HTTP ${res.status}`);
+      }
+      const saName = subAccounts.find((sa) => sa.id === selectedSubAccount)?.name ?? "GHL";
+      toast({ title: "Pushed to GHL", description: `Email draft added as a note in ${saName}.` });
+      setShowGhlSelector(false);
+    } catch (err) {
+      toast({ title: "Push failed", description: String(err), variant: "destructive" });
+    } finally {
+      setIsPushingGhl(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) { abortRef.current?.abort(); onClose(); } }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Mail className="h-5 w-5" /> Draft Outreach Email
+          </DialogTitle>
+          <DialogDescription>
+            AI-generated cold email for <span className="font-medium text-foreground">{filingName}</span>
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 py-1">
+          {isStreaming && draft.length === 0 && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-8">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Generating outreach email…
+            </div>
+          )}
+          {(draft.length > 0 || !isStreaming) && (
+            <Textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              className="min-h-[280px] font-mono text-sm resize-y"
+              placeholder="Email draft will appear here…"
+              readOnly={isStreaming}
+            />
+          )}
+          {isStreaming && draft.length > 0 && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Writing…
+            </div>
+          )}
+
+          {showGhlSelector && !isStreaming && (
+            <div className="border rounded-md p-3 space-y-3 bg-muted/30">
+              <p className="text-sm font-medium">Select GHL sub-account</p>
+              {loadingAccounts ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
+                </div>
+              ) : subAccounts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No GHL sub-accounts configured.</p>
+              ) : (
+                <div className="flex gap-2 items-center">
+                  <Select value={selectedSubAccount} onValueChange={setSelectedSubAccount}>
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder="Choose sub-account" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {subAccounts.map((sa) => (
+                        <SelectItem key={sa.id} value={sa.id}>{sa.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    size="sm"
+                    onClick={pushToGhl}
+                    disabled={isPushingGhl || !selectedSubAccount}
+                  >
+                    {isPushingGhl ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+                    {isPushingGhl ? "Pushing…" : "Push"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setShowGhlSelector(false)}>Cancel</Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="gap-2 flex-wrap">
+          <Button variant="outline" onClick={onClose}>Close</Button>
+          {!isStreaming && (
+            <Button variant="outline" onClick={startStream}>
+              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+              Regenerate
+            </Button>
+          )}
+          {draft.trim().length > 0 && !isStreaming && (
+            <>
+              <Button variant="outline" onClick={copyToClipboard}>
+                {copied ? <Check className="h-3.5 w-3.5 mr-1.5" /> : <Copy className="h-3.5 w-3.5 mr-1.5" />}
+                {copied ? "Copied!" : "Copy"}
+              </Button>
+              <Button variant="outline" onClick={openGhlSelector} disabled={showGhlSelector}>
+                <Plus className="h-3.5 w-3.5 mr-1.5" />
+                Push to GHL
+              </Button>
+              <Button
+                onClick={saveDraft}
+                disabled={isSaving || saved}
+              >
+                {isSaving ? "Saving…" : saved ? "Saved!" : "Save Draft"}
+              </Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -314,6 +583,7 @@ export default function ConMonitorPage() {
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
   const [pipelineModal, setPipelineModal] = useState<{ id: string; name: string } | null>(null);
+  const [draftEmailModal, setDraftEmailModal] = useState<{ id: string; name: string } | null>(null);
   const [runningIngest, setRunningIngest] = useState<string | null>(null);
 
   const initializedRef = useRef(false);
@@ -606,6 +876,21 @@ export default function ConMonitorPage() {
                               variant="outline"
                               className="h-7 px-2 text-xs"
                               onClick={() =>
+                                setDraftEmailModal({
+                                  id: row.id,
+                                  name: `${row.applicantName || "Unknown"} — ${row.state}`,
+                                })
+                              }
+                              data-testid={`button-draft-email-${row.id}`}
+                            >
+                              <Mail className="h-3 w-3 mr-1" />
+                              Draft Email
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs"
+                              onClick={() =>
                                 setPipelineModal({
                                   id: row.id,
                                   name: `${row.applicantName || "Unknown"} — ${row.state}`,
@@ -637,6 +922,14 @@ export default function ConMonitorPage() {
           </div>
         </CardContent>
       </Card>
+
+      {draftEmailModal && (
+        <DraftEmailModal
+          filingId={draftEmailModal.id}
+          filingName={draftEmailModal.name}
+          onClose={() => setDraftEmailModal(null)}
+        />
+      )}
 
       {pipelineModal && (
         <PipelineModal

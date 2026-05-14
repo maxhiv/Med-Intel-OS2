@@ -4,6 +4,7 @@ import { db, conFilings, facilities, accountFacilities, subAccounts } from "@wor
 import { requirePlatformAdmin, requireAccount } from "../middlewares/auth";
 import { decodeStoredCredentials } from "../services/encryption";
 import { logger } from "../lib/logger";
+import { anthropic } from "@workspace/integrations-anthropic-ai";
 import { recomputeAllScores } from "../services/signalScorer";
 import { ingestClinicalTrials } from "../services/clinicalTrialsIngestor";
 import { ingestConFilings, buildAdapters, recordIngestorRun } from "../services/conFilingsIngestor";
@@ -379,6 +380,239 @@ async function handlePushToCrm(req: import("express").Request, res: import("expr
 // Register push-to-crm at both paths: legacy and canonical per spec.
 router.post("/signals/con-filings/:id/push-to-crm", requireAccount, handlePushToCrm);
 router.post("/con-filings/:id/push-to-crm", requireAccount, handlePushToCrm);
+
+// Stream an AI-generated cold outreach email for a CON filing.
+// Uses SSE so the client can show the text as it arrives.
+// On completion, the caller can save the result to POST /drafts.
+async function handleDraftEmail(req: import("express").Request, res: import("express").Response) {
+  const accountId = req.currentAccount!.id;
+  const filingId = String(req.params.id);
+
+  const [filing] = await db
+    .select({
+      id: conFilings.id,
+      applicantName: conFilings.applicantName,
+      state: conFilings.state,
+      equipmentType: conFilings.equipmentType,
+      modality: conFilings.modality,
+      status: conFilings.status,
+      approvedAmount: conFilings.approvedAmount,
+      requestedAmount: conFilings.requestedAmount,
+      filingDate: conFilings.filingDate,
+      facilityId: conFilings.facilityId,
+      notes: conFilings.notes,
+    })
+    .from(conFilings)
+    .where(eq(conFilings.id, filingId))
+    .limit(1);
+
+  if (!filing) {
+    res.status(404).json({ error: "filing_not_found" });
+    return;
+  }
+
+  let facilityContext = "";
+  if (filing.facilityId) {
+    const [fac] = await db
+      .select({ name: facilities.name, city: facilities.city, address1: facilities.address1 })
+      .from(facilities)
+      .where(eq(facilities.id, filing.facilityId))
+      .limit(1);
+    if (fac?.name) {
+      facilityContext = `\nFacility on record: ${fac.name}${fac.city ? `, ${fac.city}` : ""}${fac.address1 ? ` — ${fac.address1}` : ""}`;
+    }
+  }
+
+  const amount = filing.approvedAmount ?? filing.requestedAmount;
+  const amountStr = amount != null ? `$${Math.round(Number(amount)).toLocaleString()}` : null;
+
+  const systemPrompt = `You are an expert B2B medical-equipment sales copywriter. Write concise, personalized cold outreach emails for a medical capital-equipment company that wants to reach healthcare facilities that are expanding.
+
+Your emails:
+- Are addressed to "the Procurement / Capital Equipment Team" when no named contact is available
+- Lead with the specific CON filing details (state, equipment type, approved amount) to show you did your homework
+- Explain how the company can help them acquire the approved equipment efficiently
+- Include a soft call to action (a brief call or reply)
+- Are 150–200 words, professional yet approachable
+- Do NOT use generic filler phrases like "I hope this email finds you well"
+- Do NOT invent facts beyond what is provided
+
+Format: Return ONLY the email text — a Subject line first (prefixed "Subject: "), then a blank line, then the body. No commentary.`;
+
+  const userPrompt = `Generate a cold outreach email for the following CON filing:
+
+- Applicant / facility name: ${filing.applicantName || "Unknown applicant"}
+- State: ${filing.state}
+- Equipment type: ${filing.equipmentType || filing.modality || "medical equipment"}
+- CON status: ${filing.status || "Approved"}
+- Approved / requested amount: ${amountStr || "not specified"}
+- Filing date: ${filing.filingDate ? new Date(filing.filingDate).toLocaleDateString() : "recent"}${facilityContext}
+${filing.notes ? `\nAdditional context: ${filing.notes}` : ""}`;
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+
+  try {
+    const stream = anthropic.messages.stream({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8192,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    });
+
+    for await (const event of stream) {
+      if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        res.write(`data: ${JSON.stringify({ content: event.delta.text })}\n\n`);
+      }
+    }
+
+    res.write(`data: ${JSON.stringify({ done: true, filingId, model: "claude-sonnet-4-6" })}\n\n`);
+    res.end();
+  } catch (err) {
+    logger.error({ err, filingId, accountId }, "signals: draft-email stream failed");
+    res.write(`data: ${JSON.stringify({ error: String(err) })}\n\n`);
+    res.end();
+  }
+}
+
+router.post("/signals/con-filings/:id/draft-email", requireAccount, handleDraftEmail);
+router.post("/con-filings/:id/draft-email", requireAccount, handleDraftEmail);
+
+// Push a generated draft email to GHL as a note on the filing's contact.
+// Body: { subAccountId, subject, body }
+async function handlePushDraftToGhl(req: import("express").Request, res: import("express").Response) {
+  const accountId = req.currentAccount!.id;
+  const filingId = String(req.params.id);
+  const subAccountId = typeof req.body?.subAccountId === "string" ? req.body.subAccountId.trim() : "";
+  const subject = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
+  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+
+  if (!subAccountId) {
+    res.status(400).json({ error: "subAccountId_required" });
+    return;
+  }
+  if (!body) {
+    res.status(400).json({ error: "body_required" });
+    return;
+  }
+
+  const [filing] = await db
+    .select()
+    .from(conFilings)
+    .where(eq(conFilings.id, filingId))
+    .limit(1);
+  if (!filing) {
+    res.status(404).json({ error: "filing_not_found" });
+    return;
+  }
+
+  const [sub] = await db
+    .select()
+    .from(subAccounts)
+    .where(and(eq(subAccounts.id, subAccountId), eq(subAccounts.accountId, accountId)))
+    .limit(1);
+  if (!sub) {
+    res.status(404).json({ error: "sub_account_not_found" });
+    return;
+  }
+  if (sub.crmType !== "ghl") {
+    res.status(400).json({ error: "unsupported_crm_type", crmType: sub.crmType ?? null });
+    return;
+  }
+
+  const creds = decodeStoredCredentials<{ accessToken?: string; locationId?: string }>(sub.crmCredentials ?? {});
+  if (!creds.accessToken || !creds.locationId) {
+    res.status(400).json({ error: "ghl_missing_credentials" });
+    return;
+  }
+
+  const ghlHeaders = {
+    Authorization: `Bearer ${creds.accessToken}`,
+    Version: "2021-07-28",
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  };
+
+  // Upsert a GHL contact for the filing applicant so we have a contactId to attach the note to.
+  let matchedFacility: { name: string | null; address1: string | null; city: string | null; state: string | null } | null = null;
+  if (filing.facilityId) {
+    const [fac] = await db
+      .select({ name: facilities.name, address1: facilities.address1, city: facilities.city, state: facilities.state })
+      .from(facilities)
+      .where(eq(facilities.id, filing.facilityId))
+      .limit(1);
+    matchedFacility = fac ?? null;
+  }
+
+  try {
+    const contactPayload = {
+      locationId: creds.locationId,
+      companyName: filing.applicantName || matchedFacility?.name || "Unknown applicant",
+      source: "MedIntel OS — CON Filing",
+      tags: ["medintel-con", `state-${filing.state}`],
+      ...(matchedFacility?.address1 ? { address1: matchedFacility.address1 } : {}),
+      ...(matchedFacility?.city ? { city: matchedFacility.city } : {}),
+      ...(matchedFacility?.state ? { state: matchedFacility.state } : {}),
+    };
+
+    const upsertRes = await fetch("https://services.leadconnectorhq.com/contacts/upsert", {
+      method: "POST",
+      headers: ghlHeaders,
+      body: JSON.stringify(contactPayload),
+    });
+
+    if (!upsertRes.ok) {
+      const errText = await upsertRes.text().catch(() => "");
+      logger.warn({ status: upsertRes.status, body: errText, filingId }, "signals: GHL contact upsert failed for draft push");
+      res.status(502).json({ ok: false, error: "ghl_contact_upsert_failed", ghlStatus: upsertRes.status });
+      return;
+    }
+
+    const upsertBody = await upsertRes.json().catch(() => ({})) as { contact?: { id?: string }; id?: string };
+    const crmContactId = upsertBody?.contact?.id ?? (upsertBody as { id?: string }).id ?? null;
+
+    if (!crmContactId) {
+      res.status(502).json({ ok: false, error: "ghl_no_contact_id" });
+      return;
+    }
+
+    // Create a GHL outreach task for the rep to execute, with the email draft attached.
+    const taskTitle = subject ? `Outreach: ${subject}` : `CON Outreach — ${filing.applicantName || filing.state}`;
+    const taskBody = subject ? `Subject: ${subject}\n\n${body}` : body;
+    const dueDateIso = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(); // 3 days out
+    const taskRes = await fetch(`https://services.leadconnectorhq.com/contacts/${crmContactId}/tasks`, {
+      method: "POST",
+      headers: ghlHeaders,
+      body: JSON.stringify({
+        title: taskTitle,
+        body: taskBody,
+        dueDate: dueDateIso,
+        completed: false,
+      }),
+    });
+
+    if (!taskRes.ok) {
+      const errText = await taskRes.text().catch(() => "");
+      logger.warn({ status: taskRes.status, body: errText, filingId, crmContactId }, "signals: GHL task creation failed");
+      res.status(502).json({ ok: false, error: "ghl_task_creation_failed", ghlStatus: taskRes.status });
+      return;
+    }
+
+    const taskResult = await taskRes.json().catch(() => ({})) as { task?: { id?: string }; id?: string };
+    const taskId = (taskResult as { task?: { id?: string } })?.task?.id ?? (taskResult as { id?: string }).id ?? null;
+
+    logger.info({ filingId, subAccountId, crmContactId, taskId }, "signals: CON draft email pushed to GHL as outreach task");
+    res.json({ ok: true, crmContactId, taskId });
+  } catch (err) {
+    logger.warn({ err, filingId, subAccountId }, "signals: push-draft-to-ghl failed");
+    res.status(502).json({ ok: false, error: "push_failed", message: String(err) });
+  }
+}
+
+router.post("/signals/con-filings/:id/push-draft-to-ghl", requireAccount, handlePushDraftToGhl);
+router.post("/con-filings/:id/push-draft-to-ghl", requireAccount, handlePushDraftToGhl);
 
 router.post("/signals/recompute", requirePlatformAdmin, async (_req, res) => {
   const result = await recomputeAllScores();
