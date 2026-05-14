@@ -105,7 +105,7 @@ export default function FacilitiesPage() {
                   <SelectItem value="CA">California</SelectItem>
                   <SelectItem value="NY">New York</SelectItem>
                   <SelectItem value="TX">Texas</SelectItem>
-                  <SelectItem value="FL">Texas</SelectItem>
+                  <SelectItem value="FL">Florida</SelectItem>
                   <SelectItem value="IL">Illinois</SelectItem>
                 </SelectContent>
               </Select>

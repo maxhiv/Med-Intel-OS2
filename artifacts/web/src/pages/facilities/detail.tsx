@@ -1,14 +1,18 @@
 import { useParams } from "wouter";
 import { useState } from "react";
-import { 
-  useGetFacility, 
-  useUpdateFacility, 
-  useSyncFacilityFromNpi 
+import {
+  useGetFacility,
+  useUpdateFacility,
+  useSyncFacilityFromNpi,
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Building2, Activity, Users, Settings, Plus, Phone, Mail, MapPin } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Building2, Activity, Settings, Plus, Phone, Mail, MapPin } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 
@@ -16,20 +20,62 @@ export default function FacilityDetailPage() {
   const params = useParams();
   const id = params.id as string;
   const { toast } = useToast();
-  
+
   const { data: facility, isLoading, refetch } = useGetFacility(id);
   const syncFacility = useSyncFacilityFromNpi();
-  
-  const handleSync = () => {
-    syncFacility.mutate({ npi: facility?.npi || "" }, {
-      onSuccess: () => {
-        toast({ title: "Sync Complete", description: "Facility data updated from NPI registry." });
-        refetch();
+  const updateFacility = useUpdateFacility();
+
+  // Edit Facility dialog
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editType, setEditType] = useState("");
+  const [editBeds, setEditBeds] = useState("");
+
+  const handleOpenEdit = () => {
+    if (facility) {
+      setEditName(facility.name ?? "");
+      setEditType(facility.facilityType ?? "");
+      setEditBeds(String(facility.beds ?? ""));
+    }
+    setEditOpen(true);
+  };
+
+  const handleSaveEdit = () => {
+    updateFacility.mutate(
+      {
+        id,
+        data: {
+          name: editName.trim() || undefined,
+          facilityType: editType || undefined,
+          beds: editBeds ? Number(editBeds) : undefined,
+        },
       },
-      onError: (err) => {
-        toast({ title: "Sync Failed", description: err.message, variant: "destructive" });
-      }
-    });
+      {
+        onSuccess: () => {
+          toast({ title: "Facility updated" });
+          setEditOpen(false);
+          refetch();
+        },
+        onError: (err) => {
+          toast({ title: "Error", description: err.message, variant: "destructive" });
+        },
+      },
+    );
+  };
+
+  const handleSync = () => {
+    syncFacility.mutate(
+      { npi: facility?.npi || "" },
+      {
+        onSuccess: () => {
+          toast({ title: "Sync Complete", description: "Facility data updated from NPI registry." });
+          refetch();
+        },
+        onError: (err) => {
+          toast({ title: "Sync Failed", description: err.message, variant: "destructive" });
+        },
+      },
+    );
   };
 
   if (isLoading) {
@@ -62,17 +108,19 @@ export default function FacilityDetailPage() {
             </div>
           </div>
           <div className="text-muted-foreground flex items-center gap-4 text-sm">
-            <span className="flex items-center gap-1"><MapPin className="h-4 w-4" /> {facility.city}, {facility.state}</span>
+            <span className="flex items-center gap-1">
+              <MapPin className="h-4 w-4" /> {facility.city}, {facility.state}
+            </span>
             <span>NPI: {facility.npi}</span>
             {facility.beds && <span>{facility.beds} Beds</span>}
           </div>
         </div>
-        
+
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleSync} disabled={syncFacility.isPending}>
             {syncFacility.isPending ? "Syncing..." : "Sync from NPI"}
           </Button>
-          <Button>Edit Facility</Button>
+          <Button onClick={handleOpenEdit}>Edit Facility</Button>
         </div>
       </div>
 
@@ -87,7 +135,7 @@ export default function FacilityDetailPage() {
               <p className="text-xs text-muted-foreground mt-1">Aggregate purchase intent</p>
             </CardContent>
           </Card>
-          
+
           <Card className="bg-card">
             <CardHeader>
               <CardTitle className="text-sm">Organization Details</CardTitle>
@@ -108,7 +156,7 @@ export default function FacilityDetailPage() {
             </CardContent>
           </Card>
         </div>
-        
+
         <div className="md:col-span-3">
           <Tabs defaultValue="signals" className="w-full">
             <TabsList className="grid w-full grid-cols-3">
@@ -116,7 +164,7 @@ export default function FacilityDetailPage() {
               <TabsTrigger value="contacts">Contacts</TabsTrigger>
               <TabsTrigger value="equipment">Equipment</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="signals" className="mt-4">
               <Card>
                 <CardHeader>
@@ -127,14 +175,25 @@ export default function FacilityDetailPage() {
                   {facility.signals && facility.signals.length > 0 ? (
                     <div className="space-y-4">
                       {facility.signals.map((signal) => (
-                        <div key={signal.id} className="flex items-start gap-4 pb-4 border-b last:border-0 last:pb-0">
-                          <div className={`p-2 rounded-full ${signal.confidence && signal.confidence >= 80 ? 'bg-primary/20 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                        <div
+                          key={signal.id}
+                          className="flex items-start gap-4 pb-4 border-b last:border-0 last:pb-0"
+                        >
+                          <div
+                            className={`p-2 rounded-full ${signal.confidence && signal.confidence >= 80 ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"}`}
+                          >
                             <Activity className="h-4 w-4" />
                           </div>
                           <div>
                             <div className="font-medium">{signal.signalType}</div>
-                            <div className="text-sm text-muted-foreground mt-1">Source: {signal.source} {signal.signalValue ? `— ${signal.signalValue}` : ''}</div>
-                            <div className="text-xs text-muted-foreground mt-1">{new Date(signal.detectedAt || '').toLocaleDateString()} • {signal.confidence}% Confidence</div>
+                            <div className="text-sm text-muted-foreground mt-1">
+                              Source: {signal.source}{" "}
+                              {signal.signalValue ? `— ${signal.signalValue}` : ""}
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-1">
+                              {new Date(signal.detectedAt || "").toLocaleDateString()} •{" "}
+                              {signal.confidence}% Confidence
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -147,7 +206,7 @@ export default function FacilityDetailPage() {
                 </CardContent>
               </Card>
             </TabsContent>
-            
+
             <TabsContent value="contacts" className="mt-4">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
@@ -155,28 +214,61 @@ export default function FacilityDetailPage() {
                     <CardTitle>Key Contacts</CardTitle>
                     <CardDescription>Decision makers and technical staff</CardDescription>
                   </div>
-                  <Button size="sm"><Plus className="h-4 w-4 mr-1" /> Add Contact</Button>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      toast({
+                        title: "Contacts are auto-discovered",
+                        description:
+                          "Run 'Sync from NPI' to pull contacts from the NPPES registry, or use the Contacts page to enrich existing ones.",
+                      })
+                    }
+                  >
+                    <Plus className="h-4 w-4 mr-1" /> Add Contact
+                  </Button>
                 </CardHeader>
                 <CardContent>
                   {facility.contacts && facility.contacts.length > 0 ? (
                     <div className="divide-y border border-border rounded-md">
                       {facility.contacts.map((contact) => (
-                        <div key={contact.id} className="p-4 flex items-center justify-between hover:bg-muted/30">
+                        <div
+                          key={contact.id}
+                          className="p-4 flex items-center justify-between hover:bg-muted/30"
+                        >
                           <div className="flex items-center gap-4">
                             <div className="h-10 w-10 rounded-full bg-secondary flex items-center justify-center font-semibold text-secondary-foreground">
-                              {contact.firstName?.[0]}{contact.lastName?.[0]}
+                              {contact.firstName?.[0]}
+                              {contact.lastName?.[0]}
                             </div>
                             <div>
-                              <div className="font-medium">{contact.firstName} {contact.lastName}</div>
-                              <div className="text-sm text-muted-foreground">{contact.title} • {contact.department}</div>
+                              <div className="font-medium">
+                                {contact.firstName} {contact.lastName}
+                              </div>
+                              <div className="text-sm text-muted-foreground">
+                                {contact.title} • {contact.department}
+                              </div>
                             </div>
                           </div>
                           <div className="flex gap-2">
                             {contact.email && (
-                              <Button variant="ghost" size="icon" title={contact.email}><Mail className="h-4 w-4" /></Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title={contact.email}
+                                onClick={() => window.open(`mailto:${contact.email}`)}
+                              >
+                                <Mail className="h-4 w-4" />
+                              </Button>
                             )}
                             {contact.phone && (
-                              <Button variant="ghost" size="icon" title={contact.phone}><Phone className="h-4 w-4" /></Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title={contact.phone}
+                                onClick={() => window.open(`tel:${contact.phone}`)}
+                              >
+                                <Phone className="h-4 w-4" />
+                              </Button>
                             )}
                           </div>
                         </div>
@@ -190,7 +282,7 @@ export default function FacilityDetailPage() {
                 </CardContent>
               </Card>
             </TabsContent>
-            
+
             <TabsContent value="equipment" className="mt-4">
               <Card>
                 <CardHeader>
@@ -205,13 +297,19 @@ export default function FacilityDetailPage() {
                           <div className="flex items-center gap-3">
                             <Settings className="h-5 w-5 text-muted-foreground" />
                             <div>
-                              <div className="font-medium">{eq.modality} — {eq.manufacturer} {eq.model}</div>
-                              <div className="text-sm text-muted-foreground">Installed: {eq.installYear}</div>
+                              <div className="font-medium">
+                                {eq.modality} — {eq.manufacturer} {eq.model}
+                              </div>
+                              <div className="text-sm text-muted-foreground">
+                                Installed: {eq.installYear}
+                              </div>
                             </div>
                           </div>
                           <div className="text-right">
                             <div className="text-sm font-medium">Est. Replacement</div>
-                            <div className="text-sm text-primary font-bold">{eq.estReplacementYear || 'Unknown'}</div>
+                            <div className="text-sm text-primary font-bold">
+                              {eq.estReplacementYear || "Unknown"}
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -227,6 +325,62 @@ export default function FacilityDetailPage() {
           </Tabs>
         </div>
       </div>
+
+      {/* Edit Facility Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Facility</DialogTitle>
+            <DialogDescription>Update facility name, type, and bed count.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="fac-name">Name</Label>
+              <Input
+                id="fac-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="fac-type">Facility Type</Label>
+              <Select value={editType} onValueChange={setEditType}>
+                <SelectTrigger id="fac-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Hospital">Hospital</SelectItem>
+                  <SelectItem value="Ambulatory Surgery Center">Ambulatory Surgery Center</SelectItem>
+                  <SelectItem value="Imaging Center">Imaging Center</SelectItem>
+                  <SelectItem value="Cancer Center">Cancer Center</SelectItem>
+                  <SelectItem value="Dialysis Center">Dialysis Center</SelectItem>
+                  <SelectItem value="Critical Access Hospital">Critical Access Hospital</SelectItem>
+                  <SelectItem value="Physician Office">Physician Office</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="fac-beds">Beds</Label>
+              <Input
+                id="fac-beds"
+                type="number"
+                min={0}
+                value={editBeds}
+                onChange={(e) => setEditBeds(e.target.value)}
+                placeholder="Leave blank if not applicable"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit} disabled={updateFacility.isPending}>
+              {updateFacility.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
