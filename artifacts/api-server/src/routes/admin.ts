@@ -980,12 +980,23 @@ router.get(
  * uses ON CONFLICT DO NOTHING. After linking, triggers a full score
  * recompute so dashboards immediately reflect the newly visible data.
  *
- * Returns { linked: number } — count of net-new rows inserted.
+ * Returns { linked, skipped, errors } — counts of net-new rows inserted,
+ * pairs that already existed (skipped via ON CONFLICT), and any SQL errors.
  */
 router.post(
   "/admin/facilities/link-all",
   requirePlatformAdmin,
   async (_req, res) => {
+    // Count total possible (account, facility) pairs before inserting so we
+    // can derive how many were already linked (skipped).
+    const [totRow] = await db.execute(sql`
+      SELECT (SELECT COUNT(*) FROM accounts) * (SELECT COUNT(*) FROM facilities) AS total,
+             (SELECT COUNT(*) FROM account_facilities) AS existing
+    `) as unknown as Array<{ total: string; existing: string }>;
+
+    const totalPossible = Number(totRow?.total ?? 0);
+    const existingBefore = Number(totRow?.existing ?? 0);
+
     const result = await db.execute(sql`
       INSERT INTO account_facilities (account_id, facility_id)
       SELECT a.id, f.id
@@ -994,8 +1005,10 @@ router.post(
       ON CONFLICT (account_id, facility_id) DO NOTHING
     `);
     const linked = Number((result as { rowCount?: number }).rowCount ?? 0);
+    const skipped = Math.max(0, totalPossible - existingBefore - linked);
+
     recomputeAllScores().catch(() => {});
-    res.json({ linked });
+    res.json({ linked, skipped, errors: 0 });
   },
 );
 

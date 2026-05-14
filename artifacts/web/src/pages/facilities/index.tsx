@@ -61,7 +61,7 @@ interface SignalBreakdown {
   tier2Count: number;
   tier3Count: number;
   crossSourceBonuses: string[];
-  topSignals: Array<{ signalType: string; weight: number }>;
+  topSignals: Array<{ type: string; detectedAt: Date | string | null; confidence: number }>;
 }
 
 function scoreColor(score: number): { bg: string; text: string; border: string; label: string } {
@@ -108,9 +108,9 @@ function SignalScoreBadge({ score, breakdown }: { score: number; breakdown?: Sig
             <div>
               <div className="font-medium mb-1">Top signals:</div>
               {breakdown.topSignals.slice(0, 3).map((s) => (
-                <div key={s.signalType} className="flex justify-between">
-                  <span className="font-mono">{s.signalType.replace(/_/g, " ")}</span>
-                  <span className="text-primary">+{s.weight}</span>
+                <div key={s.type} className="flex justify-between">
+                  <span className="font-mono">{s.type.replace(/_/g, " ")}</span>
+                  <span className="text-primary">{s.confidence}%</span>
                 </div>
               ))}
             </div>
