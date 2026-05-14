@@ -226,8 +226,9 @@ export async function ingestPropublica990(
 
         // Write fiscal year end month if not already set from a higher-priority
         // source (hcris is higher priority; irs_990 only fills the gap).
-        const fyeMonthFromPeriod = filing.tax_prd
-          ? parseInt(filing.tax_prd.slice(-2), 10)
+        const taxPrdStr = filing.tax_prd != null ? String(filing.tax_prd) : "";
+        const fyeMonthFromPeriod = taxPrdStr.length >= 2
+          ? parseInt(taxPrdStr.slice(-2), 10)
           : undefined;
         const fyeMonth = fyeMonthFromPeriod;
         if (fyeMonth && fyeMonth >= 1 && fyeMonth <= 12) {
