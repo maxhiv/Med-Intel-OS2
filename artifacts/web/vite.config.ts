@@ -29,37 +29,9 @@ if (!process.env.BASE_PATH && !isBuild) {
   );
 }
 
-// In production builds (vite build), Replit sets REPLIT_DOMAINS to the deployment domain.
-// Construct VITE_CLERK_PROXY_URL so ClerkProvider routes through the proxy.
-// Only set this during a build — the proxy middleware is disabled in dev.
-const clerkProxyUrl = (() => {
-  if (!isBuild) return "";
-  if (process.env.REPLIT_DOMAINS) {
-    const domain = process.env.REPLIT_DOMAINS.split(",")[0]?.trim();
-    if (domain) return `https://${domain}/api/__clerk`;
-  }
-  return process.env.VITE_CLERK_PROXY_URL ?? "";
-})();
-
-// publishableKeyFromHost (from @clerk/react/internal) derives a pk_live_... key
-// from the hostname when the fallback is empty/undefined. In production, we
-// MUST pass an empty fallback so it derives the correct live key.
-// If we inject the VITE_CLERK_PUBLISHABLE_KEY secret (which holds the dev test
-// key pk_test_...), publishableKeyFromHost uses that test key on the production
-// domain instead — causing Clerk to fail silently with a blank sign-in page.
-const clerkPublishableKey = (() => {
-  // Production build: clear the key so the hostname-derived live key is used.
-  if (isBuild && process.env.REPLIT_DOMAINS) return "";
-  // Dev / non-Replit build: use the test key from the environment.
-  return process.env.VITE_CLERK_PUBLISHABLE_KEY ?? process.env.CLERK_PUBLISHABLE_KEY ?? "";
-})();
-
 export default defineConfig({
   base: basePath,
-  define: {
-    "import.meta.env.VITE_CLERK_PROXY_URL": JSON.stringify(clerkProxyUrl),
-    "import.meta.env.VITE_CLERK_PUBLISHABLE_KEY": JSON.stringify(clerkPublishableKey),
-  },
+  define: {},
   plugins: [
     react(),
     tailwindcss(),

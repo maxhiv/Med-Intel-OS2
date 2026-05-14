@@ -33,11 +33,27 @@ import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient();
 
+// Determine Clerk configuration at runtime from the actual hostname so that
+// the same static bundle works correctly in every environment:
+//
+//   Production (.replit.app):
+//     - pass "" fallback → publishableKeyFromHost derives pk_live_<base64(hostname$)>
+//     - set proxyUrl so Clerk API calls route through our /api/__clerk middleware
+//
+//   Dev / preview (.replit.dev or localhost):
+//     - pass the VITE_CLERK_PUBLISHABLE_KEY env var (pk_test_...) as fallback
+//     - no proxyUrl (proxy middleware is production-only)
+//
+// This avoids baking domain-specific values into the bundle at build time.
+const _hostname = typeof window !== "undefined" ? window.location.hostname : "";
+const _isProductionDomain = _hostname.endsWith(".replit.app");
 const clerkPubKey = publishableKeyFromHost(
-  typeof window !== "undefined" ? window.location.hostname : "",
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+  _hostname,
+  _isProductionDomain ? "" : (import.meta.env.VITE_CLERK_PUBLISHABLE_KEY ?? ""),
 );
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+const clerkProxyUrl = _isProductionDomain
+  ? `https://${_hostname}/api/__clerk`
+  : undefined;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 function stripBase(path: string): string {
