@@ -278,16 +278,13 @@ export const CROSS_SOURCE_BONUS_RULES: CrossSourceBonusRule[] = [
 export function computeTimingBonus(fiscalYearEndMonth: number | null | undefined): number {
   if (!fiscalYearEndMonth || fiscalYearEndMonth < 1 || fiscalYearEndMonth > 12) return 0;
   const now = new Date();
-  const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
-  let fyeYear = currentYear;
-  if (
-    fiscalYearEndMonth < currentMonth ||
-    (fiscalYearEndMonth === currentMonth && now.getDate() > 15)
-  ) {
-    fyeYear = currentYear + 1;
+  // Use the last day of the fiscal year end month (day 0 of next month = last day of target month).
+  let fyeDate = new Date(currentYear, fiscalYearEndMonth, 0); // last day of fiscalYearEndMonth, this year
+  if (fyeDate <= now) {
+    // Already past this year's FYE — target next year's close.
+    fyeDate = new Date(currentYear + 1, fiscalYearEndMonth, 0);
   }
-  const fyeDate = new Date(fyeYear, fiscalYearEndMonth - 1, 1);
   const daysUntil = Math.round((fyeDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
   if (daysUntil <= 30) return 20;
   if (daysUntil <= 60) return 15;

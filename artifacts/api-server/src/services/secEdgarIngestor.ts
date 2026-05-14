@@ -109,8 +109,16 @@ export async function ingestSecEdgar(
       if (directErr) result.errors += 1;
       const directAccessions = new Set(directList);
 
-      // Search by parent health system name when parentSystemId is populated.
-      let parentOnlyAccessions: string[] = [];
+      // Collect system/parent search terms to deduplicate before querying.
+      // We search by: (a) facility.systemName when set, and (b) the parent
+      // system facility's name when parentSystemId is populated.
+      const systemTerms = new Set<string>();
+
+      if (f.systemName) {
+        const st = f.systemName.split(/[,\-]/)[0].trim();
+        if (st.toLowerCase() !== facilityTerm.toLowerCase()) systemTerms.add(st);
+      }
+
       if (f.parentSystemId) {
         let parentName = parentNameCache.get(f.parentSystemId);
         if (!parentName) {
@@ -123,12 +131,19 @@ export async function ingestSecEdgar(
           if (parentName) parentNameCache.set(f.parentSystemId, parentName);
         }
         if (parentName) {
-          const parentTerm = parentName.split(/[,\-]/)[0].trim();
-          if (parentTerm.toLowerCase() !== facilityTerm.toLowerCase()) {
-            await sleep(DELAY_MS);
-            const { accessions: pList, httpError: pErr } = await searchEdgar(parentTerm, 5);
-            if (pErr) result.errors += 1;
-            parentOnlyAccessions = pList.filter((a) => !directAccessions.has(a));
+          const pt = parentName.split(/[,\-]/)[0].trim();
+          if (pt.toLowerCase() !== facilityTerm.toLowerCase()) systemTerms.add(pt);
+        }
+      }
+
+      let parentOnlyAccessions: string[] = [];
+      for (const term of systemTerms) {
+        await sleep(DELAY_MS);
+        const { accessions: pList, httpError: pErr } = await searchEdgar(term, 5);
+        if (pErr) result.errors += 1;
+        for (const a of pList) {
+          if (!directAccessions.has(a) && !parentOnlyAccessions.includes(a)) {
+            parentOnlyAccessions.push(a);
           }
         }
       }
