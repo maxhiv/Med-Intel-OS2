@@ -5,7 +5,7 @@
  * cross-source bonus matches, contacts, and FYE timing fields.
  */
 import { Router, type IRouter } from "express";
-import { eq, and, gte, inArray, sql, desc } from "drizzle-orm";
+import { eq, and, gte, inArray, sql, desc, exists } from "drizzle-orm";
 import {
   db,
   facilities,
@@ -91,7 +91,42 @@ router.get("/leads", requireAccount, async (req, res) => {
   if (tierFilter === "A") effectiveMinScore = Math.max(minScore, 70);
   else if (tierFilter === "B") effectiveMinScore = Math.max(minScore, 50);
 
-  // Query facilities tracked by this account with a score threshold
+  // Shared WHERE predicate — equipment filter pushed into SQL via EXISTS so
+  // it is applied before ORDER BY / LIMIT / OFFSET, ensuring correct pagination.
+  const whereClause = and(
+    eq(accountFacilities.accountId, accountId),
+    gte(facilities.signalScore, effectiveMinScore),
+    stateFilter ? eq(facilities.state, stateFilter as "IL") : undefined,
+    equipmentTypeFilter
+      ? exists(
+          db
+            .select({ one: sql`1` })
+            .from(equipmentRecords)
+            .where(
+              and(
+                eq(equipmentRecords.facilityId, facilities.id),
+                eq(equipmentRecords.modality, equipmentTypeFilter),
+              ),
+            ),
+        )
+      : undefined,
+  );
+
+  // True total for the full filtered set (no limit/offset).
+  const [countRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(facilities)
+    .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
+    .where(whereClause);
+
+  const total = countRow?.count ?? 0;
+
+  if (total === 0) {
+    res.json({ leads: [], total: 0, offset, limit });
+    return;
+  }
+
+  // Paginated facility rows — same filters, now with limit/offset.
   const rows = await db
     .select({
       id: facilities.id,
@@ -109,42 +144,17 @@ router.get("/leads", requireAccount, async (req, res) => {
     })
     .from(facilities)
     .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
-    .where(
-      and(
-        eq(accountFacilities.accountId, accountId),
-        gte(facilities.signalScore, effectiveMinScore),
-        stateFilter ? eq(facilities.state, stateFilter as "IL") : undefined,
-      ),
-    )
+    .where(whereClause)
     .orderBy(desc(facilities.signalScore))
     .limit(limit)
     .offset(offset);
 
   if (rows.length === 0) {
-    res.json({ leads: [], total: 0, offset, limit });
+    res.json({ leads: [], total, offset, limit });
     return;
   }
 
-  let facilityIds = rows.map((r) => r.id);
-
-  // Narrow to facilities with the requested equipment type.
-  if (equipmentTypeFilter && facilityIds.length > 0) {
-    const matchRows = await db
-      .selectDistinct({ facilityId: equipmentRecords.facilityId })
-      .from(equipmentRecords)
-      .where(
-        and(
-          inArray(equipmentRecords.facilityId, facilityIds),
-          eq(equipmentRecords.modality, equipmentTypeFilter),
-        ),
-      );
-    const matchSet = new Set(matchRows.map((r) => r.facilityId));
-    facilityIds = facilityIds.filter((id) => matchSet.has(id));
-    if (facilityIds.length === 0) {
-      res.json({ leads: [], total: 0, offset, limit });
-      return;
-    }
-  }
+  const facilityIds = rows.map((r) => r.id);
 
   // Batch-fetch all active signals
   const allSigs = await db
@@ -245,7 +255,7 @@ router.get("/leads", requireAccount, async (req, res) => {
       };
     });
 
-  res.json({ leads, total: leads.length, offset, limit });
+  res.json({ leads, total, offset, limit });
 });
 
 // ─── GET /leads/summary ────────────────────────────────────────────────────────
