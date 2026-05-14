@@ -285,11 +285,12 @@ export function computeTimingBonus(fiscalYearEndMonth: number | null | undefined
   if (!fiscalYearEndMonth || fiscalYearEndMonth < 1 || fiscalYearEndMonth > 12) return 0;
   const now = new Date();
   const currentYear = now.getFullYear();
-  // Use the last day of the fiscal year end month (day 0 of next month = last day of target month).
-  let fyeDate = new Date(currentYear, fiscalYearEndMonth, 0); // last day of fiscalYearEndMonth, this year
-  if (fyeDate <= now) {
-    // Already past this year's FYE — target next year's close.
-    fyeDate = new Date(currentYear + 1, fiscalYearEndMonth, 0);
+  // Use end-of-day on the last day of the fiscal year end month so the entire
+  // FYE day is counted as "not yet passed" (day 0 of next month = last day of target month).
+  let fyeDate = new Date(currentYear, fiscalYearEndMonth, 0, 23, 59, 59, 999);
+  if (fyeDate < now) {
+    // The FYE day itself is fully over — target next year's close.
+    fyeDate = new Date(currentYear + 1, fiscalYearEndMonth, 0, 23, 59, 59, 999);
   }
   const daysUntil = Math.round((fyeDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
   if (daysUntil <= 30) return 20;
