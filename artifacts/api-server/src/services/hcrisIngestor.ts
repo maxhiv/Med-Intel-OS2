@@ -14,7 +14,7 @@ import { logger } from "../lib/logger";
 
 const HCRIS_API =
   "https://data.cms.gov/provider-compliance/cost-report/hospital-provider-cost-report/api/1/datastore/query";
-const DELAY_MS = 250;
+const DELAY_MS = 200;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

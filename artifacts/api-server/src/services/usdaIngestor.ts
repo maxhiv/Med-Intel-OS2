@@ -14,7 +14,7 @@ import { logger } from "../lib/logger";
 const USA_SPENDING_URL =
   "https://api.usaspending.gov/api/v2/search/spending_by_award/";
 const MIN_AWARD_AMOUNT = 100_000;
-const DELAY_MS = 250;
+const DELAY_MS = 200;
 const MONTHS_BACK = 24;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

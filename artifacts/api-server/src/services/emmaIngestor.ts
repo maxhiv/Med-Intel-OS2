@@ -14,7 +14,7 @@ const EMMA_SEARCH = "https://emma.msrb.org/api/SecSearch.aspx";
 const EMMA_ISSUER = "https://emma.msrb.org/api/IssuerSearch.aspx";
 const TARGET_STATES = ["IL", "MI", "NY", "VA", "CT", "MD", "KY", "MS", "AL", "GA", "MA"];
 const MIN_AMOUNT = 5_000_000;
-const DELAY_MS = 250;
+const DELAY_MS = 200;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

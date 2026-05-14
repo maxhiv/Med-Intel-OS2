@@ -18,7 +18,7 @@ const CMS_API =
 // High-volume imaging HCPCS codes
 const IMAGING_HCPCS = ["70553", "71250", "78816", "77067", "70470"];
 const MIN_SERVICES = 2_000;
-const DELAY_MS = 250;
+const DELAY_MS = 200;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

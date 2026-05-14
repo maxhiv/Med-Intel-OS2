@@ -38,7 +38,7 @@ const TARGET_STATES = new Set([
   "OH", "IN", "WI", "MN", "MO", "TN", "NC", "FL", "TX", "CA",
 ]);
 
-const DELAY_MS = 250;
+const DELAY_MS = 200;
 const MONTHS_BACK = 24;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

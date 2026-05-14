@@ -15,7 +15,7 @@ import { logger } from "../lib/logger";
 
 const BASE_URL = "https://api.sam.gov/opportunities/v2/search";
 const NAICS_CODES = ["334517", "334510"];
-const DELAY_MS = 250;
+const DELAY_MS = 200;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
