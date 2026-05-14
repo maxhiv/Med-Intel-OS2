@@ -90,25 +90,12 @@ app.use(
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 app.use(
-  clerkMiddleware((req) => {
-    const authorizedParties: string[] = [];
-    if (process.env.REPLIT_DOMAINS) {
-      for (const d of process.env.REPLIT_DOMAINS.split(",")) {
-        const t = d.trim();
-        if (t) authorizedParties.push(`https://${t}`);
-      }
-    }
-    if (process.env.REPLIT_DEV_DOMAIN) {
-      authorizedParties.push(`https://${process.env.REPLIT_DEV_DOMAIN}`);
-    }
-    return {
-      publishableKey: publishableKeyFromHost(
-        getClerkProxyHost(req) ?? "",
-        process.env.CLERK_PUBLISHABLE_KEY,
-      ),
-      ...(authorizedParties.length > 0 && { authorizedParties }),
-    };
-  }),
+  clerkMiddleware((req) => ({
+    publishableKey: publishableKeyFromHost(
+      getClerkProxyHost(req) ?? "",
+      process.env.CLERK_PUBLISHABLE_KEY,
+    ),
+  })),
 );
 
 // Global API rate limit (per IP). Health/Clerk-proxy paths are not under /api.

@@ -29,8 +29,23 @@ if (!process.env.BASE_PATH && !isBuild) {
   );
 }
 
+// In production builds (vite build), Replit sets REPLIT_DOMAINS to the deployment domain.
+// Construct VITE_CLERK_PROXY_URL so ClerkProvider routes through the proxy.
+// Only set this during a build — the proxy middleware is disabled in dev.
+const clerkProxyUrl = (() => {
+  if (!isBuild) return "";
+  if (process.env.REPLIT_DOMAINS) {
+    const domain = process.env.REPLIT_DOMAINS.split(",")[0]?.trim();
+    if (domain) return `https://${domain}/api/__clerk`;
+  }
+  return process.env.VITE_CLERK_PROXY_URL ?? "";
+})();
+
 export default defineConfig({
   base: basePath,
+  define: {
+    "import.meta.env.VITE_CLERK_PROXY_URL": JSON.stringify(clerkProxyUrl),
+  },
   plugins: [
     react(),
     tailwindcss(),
