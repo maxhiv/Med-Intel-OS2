@@ -13,8 +13,12 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, facilities, purchaseSignals } from "@workspace/db";
 import { logger } from "../lib/logger";
 
+// EDGAR full-text search — documented at https://efts.sec.gov/LATEST/search-index
+// User-Agent MUST be "Company Name email@domain.com" per SEC fair-access policy.
+// Wrong format (e.g. "App/1.0") causes 403/429 that look like content errors.
 const EDGAR_SEARCH = "https://efts.sec.gov/LATEST/search-index";
 const DELAY_MS = 200;
+const EDGAR_UA = `MedIntelOS ${process.env.PLATFORM_ADMIN_EMAIL ?? "research@medintel.ai"}`;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -79,14 +83,21 @@ export async function ingestSecEdgar(
         enddt: today(),
       });
       const res = await fetch(`${EDGAR_SEARCH}?${params}`, {
-        headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
+        headers: { Accept: "application/json", "User-Agent": EDGAR_UA },
       });
       if (!res.ok) {
         if (res.status !== 404) result.errors += 1;
+        await sleep(DELAY_MS);
         continue;
       }
       const json = (await res.json()) as EdgarResponse;
       const hits = json.hits?.hits ?? [];
+      // Mark scraped even when there are no hits so facilities with no EDGAR
+      // presence aren't re-queried on every run.
+      await db
+        .update(facilities)
+        .set({ lastScrapedAt: new Date(), updatedAt: new Date() })
+        .where(eq(facilities.id, f.id));
       if (hits.length === 0) continue;
 
       for (const hit of hits.slice(0, 3)) {
@@ -118,14 +129,9 @@ export async function ingestSecEdgar(
         result.signalsInserted += 1;
       }
 
-      await db
-        .update(facilities)
-        .set({ lastScrapedAt: new Date(), updatedAt: new Date() })
-        .where(eq(facilities.id, f.id));
     } catch (err) {
       logger.warn({ err, facilityId: f.id }, "sec_edgar fetch error");
       result.errors += 1;
-      continue;
     }
 
     await sleep(DELAY_MS);
