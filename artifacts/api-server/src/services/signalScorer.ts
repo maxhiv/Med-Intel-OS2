@@ -46,6 +46,10 @@ const TIER3_SIGNALS = new Set([
   "news_expansion",
   "nih_grant",
   "system_signal_propagated",
+  "financial_health",
+  "capital_investment",
+  "workforce_expansion",
+  "hospital_operator",
 ]);
 
 const WEIGHTS: Record<string, number> = {
@@ -77,6 +81,10 @@ const WEIGHTS: Record<string, number> = {
   nih_grant: 6,
   fiscal_year_end: 5,
   system_signal_propagated: 15,
+  financial_health: 8,
+  capital_investment: 18,
+  workforce_expansion: 6,
+  hospital_operator: 10,
 };
 
 // ─── Engagement constants ─────────────────────────────────────────────────────

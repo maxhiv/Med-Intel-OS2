@@ -9,7 +9,9 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "bulk-ingest": "tsx src/scripts/continuousBulkIngest.ts"
+    "bulk-ingest": "tsx src/scripts/continuousBulkIngest.ts",
+    "import-990": "tsx src/scripts/import990.ts",
+    "backfill-eins": "tsx src/scripts/backfillEins.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -21,6 +23,7 @@
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
+    "csv-parse": "^6.2.1",
     "drizzle-orm": "catalog:",
     "express": "^5",
     "express-rate-limit": "^8.5.1",

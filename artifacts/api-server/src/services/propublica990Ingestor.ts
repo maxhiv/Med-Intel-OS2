@@ -185,6 +185,14 @@ export async function ingestPropublica990(
       ein = orgs[0].ein;
       if (!ein) continue;
 
+      // Write EIN back to facilities so 990-raw signals can be joined later.
+      await db
+        .update(facilities)
+        .set({ ein: String(ein).padStart(9, "0").slice(0, 9), updatedAt: new Date() })
+        .where(
+          sql`${facilities.id} = ${f.id} AND ${facilities.ein} IS NULL`,
+        );
+
       await sleep(150);
 
       const orgRes = await fetch(`${PP_ORG}/${ein}.json`, {
