@@ -1,0 +1,78 @@
+We have a working codebase on branch claude/add-live-data-streams-FoSz4 that fixes all known bugs. Your job is to pull it, apply environment configuration, seed the database, and get the app running end-to-end. Follow every step in order.
+
+STEP 0 — Clear the git lock if present
+
+rm -f .git/index.lock
+git status
+STEP 1 — Pull the fixed branch
+
+git fetch origin
+git checkout claude/add-live-data-streams-FoSz4
+git pull origin claude/add-live-data-streams-FoSz4
+STEP 2 — Verify these Secrets exist in the Secrets panel (do NOT hardcode values)
+
+Check that ALL of these are set. If any are missing, stop and tell me which ones:
+
+DATABASE_URL — PostgreSQL connection string
+CLERK_SECRET_KEY — starts with sk_test_ or sk_live_
+CLERK_PUBLISHABLE_KEY — starts with pk_test_ or pk_live_
+VITE_CLERK_PUBLISHABLE_KEY — same value as above
+CRM_ENCRYPTION_KEY — already set in replit.nix
+PLATFORM_ADMIN_EMAIL — already set to maxhanseniv@gmail.com in replit.nix
+PORT — port for the API server (e.g. 3001)
+API_PORT — same value as PORT above (used by the Vite proxy)
+STEP 3 — Seed the database (REQUIRED — without this every API returns 403)
+
+pnpm --filter @workspace/db push
+pnpm --filter @workspace/db tsx src/seed.ts
+This creates:
+
+The app_rls Postgres role (without it every request 500s with "role does not exist")
+The hansen-holdings account (without it the platform admin gets 403 on every route)
+Three system report templates
+Enrichment source approval records
+STEP 4 — Resolve the merge conflict in reports.tsx
+
+There is a conflict between local main and origin/main in artifacts/web/src/pages/reports.tsx. Accept the incoming (origin/main) version — it is the complete 245-line implementation. Run:
+
+git checkout --theirs artifacts/web/src/pages/reports.tsx
+git add artifacts/web/src/pages/reports.tsx
+git commit -m "Resolve reports.tsx conflict — keep full implementation"
+STEP 5 — Confirm the two processes use separate ports
+
+The API server and the Vite web server cannot share the same PORT. In your workflow configuration:
+
+API server must start with PORT=<api_port> (e.g. 3001)
+Web server must start with PORT=<web_port> API_PORT=<api_port> BASE_PATH=/ (e.g. PORT=8080, API_PORT=3001)
+The Vite config already has the /api proxy configured — it reads API_PORT to know where to forward requests. This is the root cause of all APIs failing: without the proxy, every /api/* call hits Vite (which has no routes) and 404s.
+
+STEP 6 — Install dependencies and build
+
+pnpm install
+pnpm --filter @workspace/db build
+pnpm --filter @workspace/api-client-react build
+STEP 7 — Smoke test
+
+# API server health (replace 3001 with your API port)
+curl http://localhost:3001/api/health
+
+# Expected: {"status":"ok","db":"connected",...}
+Then open the app in browser and check DevTools → Network:
+
+GET /api/me returning 200 = everything working
+GET /api/me returning 401 = Clerk keys wrong or missing
+GET /api/me returning 403 with no_account_assigned = seed didn't run (redo Step 3)
+GET /api/health returning ERR_CONNECTION_REFUSED = API_PORT mismatch (check Step 5)
+WHAT WAS ALREADY FIXED IN CODE (on the branch you pulled)
+
+You do not need to change any of these — they are already committed:
+
+File	Fix
+artifacts/web/vite.config.ts	Added /api proxy so browser requests reach the Express API server
+artifacts/api-server/src/app.ts	Fixed CORS — was blocking all browser requests in production when CORS_ORIGINS was empty
+lib/api-client-react/src/custom-fetch.ts	Added credentials: "include" so Clerk session cookies are always sent
+artifacts/api-server/src/index.ts	Added startup check — fails fast with clear message if any required env var is missing
+artifacts/api-server/src/services/secEdgarIngestor.ts	Fixed User-Agent header (was MedIntel/1.0, EDGAR requires Name email@domain format causing 403s)
+artifacts/api-server/src/services/propublica990Ingestor.ts	Fixed rate-limit cascade (delay was 300ms, raised to 1100ms; error path was skipping the delay causing burst 429s)
+artifacts/api-server/src/routes/facilities.ts	Added POST /facilities/:id/contacts endpoint
+artifacts/web/src/pages/facilities/detail.tsx	Wired "Add Contact" button to a full dialog

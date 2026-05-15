@@ -19,7 +19,7 @@ import { db, facilities, purchaseSignals } from "@workspace/db";
 import { logger } from "../lib/logger";
 
 const EDGAR_SEARCH = "https://efts.sec.gov/LATEST/search-index";
-const EDGAR_FORMS = "424B3,424B5,S-1,S-11,424B4,FWP";
+const EDGAR_FORMS = "10-K,8-K,S-1,FWP,424B3,424B4,424B5";
 const DELAY_MS = 200;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -62,7 +62,7 @@ async function searchEdgar(
     enddt: today(),
   });
   const res = await fetch(`${EDGAR_SEARCH}?${params}`, {
-    headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
+    headers: { Accept: "application/json", "User-Agent": "MedIntelOS research@medintel.ai" },
   });
   if (!res.ok) {
     return { accessions: [], httpError: res.status !== 404 };

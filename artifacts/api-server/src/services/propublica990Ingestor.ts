@@ -20,7 +20,7 @@ import { logger } from "../lib/logger";
 
 const PP_SEARCH = "https://projects.propublica.org/nonprofits/api/v2/search.json";
 const PP_ORG = "https://projects.propublica.org/nonprofits/api/v2/organizations";
-const DELAY_MS = 300;
+const DELAY_MS = 1100;
 const GRANT_THRESHOLD = 1_000_000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -168,10 +168,11 @@ export async function ingestPropublica990(
       if (f.state) searchParams.set("state[id]", f.state);
 
       const searchRes = await fetch(`${PP_SEARCH}?${searchParams}`, {
-        headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
+        headers: { Accept: "application/json", "User-Agent": "MedIntelOS research@medintel.ai" },
       });
       if (!searchRes.ok) {
         result.errors += 1;
+        await sleep(DELAY_MS);
         continue;
       }
       const searchJson = (await searchRes.json()) as PpSearchResult;
@@ -184,10 +185,11 @@ export async function ingestPropublica990(
       await sleep(150);
 
       const orgRes = await fetch(`${PP_ORG}/${ein}.json`, {
-        headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
+        headers: { Accept: "application/json", "User-Agent": "MedIntelOS research@medintel.ai" },
       });
       if (!orgRes.ok) {
         if (orgRes.status !== 404) result.errors += 1;
+        await sleep(DELAY_MS);
         continue;
       }
       const orgJson = (await orgRes.json()) as PpOrg;
