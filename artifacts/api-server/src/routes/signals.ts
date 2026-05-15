@@ -701,27 +701,32 @@ router.post(
     })();
 
     const statesOpt = statesParam.length ? { states: statesParam } : {};
+    // When focused on specific states, raise per-source limit to 200 so each
+    // run makes a real dent in the targeted-state backlog.
+    const lim = statesParam.length ? 200 : 50;
+    const limLow = statesParam.length ? 200 : 40; // slower sources
+    const limEmma = statesParam.length ? 200 : 30;
 
     const ingestors: Record<
       string,
       () => Promise<{ signalsInserted: number; errors: number }>
     > = {
-      nppes:          () => ingestNppes({ limit: 50, ...statesOpt }),
-      fda_510k:       () => ingestFda510k({ limit: 50 }),
-      fda_recalls:    () => ingestFdaRecalls({ limit: 50 }),
-      fda_maude:      () => ingestFdaMaude({ limit: 50 }),
-      fda_class:      () => ingestFdaClassification({ limit: 50, ...statesOpt }),
-      propublica_990: () => ingestPropublica990({ limit: 40, ...statesOpt }),
-      cms_data:       () => ingestCmsData({ limit: 50, ...statesOpt }),
-      sec_edgar:      () => ingestSecEdgar({ limit: 40, ...statesOpt }),
-      usa_spending:   () => ingestUsaSpending({ limit: 40, ...statesOpt }),
-      sam_gov:        () => ingestSamGov({ limit: 50 }),
-      emma_bonds:     () => ingestEmma({ limit: 30 }),
-      hcris:          () => ingestHcris({ limit: 50 }),
-      hrsa:           () => ingestHrsa({ limit: 50, ...statesOpt }),
-      usda:           () => ingestUsda({ limit: 50, ...statesOpt }),
-      medicare_util:  () => ingestMedicareUtil({ limit: 50 }),
-      clinical_trials: () => ingestClinicalTrials({ limit: 50, ...statesOpt }),
+      nppes:          () => ingestNppes({ limit: lim, ...statesOpt }),
+      fda_510k:       () => ingestFda510k({ limit: lim }),
+      fda_recalls:    () => ingestFdaRecalls({ limit: lim }),
+      fda_maude:      () => ingestFdaMaude({ limit: lim }),
+      fda_class:      () => ingestFdaClassification({ limit: lim, ...statesOpt }),
+      propublica_990: () => ingestPropublica990({ limit: limLow, ...statesOpt }),
+      cms_data:       () => ingestCmsData({ limit: lim, ...statesOpt }),
+      sec_edgar:      () => ingestSecEdgar({ limit: limLow, ...statesOpt }),
+      usa_spending:   () => ingestUsaSpending({ limit: limLow, ...statesOpt }),
+      sam_gov:        () => ingestSamGov({ limit: lim }),
+      emma_bonds:     () => ingestEmma({ limit: limEmma }),
+      hcris:          () => ingestHcris({ limit: lim }),
+      hrsa:           () => ingestHrsa({ limit: lim, ...statesOpt }),
+      usda:           () => ingestUsda({ limit: lim, ...statesOpt }),
+      medicare_util:  () => ingestMedicareUtil({ limit: lim }),
+      clinical_trials: () => ingestClinicalTrials({ limit: lim, ...statesOpt }),
     };
 
     if (sourceParam && !ingestors[sourceParam]) {
@@ -781,15 +786,31 @@ router.post("/signals/ingest/bulk", async (req, res, next) => {
   const perSource = Math.max(1, Math.min(Number(body.limitPerSource) || 500, 2000));
   const doScores = body.recomputeScores !== false;
 
-  type SourceResult = { status: "ok" | "error"; signalsInserted: number; errors: number; durationMs: number; errorMsg?: string };
+  type SourceResult = {
+    status: "ok" | "error";
+    signalsInserted: number;
+    facilitiesUpdated: number;
+    errors: number;
+    durationMs: number;
+    errorMsg?: string;
+  };
 
-  async function runSource(fn: () => Promise<{ signalsInserted: number; errors: number }>): Promise<SourceResult> {
+  async function runSource(
+    fn: () => Promise<{ signalsInserted: number; errors: number; facilitiesScanned?: number; facilitiesUpdated?: number }>,
+  ): Promise<SourceResult> {
     const t0 = Date.now();
     try {
       const r = await fn();
-      return { status: r.errors > 0 ? "error" : "ok", signalsInserted: r.signalsInserted, errors: r.errors, durationMs: Date.now() - t0 };
+      const facilitiesUpdated = r.facilitiesUpdated ?? r.facilitiesScanned ?? 0;
+      return {
+        status: r.errors > 0 ? "error" : "ok",
+        signalsInserted: r.signalsInserted,
+        facilitiesUpdated,
+        errors: r.errors,
+        durationMs: Date.now() - t0,
+      };
     } catch (err) {
-      return { status: "error", signalsInserted: 0, errors: 1, errorMsg: String(err).slice(0, 200), durationMs: Date.now() - t0 };
+      return { status: "error", signalsInserted: 0, facilitiesUpdated: 0, errors: 1, errorMsg: String(err).slice(0, 200), durationMs: Date.now() - t0 };
     }
   }
 
@@ -797,7 +818,7 @@ router.post("/signals/ingest/bulk", async (req, res, next) => {
     const results: Record<string, SourceResult> = {};
 
     // Batch A: fast, no per-facility HTTP calls (FDA classification, NPPES)
-    const batchA: Array<[string, () => Promise<{ signalsInserted: number; errors: number }>]> = [
+    const batchA: Array<[string, () => Promise<{ signalsInserted: number; errors: number; facilitiesScanned?: number }>]> = [
       ["fda_class",      () => ingestFdaClassification({ limit: perSource, states })],
       ["nppes",          () => ingestNppes({ limit: perSource, states })],
     ];
@@ -805,7 +826,7 @@ router.post("/signals/ingest/bulk", async (req, res, next) => {
     batchA.forEach(([name], i) => { results[name] = batchAResults[i]; });
 
     // Batch B: moderate-rate sources (CMS Data, USA Spending, Clinical Trials, SEC EDGAR)
-    const batchB: Array<[string, () => Promise<{ signalsInserted: number; errors: number }>]> = [
+    const batchB: Array<[string, () => Promise<{ signalsInserted: number; errors: number; facilitiesScanned?: number }>]> = [
       ["cms_data",       () => ingestCmsData({ limit: perSource, states })],
       ["usa_spending",   () => ingestUsaSpending({ limit: perSource, states })],
       ["clinical_trials", () => ingestClinicalTrials({ limit: perSource, states })],
@@ -815,7 +836,7 @@ router.post("/signals/ingest/bulk", async (req, res, next) => {
     batchB.forEach(([name], i) => { results[name] = batchBResults[i]; });
 
     // Batch C: slow/rate-sensitive (ProPublica 990, HRSA, USDA) — sequential
-    const batchC: Array<[string, () => Promise<{ signalsInserted: number; errors: number }>]> = [
+    const batchC: Array<[string, () => Promise<{ signalsInserted: number; errors: number; facilitiesScanned?: number }>]> = [
       ["propublica_990", () => ingestPropublica990({ limit: perSource, states })],
       ["hrsa",           () => ingestHrsa({ limit: perSource, states })],
       ["usda",           () => ingestUsda({ limit: perSource, states })],
@@ -829,16 +850,17 @@ router.post("/signals/ingest/bulk", async (req, res, next) => {
       const t0 = Date.now();
       try {
         await recomputeAllScores();
-        results["score_recompute"] = { status: "ok", signalsInserted: 0, errors: 0, durationMs: Date.now() - t0 };
+        results["score_recompute"] = { status: "ok", signalsInserted: 0, facilitiesUpdated: 0, errors: 0, durationMs: Date.now() - t0 };
       } catch (err) {
-        results["score_recompute"] = { status: "error", signalsInserted: 0, errors: 1, errorMsg: String(err).slice(0, 200), durationMs: Date.now() - t0 };
+        results["score_recompute"] = { status: "error", signalsInserted: 0, facilitiesUpdated: 0, errors: 1, errorMsg: String(err).slice(0, 200), durationMs: Date.now() - t0 };
       }
     }
 
-    const totalSignals = Object.values(results).reduce((s, r) => s + (r.signalsInserted ?? 0), 0);
-    const totalErrors  = Object.values(results).reduce((s, r) => s + (r.errors ?? 0), 0);
+    const totalSignals          = Object.values(results).reduce((s, r) => s + (r.signalsInserted ?? 0), 0);
+    const totalFacilitiesUpdated = Object.values(results).reduce((s, r) => s + (r.facilitiesUpdated ?? 0), 0);
+    const totalErrors            = Object.values(results).reduce((s, r) => s + (r.errors ?? 0), 0);
 
-    res.json({ states, limitPerSource: perSource, totalSignals, totalErrors, sources: results });
+    res.json({ states, limitPerSource: perSource, totalSignals, totalFacilitiesUpdated, totalErrors, sources: results });
   } catch (err) {
     next(err);
   }
