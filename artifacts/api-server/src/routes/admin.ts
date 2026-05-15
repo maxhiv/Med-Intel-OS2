@@ -1336,4 +1336,42 @@ router.get("/admin/signal-coverage", async (req, res) => {
   }
 });
 
+// POST /admin/seed-account-facilities
+//
+// One-time utility: inserts a row in account_facilities for every
+// (account, facility) pair that doesn't already exist.  This gives every
+// tenant full visibility of all facilities without needing the multi-tenant
+// routing logic to be finalised first.
+// Auth: INTERNAL_ADMIN_KEY header only.
+
+router.post("/admin/seed-account-facilities", async (req, res) => {
+  const internalKey = process.env.INTERNAL_ADMIN_KEY;
+  const providedKey = req.headers["x-internal-admin-key"];
+  if (!internalKey || providedKey !== internalKey) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+
+  try {
+    // Bulk-insert in one statement using a cross-join between accounts and
+    // facilities, skipping pairs that already exist.
+    const result = await db.execute(sql`
+      INSERT INTO account_facilities (account_id, facility_id)
+      SELECT a.id, f.id
+      FROM accounts a
+      CROSS JOIN facilities f
+      WHERE NOT EXISTS (
+        SELECT 1 FROM account_facilities af
+        WHERE af.account_id = a.id AND af.facility_id = f.id
+      )
+      ON CONFLICT DO NOTHING
+    `);
+
+    const inserted: number = (result as unknown as { rowCount: number }).rowCount ?? 0;
+    res.json({ ok: true, inserted });
+  } catch (err) {
+    res.status(500).json({ error: "seed_failed", detail: String(err) });
+  }
+});
+
 export default router;
