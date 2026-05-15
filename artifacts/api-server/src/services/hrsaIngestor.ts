@@ -13,6 +13,9 @@
  *
  * Source: https://api.usaspending.gov/
  * No API key required.
+ *
+ * NOTE: USASpending API renamed fields to Title Case in 2024.
+ * Use "Award ID", "Recipient Name", "Award Amount", "Start Date" (with spaces).
  */
 import { and, eq, ilike, or } from "drizzle-orm";
 import {
@@ -48,11 +51,12 @@ export interface HrsaIngestResult {
   errors: number;
 }
 
+// USASpending renamed fields to "Title Case" in 2024 — use bracket notation
 interface SpendingAward {
-  Award_ID?: string;
-  Recipient_Name?: string;
-  Award_Amount?: number;
-  Start_Date?: string;
+  "Award ID"?: string;
+  "Recipient Name"?: string;
+  "Award Amount"?: number;
+  "Start Date"?: string;
   Description?: string;
   recipient_location_state_code?: string;
   recipient_location_city_name?: string;
@@ -70,7 +74,7 @@ function cutoffDate(): string {
 }
 
 async function matchOrCreateFacility(award: SpendingAward): Promise<string | null> {
-  const name = award.Recipient_Name?.trim();
+  const name = award["Recipient Name"]?.trim();
   if (!name) return null;
 
   const [existing] = await db
@@ -89,8 +93,8 @@ async function matchOrCreateFacility(award: SpendingAward): Promise<string | nul
   const state = (award.recipient_location_state_code ?? "").trim().toUpperCase();
   if (!state || state.length !== 2) return null;
 
-  // Deduplicate NPI key: take first 10 printable chars from award ID or name
-  const npiKey = `HRSA-${(award.Award_ID ?? name).replace(/[^A-Za-z0-9]/g, "").slice(0, 8)}`.slice(0, 10);
+  const awardId = award["Award ID"] ?? name;
+  const npiKey = `HRSA-${awardId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8)}`.slice(0, 10);
 
   const [created] = await db
     .insert(facilities)
@@ -135,7 +139,6 @@ export async function ingestHrsa(
         },
       ],
       award_type_codes: ["A", "B", "C", "D"],
-      // Health center / FQHC keywords matching HRSA Bureau of Primary Health Care
       keywords: [
         "community health center",
         "federally qualified health center",
@@ -153,10 +156,10 @@ export async function ingestHrsa(
       award_amounts: [{ lower_bound: MIN_AWARD_AMOUNT }],
     },
     fields: [
-      "Award_ID",
-      "Recipient_Name",
-      "Award_Amount",
-      "Start_Date",
+      "Award ID",
+      "Recipient Name",
+      "Award Amount",
+      "Start Date",
       "Description",
       "recipient_location_state_code",
       "recipient_location_city_name",
@@ -164,7 +167,7 @@ export async function ingestHrsa(
     ],
     page: 1,
     limit,
-    sort: "Award_Amount",
+    sort: "Award Amount",
     order: "desc",
   };
 
@@ -180,7 +183,8 @@ export async function ingestHrsa(
     });
 
     if (!res.ok) {
-      logger.warn({ status: res.status }, "USASpending HRSA API error");
+      const errBody = await res.text().catch(() => "");
+      logger.warn({ status: res.status, body: errBody.slice(0, 200) }, "USASpending HRSA API error");
       result.errors += 1;
       return result;
     }
@@ -189,10 +193,9 @@ export async function ingestHrsa(
     const awards = data.results ?? [];
 
     for (const award of awards) {
-      const amount = award.Award_Amount ?? 0;
+      const amount = award["Award Amount"] ?? 0;
       if (amount < MIN_AWARD_AMOUNT) continue;
 
-      // Target-state filter (belt + suspenders — also enforced in the API query)
       const state = (award.recipient_location_state_code ?? "").trim().toUpperCase();
       if (state && !TARGET_STATES.has(state)) continue;
 
@@ -203,7 +206,9 @@ export async function ingestHrsa(
           continue;
         }
 
-        const signalValue = `hrsa:${award.Award_ID ?? award.Recipient_Name}`;
+        const awardId = award["Award ID"];
+        const recipientName = award["Recipient Name"];
+        const signalValue = `hrsa:${awardId ?? recipientName}`;
         const [exists] = await db
           .select({ id: purchaseSignals.id })
           .from(purchaseSignals)
@@ -217,7 +222,6 @@ export async function ingestHrsa(
           .limit(1);
 
         if (!exists) {
-          // Confidence scales with award size: $250k → 65, $2M+ → 90
           const confidence = Math.min(90, Math.round(65 + (amount / 2_000_000) * 25));
           await db.insert(purchaseSignals).values({
             facilityId,
@@ -230,7 +234,7 @@ export async function ingestHrsa(
           result.signalsInserted += 1;
         }
       } catch (err) {
-        logger.warn({ err, awardId: award.Award_ID }, "HRSA award processing error");
+        logger.warn({ err, awardId: award["Award ID"] }, "HRSA award processing error");
         result.errors += 1;
       }
 

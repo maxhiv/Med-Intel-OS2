@@ -6,6 +6,9 @@
  *
  * Source: https://api.usaspending.gov/
  * No API key required.
+ *
+ * NOTE: USASpending API renamed fields to Title Case in 2024.
+ * Use "Award ID", "Recipient Name", "Award Amount", "Start Date" (with spaces).
  */
 import { and, eq, ilike, or } from "drizzle-orm";
 import { db, facilities, purchaseSignals } from "@workspace/db";
@@ -24,11 +27,12 @@ export interface UsdaIngestResult {
   errors: number;
 }
 
+// USASpending renamed fields to "Title Case" in 2024 — use bracket notation
 interface SpendingAward {
-  Award_ID?: string;
-  Recipient_Name?: string;
-  Award_Amount?: number;
-  Start_Date?: string;
+  "Award ID"?: string;
+  "Recipient Name"?: string;
+  "Award Amount"?: number;
+  "Start Date"?: string;
   Description?: string;
   awarding_agency_name?: string;
 }
@@ -80,10 +84,10 @@ export async function ingestUsda(
       time_period: [{ start_date: cutoffDate(), end_date: new Date().toISOString().slice(0, 10) }],
       award_amounts: [{ lower_bound: MIN_AWARD_AMOUNT }],
     },
-    fields: ["Award_ID", "Recipient_Name", "Award_Amount", "Start_Date", "Description"],
+    fields: ["Award ID", "Recipient Name", "Award Amount", "Start Date", "Description"],
     page: 1,
     limit,
-    sort: "Award_Amount",
+    sort: "Award Amount",
     order: "desc",
   };
 
@@ -99,7 +103,8 @@ export async function ingestUsda(
     });
 
     if (!res.ok) {
-      logger.warn({ status: res.status }, "USASpending USDA API error");
+      const errBody = await res.text().catch(() => "");
+      logger.warn({ status: res.status, body: errBody.slice(0, 200) }, "USASpending USDA API error");
       result.errors += 1;
       return result;
     }
@@ -108,17 +113,19 @@ export async function ingestUsda(
     const awards = data.results ?? [];
 
     for (const award of awards) {
-      const amount = award.Award_Amount ?? 0;
+      const amount = award["Award Amount"] ?? 0;
       if (amount < MIN_AWARD_AMOUNT) continue;
 
       try {
-        const facilityId = await matchFacility(award.Recipient_Name);
+        const facilityId = await matchFacility(award["Recipient Name"]);
         if (!facilityId) {
           await sleep(DELAY_MS);
           continue;
         }
 
-        const signalValue = `usda:${award.Award_ID ?? award.Recipient_Name}`;
+        const awardId = award["Award ID"];
+        const recipientName = award["Recipient Name"];
+        const signalValue = `usda:${awardId ?? recipientName}`;
         const [exists] = await db
           .select({ id: purchaseSignals.id })
           .from(purchaseSignals)
@@ -144,7 +151,7 @@ export async function ingestUsda(
           result.signalsInserted += 1;
         }
       } catch (err) {
-        logger.warn({ err, awardId: award.Award_ID }, "USDA award processing error");
+        logger.warn({ err, awardId: award["Award ID"] }, "USDA award processing error");
         result.errors += 1;
       }
 

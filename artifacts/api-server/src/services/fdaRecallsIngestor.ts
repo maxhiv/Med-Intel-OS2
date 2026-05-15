@@ -7,6 +7,9 @@
  * recall_number so reruns are idempotent. HTTP 404 = no results, not an error.
  *
  * Docs: https://open.fda.gov/apis/device/recall/
+ *
+ * NOTE: The openFDA API returns intermittent HTTP 500 errors under load.
+ * We retry up to 3 times with exponential backoff before counting as an error.
  */
 import { and, eq, sql } from "drizzle-orm";
 import {
@@ -18,6 +21,27 @@ import {
 import { logger } from "../lib/logger";
 
 const FDA_RECALLS_API = "https://api.fda.gov/device/recall.json";
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 1_500;
+
+async function fetchWithRetry(url: string): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, RETRY_BASE_MS * 2 ** (attempt - 1)));
+    }
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
+      });
+      if (res.status < 500) return res;
+      lastErr = new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
 
 interface FdaRecall {
   recall_number?: string;
@@ -46,16 +70,22 @@ async function fetchFdaRecallsForFacility(
     limit: "5",
   });
   const url = `${FDA_RECALLS_API}?${params.toString()}`;
-  const res = await fetch(url, {
-    headers: { Accept: "application/json", "User-Agent": "MedIntel/1.0" },
-  });
+
+  let res: Response;
+  try {
+    res = await fetchWithRetry(url);
+  } catch (err) {
+    logger.warn({ err, facilityId: facility.id }, "fda recalls fetch failed after retries");
+    return { ok: false, notFound: false, recalls: [] };
+  }
+
   if (res.status === 404) {
     return { ok: true, notFound: true, recalls: [] };
   }
   if (!res.ok) {
     logger.warn(
       { status: res.status, facilityId: facility.id },
-      "fda recalls fetch failed",
+      "fda recalls non-retryable error",
     );
     return { ok: false, notFound: false, recalls: [] };
   }

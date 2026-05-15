@@ -2,30 +2,36 @@
  * CMS Provider Data ingestor — free public source, no API key required.
  *
  * Queries the CMS Hospital General Information dataset (data.cms.gov) for
- * each tracked facility by name + state. The certification date from CMS
- * indicates when the facility last underwent a payment certification review —
- * a natural capital-planning milestone. We emit a `fiscal_year_end` signal
- * keyed by provider ID + certification year so it's idempotent across runs.
+ * each tracked facility by name + state. We emit a `fiscal_year_end` signal
+ * keyed by provider ID + current year (CMS refreshes this dataset annually).
  *
  * Dataset: https://data.cms.gov/provider-data/dataset/xubh-q36u
- * API: https://data.cms.gov/resource/xubh-q36u.json (Socrata SODA)
+ * API: https://data.cms.gov/provider-data/api/1/datastore/query/xubh-q36u/0
+ *
+ * NOTE: The old Socrata endpoint (data.cms.gov/resource/xubh-q36u.json) was
+ * permanently retired (HTTP 410) in 2024. This ingestor uses the replacement
+ * CMS Provider Data Catalog API which is free and requires no API key.
  */
 import { and, eq, sql } from "drizzle-orm";
 import { db, facilities, purchaseSignals } from "@workspace/db";
 import { logger } from "../lib/logger";
 
-const CMS_API = "https://data.cms.gov/resource/xubh-q36u.json";
+const CMS_API =
+  "https://data.cms.gov/provider-data/api/1/datastore/query/xubh-q36u/0";
 const DELAY_MS = 200;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 interface CmsHospital {
-  provider_id?: string;
+  facility_id?: string;
   facility_name?: string;
   state?: string;
-  city_town?: string;
-  certification_date?: string;
-  overall_rating?: string;
+  citytown?: string;
+  hospital_overall_rating?: string;
+}
+
+interface CmsResponse {
+  results?: CmsHospital[];
 }
 
 export interface IngestResult {
@@ -44,6 +50,8 @@ export async function ingestCmsData(
     errors: 0,
   };
 
+  const currentYear = new Date().getFullYear();
+
   const targets = await db
     .select()
     .from(facilities)
@@ -54,36 +62,41 @@ export async function ingestCmsData(
   for (const f of targets) {
     result.facilitiesScanned += 1;
     try {
-      // Use first word of facility name + state to narrow the search safely.
       const shortName = f.name.split(/[\s,\-]/)[0].trim().slice(0, 20);
-      // Socrata LIKE requires % encoded as %25 inside a $where clause.
-      const where = `upper(facility_name) LIKE upper('%25${shortName}%25') AND state='${f.state}'`;
+
+      // CMS Provider Data Catalog API uses conditions[] filter syntax
       const params = new URLSearchParams({
-        $where: where,
-        $limit: "3",
+        "conditions[0][property]": "facility_name",
+        "conditions[0][value]": `%${shortName}%`,
+        "conditions[0][operator]": "LIKE",
+        "conditions[1][property]": "state",
+        "conditions[1][value]": f.state ?? "",
+        "conditions[1][operator]": "=",
+        limit: "3",
       });
+
       const res = await fetch(`${CMS_API}?${params}`, {
         headers: {
           Accept: "application/json",
           "User-Agent": "MedIntel/1.0",
         },
       });
+
       if (!res.ok) {
         if (res.status !== 404) result.errors += 1;
         continue;
       }
-      const rows = (await res.json()) as CmsHospital[];
-      if (!Array.isArray(rows) || rows.length === 0) continue;
+
+      const body = (await res.json()) as CmsResponse;
+      const rows = body.results ?? [];
+      if (rows.length === 0) continue;
 
       const row = rows[0];
-      const providerId = row.provider_id;
-      const certDate = row.certification_date;
-      if (!providerId || !certDate) continue;
+      const providerId = row.facility_id;
+      const rating = row.hospital_overall_rating;
+      if (!providerId || !rating || rating === "Not Available") continue;
 
-      const certYear = new Date(certDate).getFullYear();
-      if (isNaN(certYear)) continue;
-
-      const signalValue = `cms:${providerId}:${certYear}`;
+      const signalValue = `cms:${providerId}:${currentYear}`;
       const [exists] = await db
         .select({ id: purchaseSignals.id })
         .from(purchaseSignals)
@@ -95,6 +108,7 @@ export async function ingestCmsData(
           ),
         )
         .limit(1);
+
       if (!exists) {
         await db.insert(purchaseSignals).values({
           facilityId: f.id,
