@@ -691,25 +691,37 @@ router.post(
     const sourceParam =
       typeof req.query.source === "string" ? req.query.source.trim() : "";
 
+    // Optional state filter: ?states=IL,TX  or body { states: ["IL","TX"] }
+    const statesParam: string[] = (() => {
+      const qs = req.query.states;
+      if (typeof qs === "string" && qs.trim()) return qs.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
+      const body = (req.body as Record<string, unknown>)?.states;
+      if (Array.isArray(body)) return (body as string[]).map((s) => String(s).trim().toUpperCase()).filter(Boolean);
+      return [];
+    })();
+
+    const statesOpt = statesParam.length ? { states: statesParam } : {};
+
     const ingestors: Record<
       string,
       () => Promise<{ signalsInserted: number; errors: number }>
     > = {
-      nppes:          () => ingestNppes({ limit: 50 }),
+      nppes:          () => ingestNppes({ limit: 50, ...statesOpt }),
       fda_510k:       () => ingestFda510k({ limit: 50 }),
       fda_recalls:    () => ingestFdaRecalls({ limit: 50 }),
       fda_maude:      () => ingestFdaMaude({ limit: 50 }),
-      fda_class:      () => ingestFdaClassification({ limit: 50 }),
-      propublica_990: () => ingestPropublica990({ limit: 40 }),
-      cms_data:       () => ingestCmsData({ limit: 50 }),
-      sec_edgar:      () => ingestSecEdgar({ limit: 40 }),
-      usa_spending:   () => ingestUsaSpending({ limit: 40 }),
+      fda_class:      () => ingestFdaClassification({ limit: 50, ...statesOpt }),
+      propublica_990: () => ingestPropublica990({ limit: 40, ...statesOpt }),
+      cms_data:       () => ingestCmsData({ limit: 50, ...statesOpt }),
+      sec_edgar:      () => ingestSecEdgar({ limit: 40, ...statesOpt }),
+      usa_spending:   () => ingestUsaSpending({ limit: 40, ...statesOpt }),
       sam_gov:        () => ingestSamGov({ limit: 50 }),
       emma_bonds:     () => ingestEmma({ limit: 30 }),
       hcris:          () => ingestHcris({ limit: 50 }),
-      hrsa:           () => ingestHrsa({ limit: 50 }),
-      usda:           () => ingestUsda({ limit: 50 }),
+      hrsa:           () => ingestHrsa({ limit: 50, ...statesOpt }),
+      usda:           () => ingestUsda({ limit: 50, ...statesOpt }),
       medicare_util:  () => ingestMedicareUtil({ limit: 50 }),
+      clinical_trials: () => ingestClinicalTrials({ limit: 50, ...statesOpt }),
     };
 
     if (sourceParam && !ingestors[sourceParam]) {
@@ -735,6 +747,102 @@ router.post(
     res.json(results);
   },
 );
+
+/**
+ * Bulk state-targeted ingestion endpoint.
+ *
+ * POST /signals/ingest/bulk
+ * Body: { states: string[], limitPerSource?: number, recomputeScores?: boolean }
+ *
+ * Runs every facility-looping ingestor filtered to the requested states,
+ * then optionally recomputes signal scores.  All ingestors run in parallel
+ * batches to avoid rate-limiting; the endpoint returns a per-source summary.
+ *
+ * Auth: platform admin Clerk session OR X-Internal-Admin-Key header.
+ */
+router.post("/signals/ingest/bulk", async (req, res, next) => {
+  const internalKey = process.env.INTERNAL_ADMIN_KEY;
+  const providedKey = req.headers["x-internal-admin-key"];
+  const isInternalCaller = internalKey && providedKey === internalKey;
+
+  if (!isInternalCaller) {
+    if (!req.currentUser) { res.status(401).json({ error: "unauthenticated" }); return; }
+    if (!req.isPlatformAdmin) { res.status(403).json({ error: "forbidden" }); return; }
+  }
+
+  const body = req.body as Record<string, unknown>;
+  const rawStates = Array.isArray(body.states) ? (body.states as string[]) : [];
+  const states = rawStates.map((s) => String(s).trim().toUpperCase()).filter(Boolean);
+  if (states.length === 0) {
+    res.status(400).json({ error: "states_required", message: "Provide at least one state code in body.states, e.g. [\"IL\",\"TX\"]" });
+    return;
+  }
+
+  const perSource = Math.max(1, Math.min(Number(body.limitPerSource) || 500, 2000));
+  const doScores = body.recomputeScores !== false;
+
+  type SourceResult = { status: "ok" | "error"; signalsInserted: number; errors: number; durationMs: number; errorMsg?: string };
+
+  async function runSource(fn: () => Promise<{ signalsInserted: number; errors: number }>): Promise<SourceResult> {
+    const t0 = Date.now();
+    try {
+      const r = await fn();
+      return { status: r.errors > 0 ? "error" : "ok", signalsInserted: r.signalsInserted, errors: r.errors, durationMs: Date.now() - t0 };
+    } catch (err) {
+      return { status: "error", signalsInserted: 0, errors: 1, errorMsg: String(err).slice(0, 200), durationMs: Date.now() - t0 };
+    }
+  }
+
+  try {
+    const results: Record<string, SourceResult> = {};
+
+    // Batch A: fast, no per-facility HTTP calls (FDA classification, NPPES)
+    const batchA: Array<[string, () => Promise<{ signalsInserted: number; errors: number }>]> = [
+      ["fda_class",      () => ingestFdaClassification({ limit: perSource, states })],
+      ["nppes",          () => ingestNppes({ limit: perSource, states })],
+    ];
+    const batchAResults = await Promise.all(batchA.map(([, fn]) => runSource(fn)));
+    batchA.forEach(([name], i) => { results[name] = batchAResults[i]; });
+
+    // Batch B: moderate-rate sources (CMS Data, USA Spending, Clinical Trials, SEC EDGAR)
+    const batchB: Array<[string, () => Promise<{ signalsInserted: number; errors: number }>]> = [
+      ["cms_data",       () => ingestCmsData({ limit: perSource, states })],
+      ["usa_spending",   () => ingestUsaSpending({ limit: perSource, states })],
+      ["clinical_trials", () => ingestClinicalTrials({ limit: perSource, states })],
+      ["sec_edgar",      () => ingestSecEdgar({ limit: perSource, states })],
+    ];
+    const batchBResults = await Promise.all(batchB.map(([, fn]) => runSource(fn)));
+    batchB.forEach(([name], i) => { results[name] = batchBResults[i]; });
+
+    // Batch C: slow/rate-sensitive (ProPublica 990, HRSA, USDA) — sequential
+    const batchC: Array<[string, () => Promise<{ signalsInserted: number; errors: number }>]> = [
+      ["propublica_990", () => ingestPropublica990({ limit: perSource, states })],
+      ["hrsa",           () => ingestHrsa({ limit: perSource, states })],
+      ["usda",           () => ingestUsda({ limit: perSource, states })],
+    ];
+    for (const [name, fn] of batchC) {
+      results[name] = await runSource(fn);
+    }
+
+    // Score recompute
+    if (doScores) {
+      const t0 = Date.now();
+      try {
+        await recomputeAllScores();
+        results["score_recompute"] = { status: "ok", signalsInserted: 0, errors: 0, durationMs: Date.now() - t0 };
+      } catch (err) {
+        results["score_recompute"] = { status: "error", signalsInserted: 0, errors: 1, errorMsg: String(err).slice(0, 200), durationMs: Date.now() - t0 };
+      }
+    }
+
+    const totalSignals = Object.values(results).reduce((s, r) => s + (r.signalsInserted ?? 0), 0);
+    const totalErrors  = Object.values(results).reduce((s, r) => s + (r.errors ?? 0), 0);
+
+    res.json({ states, limitPerSource: perSource, totalSignals, totalErrors, sources: results });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /**
  * Orchestration endpoint: trigger every live ingestor in parallel and return

@@ -9,7 +9,7 @@
  *
  * Docs: https://open.fda.gov/apis/device/classification/
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   db,
   facilities,
@@ -52,9 +52,10 @@ function facilityUsesImaging(facilityType: string): boolean {
 }
 
 export async function ingestFdaClassification(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; states?: string[] } = {},
 ): Promise<IngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const stateFilter = opts.states?.length ? inArray(facilities.state, opts.states) : undefined;
   const result: IngestResult = {
     facilitiesScanned: 0,
     signalsInserted: 0,
@@ -90,6 +91,7 @@ export async function ingestFdaClassification(
   const targets = await db
     .select()
     .from(facilities)
+    .where(stateFilter)
     .orderBy(sql`${facilities.lastScrapedAt} NULLS FIRST`)
     .limit(limit);
 

@@ -14,7 +14,7 @@
  *
  * Docs: https://projects.propublica.org/nonprofits/api/v2
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, facilities, purchaseSignals, facilityContacts } from "@workspace/db";
 import { logger } from "../lib/logger";
 
@@ -141,9 +141,12 @@ export interface IngestResult {
 }
 
 export async function ingestPropublica990(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; states?: string[] } = {},
 ): Promise<IngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 40, 500));
+  const stateFilter = opts.states?.length
+    ? inArray(facilities.state, opts.states)
+    : sql`${facilities.state} IS NOT NULL`;
   const result: IngestResult = {
     facilitiesScanned: 0,
     signalsInserted: 0,
@@ -154,7 +157,7 @@ export async function ingestPropublica990(
   const targets = await db
     .select()
     .from(facilities)
-    .where(sql`${facilities.state} IS NOT NULL`)
+    .where(stateFilter)
     .orderBy(sql`${facilities.lastScrapedAt} NULLS FIRST`)
     .limit(limit);
 

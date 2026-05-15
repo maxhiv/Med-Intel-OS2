@@ -8,7 +8,7 @@
  *
  * Docs: https://api.usaspending.gov
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, facilities, purchaseSignals } from "@workspace/db";
 import { logger } from "../lib/logger";
 
@@ -46,9 +46,10 @@ export interface IngestResult {
 }
 
 export async function ingestUsaSpending(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; states?: string[] } = {},
 ): Promise<IngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 40, 500));
+  const stateFilter = opts.states?.length ? inArray(facilities.state, opts.states) : undefined;
   const result: IngestResult = {
     facilitiesScanned: 0,
     signalsInserted: 0,
@@ -58,6 +59,7 @@ export async function ingestUsaSpending(
   const targets = await db
     .select()
     .from(facilities)
+    .where(stateFilter)
     .orderBy(sql`${facilities.lastScrapedAt} NULLS FIRST`)
     .limit(limit);
 

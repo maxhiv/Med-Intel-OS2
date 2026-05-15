@@ -12,7 +12,7 @@
  * permanently retired (HTTP 410) in 2024. This ingestor uses the replacement
  * CMS Provider Data Catalog API which is free and requires no API key.
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, facilities, purchaseSignals } from "@workspace/db";
 import { logger } from "../lib/logger";
 
@@ -41,9 +41,12 @@ export interface IngestResult {
 }
 
 export async function ingestCmsData(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; states?: string[] } = {},
 ): Promise<IngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const stateFilter = opts.states?.length
+    ? inArray(facilities.state, opts.states)
+    : sql`${facilities.state} IS NOT NULL`;
   const result: IngestResult = {
     facilitiesScanned: 0,
     signalsInserted: 0,
@@ -55,7 +58,7 @@ export async function ingestCmsData(
   const targets = await db
     .select()
     .from(facilities)
-    .where(sql`${facilities.state} IS NOT NULL`)
+    .where(stateFilter)
     .orderBy(sql`${facilities.lastScrapedAt} NULLS FIRST`)
     .limit(limit);
 

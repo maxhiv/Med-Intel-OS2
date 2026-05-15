@@ -124,10 +124,12 @@ async function matchOrCreateFacility(award: SpendingAward): Promise<string | nul
 }
 
 export async function ingestHrsa(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; states?: string[] } = {},
 ): Promise<HrsaIngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
   const result: HrsaIngestResult = { signalsInserted: 0, errors: 0 };
+
+  const stateCodes = opts.states?.length ? opts.states : Array.from(TARGET_STATES);
 
   const requestBody = {
     filters: {
@@ -146,7 +148,7 @@ export async function ingestHrsa(
         "new access point",
         "health center program",
       ],
-      recipient_location_state_codes: Array.from(TARGET_STATES),
+      recipient_location_state_codes: stateCodes,
       time_period: [
         {
           start_date: cutoffDate(),

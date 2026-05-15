@@ -8,7 +8,7 @@
  *
  * Docs: https://clinicaltrials.gov/data-api/api
  */
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   db,
   facilities,
@@ -97,14 +97,17 @@ export interface IngestResult {
 
 export async function ingestClinicalTrials(opts: {
   limit?: number;
+  states?: string[];
 } = {}): Promise<IngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const stateFilter = opts.states?.length ? inArray(facilities.state, opts.states) : undefined;
 
   // Prioritise facilities we haven't scraped recently. Order by oldest
   // last_scraped_at first so each tick walks the back of the queue.
   const targets = await db
     .select()
     .from(facilities)
+    .where(stateFilter)
     .orderBy(sql`${facilities.lastScrapedAt} NULLS FIRST`)
     .limit(limit);
 

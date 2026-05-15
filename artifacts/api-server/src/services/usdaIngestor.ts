@@ -65,10 +65,14 @@ async function matchFacility(recipientName: string | undefined): Promise<string 
 }
 
 export async function ingestUsda(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; states?: string[] } = {},
 ): Promise<UsdaIngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
   const result: UsdaIngestResult = { signalsInserted: 0, errors: 0 };
+
+  const stateFilter = opts.states?.length
+    ? { recipient_location_state_codes: opts.states }
+    : {};
 
   const body = {
     filters: {
@@ -83,6 +87,7 @@ export async function ingestUsda(
       keywords: ["community facility", "health", "hospital", "rural health", "clinic"],
       time_period: [{ start_date: cutoffDate(), end_date: new Date().toISOString().slice(0, 10) }],
       award_amounts: [{ lower_bound: MIN_AWARD_AMOUNT }],
+      ...stateFilter,
     },
     fields: ["Award ID", "Recipient Name", "Award Amount", "Start Date", "Description"],
     page: 1,

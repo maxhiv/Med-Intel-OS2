@@ -8,7 +8,7 @@
  *
  * Docs: https://npiregistry.cms.hhs.gov/api-page
  */
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import {
   db,
   facilities,
@@ -97,13 +97,15 @@ export interface IngestResult {
 
 export async function ingestNppes(opts: {
   limit?: number;
+  states?: string[];
 } = {}): Promise<IngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
+  const stateFilter = opts.states?.length ? inArray(facilities.state, opts.states) : undefined;
 
   const targets = await db
     .select()
     .from(facilities)
-    .where(isNotNull(facilities.npi))
+    .where(and(isNotNull(facilities.npi), stateFilter))
     .orderBy(sql`${facilities.lastScrapedAt} NULLS FIRST`)
     .limit(limit);
 
