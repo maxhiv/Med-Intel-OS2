@@ -27,6 +27,8 @@ import { propagateSystemSignals } from "../services/systemSignalPropagator";
 import { requirePlatformAdmin } from "../middlewares/auth";
 import { listAllSources } from "../services/enrichment";
 import { backfillConFilingFacilities } from "../services/conFacilityMatcher";
+import { buildEinCrosswalk } from "../services/einCrosswalkBuilder";
+import { ingestIrsEoi } from "../services/irsEoiIngestor";
 import {
   blobNeedsRotation,
   currentKeyId,
@@ -1264,6 +1266,38 @@ router.post(
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "propagation_failed", detail: String(err) });
+    }
+  },
+);
+
+// ─── EIN crosswalk builder ────────────────────────────────────────────────────
+
+router.post(
+  "/admin/ingest/ein-crosswalk",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const { states } = req.body ?? {};
+    try {
+      const result = await buildEinCrosswalk({ states });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  },
+);
+
+// ─── IRS 990 EOI bulk ingestor ────────────────────────────────────────────────
+
+router.post(
+  "/admin/ingest/irs-eoi",
+  requirePlatformAdmin,
+  async (req, res) => {
+    const { limit, states, taxPeriod } = req.body ?? {};
+    try {
+      const result = await ingestIrsEoi({ limit, states, taxPeriod });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
     }
   },
 );

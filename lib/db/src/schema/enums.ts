@@ -43,6 +43,8 @@ export const signalTypeEnum = pgEnum("signal_type", [
   "clinical_trial",
   "fiscal_year_end",
   "system_signal_propagated",
+  "equipment_aging",
+  "it_investment",
 ]);
 
 export const contactStatusEnum = pgEnum("contact_status", [

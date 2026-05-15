@@ -66,11 +66,14 @@ export const facilities = pgTable(
     lastScrapedAt: timestamp("last_scraped_at", { withTimezone: true }),
     lastEnrichedAt: timestamp("last_enriched_at", { withTimezone: true }),
     scrapeErrors: integer("scrape_errors").default(0),
+    ein: varchar("ein", { length: 9 }),
+    einSource: text("ein_source"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [
     index("idx_facilities_state").on(t.state),
+    index("idx_facilities_ein").on(t.ein),
     index("idx_facilities_type").on(t.facilityType),
     index("idx_facilities_signal_score").on(t.signalScore),
     // Trigram GIN indexes power the CON ingestor's candidate-pool ILIKE
@@ -185,6 +188,8 @@ export const purchaseSignals = pgTable(
     detectedAt: timestamp("detected_at", { withTimezone: true }).defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     isActive: boolean("is_active").default(true),
+    sourceUrl: text("source_url"),
+    metadata: jsonb("metadata"),
   },
   (t) => [
     index("idx_signals_facility").on(t.facilityId, t.isActive),
@@ -485,6 +490,28 @@ export const contactValidationLog = pgTable(
   },
   (t) => [index("idx_val_log_contact").on(t.contactId, t.checkedAt)],
 );
+
+export const einCrosswalk = pgTable(
+  "ein_crosswalk",
+  {
+    id: uuid("id").primaryKey().default(sql`uuid_generate_v4()`),
+    ein: varchar("ein", { length: 9 }).notNull(),
+    facilityId: uuid("facility_id").references(() => facilities.id, { onDelete: "cascade" }),
+    entityName: text("entity_name").notNull(),
+    entityCity: text("entity_city"),
+    entityState: char("entity_state", { length: 2 }),
+    nteeCode: varchar("ntee_code", { length: 10 }),
+    matchType: text("match_type").notNull(), // "ein_exact", "system_name", "facility_name", "bmf_trgm"
+    matchScore: numeric("match_score", { precision: 4, scale: 3 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("uniq_ein_crosswalk").on(t.ein, t.facilityId),
+    index("idx_ein_crosswalk_ein").on(t.ein),
+    index("idx_ein_crosswalk_facility").on(t.facilityId),
+  ],
+);
+export type EinCrosswalk = typeof einCrosswalk.$inferSelect;
 
 export const contactEnrichmentQueue = pgTable(
   "contact_enrichment_queue",

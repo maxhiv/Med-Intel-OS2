@@ -184,6 +184,12 @@ export async function ingestPropublica990(
       ein = orgs[0].ein;
       if (!ein) continue;
 
+      // Persist EIN to facility for future exact-match lookups
+      await db
+        .update(facilities)
+        .set({ ein: String(ein), einSource: "propublica", updatedAt: new Date() })
+        .where(and(eq(facilities.id, f.id), sql`${facilities.ein} IS NULL`));
+
       await sleep(150);
 
       const orgRes = await fetch(`${PP_ORG}/${ein}.json`, {
