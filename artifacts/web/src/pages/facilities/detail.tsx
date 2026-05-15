@@ -1,4 +1,4 @@
-import { useParams } from "wouter";
+import { useParams, Link } from "wouter";
 import { useState } from "react";
 import {
   useGetFacility,
@@ -7,6 +7,7 @@ import {
   customFetch,
 } from "@workspace/api-client-react";
 import { useMutation } from "@tanstack/react-query";
+import { ExternalLink, ArrowLeft } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import {
   Building2, Activity, Users, AlertTriangle, Plus, Phone, Mail, MapPin,
   TrendingUp, FileSearch, Stethoscope, RefreshCw, DollarSign, Microscope,
-  Zap, Award, BookOpen, CheckCircle2,
+  Zap, Award, BookOpen, CheckCircle2, Globe, Calendar, BedDouble, GraduationCap,
+  ShieldCheck, Heart, Hash,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -122,6 +124,30 @@ function deriveRecommendedAction(
   return null;
 }
 
+function deriveSourceUrl(source: string, signalValue: string): string | null {
+  const src = source.toLowerCase();
+  const val = signalValue ?? "";
+  if (src === "sec_edgar") {
+    const accession = val.replace(/[^0-9-]/g, "");
+    if (accession) return `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=424B&dateb=&owner=include&count=10&search_text=&accession=${accession}`;
+  }
+  if (src === "usda" || src === "hrsa") {
+    const parts = val.split(":");
+    const awardId = parts[1] ?? parts[0];
+    if (awardId && awardId !== "undefined") return `https://www.usaspending.gov/award/${awardId}/`;
+  }
+  if (src === "propublica_990" || src === "irs_990") {
+    const einMatch = val.match(/:(\d{5,9}):/);
+    if (einMatch) return `https://projects.propublica.org/nonprofits/organizations/${einMatch[1]}`;
+  }
+  if (src === "cms_provider_data") {
+    const provMatch = val.match(/cms:([^:]+):/);
+    if (provMatch) return `https://www.medicare.gov/care-compare/?providerType=Hospital&providerId=${provMatch[1]}`;
+  }
+  if (src === "con_filing") return null;
+  return null;
+}
+
 const PRIORITY_CARD: Record<ActionPriority, string> = {
   high:   "border-red-200 bg-red-50",
   medium: "border-yellow-200 bg-yellow-50",
@@ -150,7 +176,9 @@ export default function FacilityDetailPage() {
   const [acEmail, setAcEmail] = useState("");
   const [acPhone, setAcPhone] = useState("");
 
-  const { data: facility, isLoading, refetch } = useGetFacility(id);
+  const { data: facility, isLoading, isError, refetch } = useGetFacility(id, {
+    query: { enabled: !!id, retry: 1 },
+  });
   const syncFacility = useSyncFacilityFromNpi();
   const updateFacility = useUpdateFacility();
 
@@ -217,12 +245,19 @@ export default function FacilityDetailPage() {
     );
   }
 
-  if (!facility) {
+  if (isError || !facility) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 text-center">
-        <Building2 className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />
-        <h2 className="text-2xl font-bold">Facility Not Found</h2>
-        <p className="text-muted-foreground">The requested facility could not be found.</p>
+      <div className="flex flex-col items-center justify-center py-24 text-center gap-4">
+        <Building2 className="h-12 w-12 text-muted-foreground opacity-20" />
+        <h2 className="text-2xl font-bold">{isError ? "Could Not Load Facility" : "Facility Not Found"}</h2>
+        <p className="text-muted-foreground">
+          {isError
+            ? "There was a problem fetching this facility. It may not be linked to your account."
+            : "The requested facility could not be found."}
+        </p>
+        <Link href="/facilities" className="text-primary hover:underline text-sm flex items-center gap-1">
+          <ArrowLeft className="h-4 w-4" /> Back to Facilities
+        </Link>
       </div>
     );
   }
@@ -309,19 +344,40 @@ export default function FacilityDetailPage() {
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Organization Details</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div>
-                <div className="text-muted-foreground text-xs mb-0.5">Ownership</div>
-                <div className="font-medium">{facility.ownership || "Unknown"}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground text-xs mb-0.5">System Affiliation</div>
-                <div className="font-medium">{facility.systemName || "Independent"}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground text-xs mb-0.5">Teaching Hospital</div>
-                <div className="font-medium">{facility.teachingHospital ? "Yes" : "No"}</div>
-              </div>
+            <CardContent className="space-y-2.5 text-sm">
+              {[
+                { icon: Building2,     label: "Ownership",        value: facility.ownership || "Unknown" },
+                { icon: Hash,          label: "NPI",              value: facility.npi },
+                { icon: BedDouble,     label: "Licensed Beds",    value: facility.beds ? String(facility.beds) : null },
+                { icon: MapPin,        label: "Address",          value: [facility.address1, facility.city, facility.state, facility.zip].filter(Boolean).join(", ") || null },
+                { icon: MapPin,        label: "County",           value: facility.county || null },
+                { icon: TrendingUp,    label: "System",           value: facility.systemName || "Independent" },
+                { icon: GraduationCap, label: "Teaching Hospital",value: facility.teachingHospital ? "Yes" : "No" },
+                { icon: ShieldCheck,   label: "Critical Access",  value: facility.cahDesignation ? "Yes" : null },
+                { icon: Heart,         label: "FQHC",             value: facility.fqhcDesignation ? "Yes" : null },
+                { icon: Calendar,      label: "Fiscal Year End",  value: facility.fiscalYearEndMonth ? `Month ${facility.fiscalYearEndMonth}` : null },
+                { icon: DollarSign,    label: "DSH %",            value: facility.dshPct ? `${facility.dshPct}%` : null },
+                { icon: Calendar,      label: "Last Enriched",    value: facility.lastEnrichedAt ? new Date(facility.lastEnrichedAt).toLocaleDateString() : null },
+              ].filter(r => r.value).map(({ icon: Icon, label, value }) => (
+                <div key={label} className="flex items-start gap-2">
+                  <Icon className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-muted-foreground text-xs leading-none mb-0.5">{label}</div>
+                    <div className="font-medium text-xs leading-snug break-words">{value}</div>
+                  </div>
+                </div>
+              ))}
+              {facility.website && (
+                <a
+                  href={facility.website.startsWith("http") ? facility.website : `https://${facility.website}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-primary hover:underline text-xs"
+                >
+                  <Globe className="h-3.5 w-3.5" />
+                  {facility.website}
+                </a>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -329,15 +385,26 @@ export default function FacilityDetailPage() {
         {/* Main tabs */}
         <div className="md:col-span-3">
           <Tabs defaultValue="signals" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="signals">
                 Signals
                 {signals.length > 0 && (
                   <Badge variant="secondary" className="ml-1.5 text-xs h-4 px-1">{signals.length}</Badge>
                 )}
               </TabsTrigger>
-              <TabsTrigger value="contacts">Contacts</TabsTrigger>
-              <TabsTrigger value="equipment">Equipment</TabsTrigger>
+              <TabsTrigger value="contacts">
+                Contacts
+                {(facility.contacts?.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1.5 text-xs h-4 px-1">{facility.contacts!.length}</Badge>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="equipment">
+                Equipment
+                {(facility.equipment?.length ?? 0) > 0 && (
+                  <Badge variant="secondary" className="ml-1.5 text-xs h-4 px-1">{facility.equipment!.length}</Badge>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="financials">Financials</TabsTrigger>
             </TabsList>
 
             {/* Signals tab */}
@@ -401,10 +468,20 @@ export default function FacilityDetailPage() {
                                     </span>
                                   </div>
                                 </div>
-                                <div className="text-xs text-muted-foreground mt-0.5">
-                                  Source: <span className="font-mono">{signal.source}</span>
+                                <div className="text-xs text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                  <span>Source: <span className="font-mono">{signal.source}</span></span>
                                   {signal.signalValue && (
-                                    <span className="ml-2 text-foreground/70">— {signal.signalValue}</span>
+                                    <span className="text-foreground/70 truncate max-w-[200px]">— {signal.signalValue}</span>
+                                  )}
+                                  {deriveSourceUrl(signal.source, signal.signalValue ?? "") && (
+                                    <a
+                                      href={deriveSourceUrl(signal.source, signal.signalValue ?? "")!}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-0.5 text-primary hover:underline shrink-0"
+                                    >
+                                      <ExternalLink className="h-3 w-3" /> View Source
+                                    </a>
                                   )}
                                 </div>
                                 {signal.isActive === false && (
@@ -518,6 +595,86 @@ export default function FacilityDetailPage() {
                 </CardContent>
               </Card>
             </TabsContent>
+            {/* Financials tab */}
+            <TabsContent value="financials" className="mt-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Financial Intelligence</CardTitle>
+                  <CardDescription>990 data, HCRIS reports, and bond filings</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {(facility as any).financialDocs && (facility as any).financialDocs.length > 0 ? (
+                    <div className="space-y-4">
+                      {(facility as any).financialDocs.map((doc: any) => (
+                        <div key={doc.id} className="p-4 border rounded-md space-y-2">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="font-medium text-sm">{doc.docType} — FY {doc.fiscalYear}</div>
+                              {doc.totalRevenue && (
+                                <div className="text-xs text-muted-foreground">
+                                  Revenue: ${Number(doc.totalRevenue).toLocaleString()}
+                                </div>
+                              )}
+                            </div>
+                            {doc.sourceUrl && (
+                              <a
+                                href={doc.sourceUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-primary hover:underline text-xs"
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" /> Source
+                              </a>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+                            {doc.operatingIncome != null && (
+                              <div>
+                                <span className="text-muted-foreground">Op. Income: </span>
+                                <span className={Number(doc.operatingIncome) >= 0 ? "text-green-700" : "text-red-600"}>
+                                  ${Number(doc.operatingIncome).toLocaleString()}
+                                </span>
+                              </div>
+                            )}
+                            {doc.capitalExpenditures != null && (
+                              <div>
+                                <span className="text-muted-foreground">CapEx: </span>
+                                ${Number(doc.capitalExpenditures).toLocaleString()}
+                              </div>
+                            )}
+                            {doc.longTermDebt != null && (
+                              <div>
+                                <span className="text-muted-foreground">LT Debt: </span>
+                                ${Number(doc.longTermDebt).toLocaleString()}
+                              </div>
+                            )}
+                            {doc.daysCashOnHand != null && (
+                              <div>
+                                <span className="text-muted-foreground">Days Cash: </span>
+                                {Number(doc.daysCashOnHand).toFixed(0)}
+                              </div>
+                            )}
+                          </div>
+                          {doc.rawText && (
+                            <details className="text-xs text-muted-foreground">
+                              <summary className="cursor-pointer hover:text-foreground">View extracted text</summary>
+                              <pre className="mt-2 whitespace-pre-wrap text-xs bg-muted/30 p-2 rounded max-h-40 overflow-y-auto">{doc.rawText}</pre>
+                            </details>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-8 text-center text-muted-foreground">
+                      <DollarSign className="h-10 w-10 mx-auto mb-3 opacity-20" />
+                      <p className="text-sm">No financial documents on file yet.</p>
+                      <p className="text-xs mt-1">Documents are populated by the IRS 990 and HCRIS ingestors.</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
           </Tabs>
         </div>
       </div>

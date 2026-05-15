@@ -20,6 +20,7 @@ import {
   equipmentRecords,
   accountFacilities,
   contactValidationLog,
+  financialDocuments,
 } from "@workspace/db";
 import { requireAccount } from "../middlewares/auth";
 import { validateBody } from "../middlewares/validate";
@@ -227,7 +228,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [signals, contacts, equipment, signalBreakdown] = await Promise.all([
+  const [signals, contacts, equipment, financialDocs, signalBreakdown] = await Promise.all([
     db
       .select()
       .from(purchaseSignals)
@@ -248,6 +249,12 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
       .from(equipmentRecords)
       .where(eq(equipmentRecords.facilityId, id))
       .limit(200),
+    db
+      .select()
+      .from(financialDocuments)
+      .where(eq(financialDocuments.facilityId, id))
+      .orderBy(desc(financialDocuments.fiscalYear))
+      .limit(20),
     computeSignalBreakdown(id),
   ]);
 
@@ -256,6 +263,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
     signals,
     contacts,
     equipment,
+    financialDocs,
     signalBreakdown,
     activeSignalCount: signals.length,
     contactCount: contacts.length,
