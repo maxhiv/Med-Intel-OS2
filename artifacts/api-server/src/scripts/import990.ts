@@ -37,7 +37,7 @@ import { execSync } from "node:child_process";
 import { parse } from "csv-parse";
 import { getTableColumns, sql } from "drizzle-orm";
 import { db, irs990Raw } from "@workspace/db";
-import { recomputeOne } from "../services/signalScorer";
+import { recomputeAllScores } from "../services/signalScorer";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -503,25 +503,75 @@ async function directEinMatch(): Promise<number> {
 
 // ─── Phase 3: pg_trgm name match ─────────────────────────────────────────────
 
+/**
+ * Phase 3 — pg_trgm name similarity match.
+ *
+ * Matches unmatched irs_990_raw rows to facilities using organization name
+ * similarity. The `org_name` column on irs_990_raw is populated by the
+ * Task #104 IRS EO BMF import; it is NULL for all rows imported from the
+ * 990 extract (which contains only EINs and financial data, no org names).
+ *
+ * When org_name is populated, this pass applies two thresholds:
+ *   - General orgs   : similarity >= 0.45 (TRGM_THRESHOLD_GENERAL)
+ *   - Hospital rows  : similarity >= 0.35 (TRGM_THRESHOLD_HOSPITAL)
+ *
+ * The query actually runs each time; it returns 0 matches until Task #104
+ * populates org_name via the BMF bulk import.
+ */
 async function trgmMatch(): Promise<number> {
-  // The IRS 990 extract CSV contains only financial data keyed by EIN —
-  // it has NO organization name column. pg_trgm name-based matching requires
-  // the IRS EO Business Master File (BMF), handled separately in Task #104.
-  //
-  // This pass is implemented as a structural placeholder that respects the
-  // thresholds from the task spec (0.45 general, 0.35 hospital). It returns 0
-  // because name data is not available in this extract.
-  //
-  // Threshold constants are preserved here for Task #104 to wire in:
-  void TRGM_THRESHOLD_GENERAL;
-  void TRGM_THRESHOLD_HOSPITAL;
-
-  const [unmatched] = (await db.execute<{ cnt: string }>(sql.raw(`
+  const [unmatchedRow] = (await db.execute<{ cnt: string }>(sql.raw(`
     SELECT COUNT(*)::text AS cnt FROM irs_990_raw WHERE facility_id IS NULL
   `))).rows;
-  console.log(`    ${fmt(Number(unmatched.cnt))} rows still unmatched after EIN join.`);
-  console.log(`    trgm pass: skipped (no name column in IRS 990 extract — see Task #104).`);
-  return 0;
+  const unmatchedTotal = Number(unmatchedRow.cnt);
+  console.log(`    ${fmt(unmatchedTotal)} rows still unmatched after EIN join.`);
+
+  // General pass (threshold 0.45) — requires org_name populated by Task #104 BMF
+  await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = ${TRGM_THRESHOLD_GENERAL}`));
+  const generalRes = await db.execute<{ cnt: string }>(sql.raw(`
+    WITH updated AS (
+      UPDATE irs_990_raw r
+      SET facility_id = f.id,
+          match_score = similarity(r.org_name, f.name),
+          matched_at  = now()
+      FROM facilities f
+      WHERE r.facility_id IS NULL
+        AND r.org_name IS NOT NULL
+        AND r.org_name % f.name
+      RETURNING r.ein
+    )
+    SELECT COUNT(*)::text AS cnt FROM updated
+  `));
+  const generalMatched = Number(generalRes.rows[0]?.cnt ?? 0);
+
+  // Hospital-row pass (lower threshold 0.35 per spec)
+  await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = ${TRGM_THRESHOLD_HOSPITAL}`));
+  const hospRes = await db.execute<{ cnt: string }>(sql.raw(`
+    WITH updated AS (
+      UPDATE irs_990_raw r
+      SET facility_id = f.id,
+          match_score = similarity(r.org_name, f.name),
+          matched_at  = now()
+      FROM facilities f
+      WHERE r.facility_id IS NULL
+        AND r.org_name IS NOT NULL
+        AND r.operatehosptlcd = 'Y'
+        AND r.org_name % f.name
+      RETURNING r.ein
+    )
+    SELECT COUNT(*)::text AS cnt FROM updated
+  `));
+  const hospMatched = Number(hospRes.rows[0]?.cnt ?? 0);
+
+  // Restore default threshold
+  await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = 0.3`));
+
+  const total = generalMatched + hospMatched;
+  if (total === 0) {
+    console.log(`    trgm matched: 0 (org_name column is NULL — populated by Task #104 BMF import)`);
+  } else {
+    console.log(`    trgm matched: ${fmt(generalMatched)} general + ${fmt(hospMatched)} hospital rows`);
+  }
+  return total;
 }
 
 // ─── Phase 4: Upsert financial_documents ──────────────────────────────────────
@@ -599,6 +649,16 @@ function revenueDecileConf(revenue: number): number {
 
 async function emitSignals(): Promise<{ total: number; byType: Record<string, number> }> {
   const counts: Record<string, number> = {};
+
+  // Idempotent: remove any prior irs_990 signals for matched facilities before
+  // re-inserting, so re-runs don't accumulate duplicates.
+  await db.execute(sql.raw(`
+    DELETE FROM purchase_signals
+    WHERE source = 'irs_990'
+      AND facility_id IN (
+        SELECT DISTINCT facility_id FROM irs_990_raw WHERE facility_id IS NOT NULL
+      )
+  `));
 
   // hospital_operator — confidence 90
   const hospRes = await db.execute<{ id: string }>(sql.raw(`
@@ -780,16 +840,26 @@ console.log("\n  [6/6] Emitting purchase signals...");
 const { total: signalTotal } = await emitSignals();
 console.log(`\n  Total signals emitted: ${fmt(signalTotal)}`);
 
-// Score recomputation — only for facilities matched to 990 data
-console.log("\n  Recomputing scores for matched facilities...");
-const matchedIds = (await db.execute<{ facility_id: string }>(sql.raw(`
-  SELECT DISTINCT facility_id FROM irs_990_raw WHERE facility_id IS NOT NULL
-`))).rows;
-let updated = 0;
-for (const row of matchedIds) {
-  await recomputeOne(row.facility_id);
-  updated++;
-}
+// Persist hospital operator flag on facility records
+console.log("\n  Persisting hospital flag on matched facilities...");
+const hospFlagRes = await db.execute<{ cnt: string }>(sql.raw(`
+  WITH updated AS (
+    UPDATE facilities f
+    SET operates_hospital = true,
+        updated_at        = now()
+    FROM irs_990_raw r
+    WHERE r.facility_id = f.id
+      AND r.operatehosptlcd = 'Y'
+      AND f.operates_hospital = false
+    RETURNING f.id
+  )
+  SELECT COUNT(*)::text AS cnt FROM updated
+`));
+console.log(`  operates_hospital set on ${fmt(Number(hospFlagRes.rows[0]?.cnt ?? 0))} facilities.`);
+
+// Score recomputation — all facilities per task spec
+console.log("\n  Recomputing scores for all facilities (this may take several minutes)...");
+const { updated } = await recomputeAllScores();
 console.log(`  Scores updated for ${fmt(updated)} facilities.`);
 
 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);

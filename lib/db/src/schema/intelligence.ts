@@ -61,6 +61,7 @@ export const facilities = pgTable(
       { onDelete: "set null" },
     ),
     ein: varchar("ein", { length: 9 }),
+    operatesHospital: boolean("operates_hospital").default(false),
     fiscalYearEndMonth: integer("fiscal_year_end_month"),
     fiscalYearEndSource: text("fiscal_year_end_source"),
     signalScore: smallint("signal_score").default(0),
@@ -760,6 +761,8 @@ export const irs990Raw = pgTable(
     facilityId: uuid("facility_id").references(() => facilities.id, { onDelete: "set null" }),
     matchScore: numeric("match_score", { precision: 4, scale: 3 }),
     matchedAt: timestamp("matched_at", { withTimezone: true }),
+    // Org name from IRS EO BMF — populated by Task #104 import, NULL in 990 extract
+    orgName: text("org_name"),
 
     // ── Audit ─────────────────────────────────────────────────────────────
     ingestedAt: timestamp("ingested_at", { withTimezone: true }).defaultNow(),

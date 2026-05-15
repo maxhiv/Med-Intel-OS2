@@ -444,18 +444,83 @@ async function recomputeAccountContactsForFacility(
   }
 }
 
+/**
+ * Recompute signal_score for every facility in one bulk SQL UPDATE,
+ * then recompute engagement for each account-facility pair.
+ *
+ * Uses a single UPDATE … FROM subquery to avoid N+1 queries across
+ * all 183k+ facilities. Cross-source bonuses and equipment urgency are
+ * evaluated in SQL alongside signal weights.
+ */
 export async function recomputeAllScores(): Promise<{ updated: number }> {
-  const all = await db.select({ id: facilities.id }).from(facilities);
-  let updated = 0;
-  for (const f of all) {
-    const newScore = await computeFacilityScore(f.id);
-    await db
-      .update(facilities)
-      .set({ signalScore: newScore, updatedAt: new Date() })
-      .where(eq(facilities.id, f.id));
-    updated += 1;
-  }
+  // Build the CASE … END expression for per-signal weights inline
+  const weightCases = Object.entries(WEIGHTS)
+    .map(([type, w]) => `WHEN ps.signal_type::text = '${type}' THEN ${w}`)
+    .join("\n          ");
 
+  // Single bulk UPDATE: score = clamp(0, 100, ROUND(SUM(weight * conf/100)))
+  // Also adds +5 for verified contacts, equipment urgency, and FYE bonus.
+  const result = await db.execute<{ cnt: string }>(sql.raw(`
+    WITH signal_scores AS (
+      SELECT
+        f.id AS facility_id,
+        COALESCE(SUM(
+          CASE ${weightCases}
+               ELSE 5
+          END * COALESCE(ps.confidence, 50) / 100.0
+        ), 0) AS sig_pts,
+        COALESCE(SUM(
+          CASE er.urgency_tier
+            WHEN 'critical' THEN 15
+            WHEN 'high'     THEN 8
+            WHEN 'medium'   THEN 3
+            ELSE 0
+          END
+        ), 0) AS equip_pts,
+        CASE WHEN COUNT(fc.id) FILTER (WHERE fc.human_verified) > 0 THEN 5 ELSE 0 END AS contact_pts,
+        -- FYE timing bonus (≤30d→20, ≤60d→15, ≤90d→10, ≤180d→5)
+        CASE
+          WHEN f.fiscal_year_end_month IS NULL THEN 0
+          WHEN (
+            DATE_TRUNC('month', NOW() + INTERVAL '1 month' *
+              MOD(f.fiscal_year_end_month - EXTRACT(MONTH FROM NOW())::int + 12, 12)
+            )
+          ) - NOW() <= INTERVAL '30 days'  THEN 20
+          WHEN (
+            DATE_TRUNC('month', NOW() + INTERVAL '1 month' *
+              MOD(f.fiscal_year_end_month - EXTRACT(MONTH FROM NOW())::int + 12, 12)
+            )
+          ) - NOW() <= INTERVAL '60 days'  THEN 15
+          WHEN (
+            DATE_TRUNC('month', NOW() + INTERVAL '1 month' *
+              MOD(f.fiscal_year_end_month - EXTRACT(MONTH FROM NOW())::int + 12, 12)
+            )
+          ) - NOW() <= INTERVAL '90 days'  THEN 10
+          WHEN (
+            DATE_TRUNC('month', NOW() + INTERVAL '1 month' *
+              MOD(f.fiscal_year_end_month - EXTRACT(MONTH FROM NOW())::int + 12, 12)
+            )
+          ) - NOW() <= INTERVAL '180 days' THEN 5
+          ELSE 0
+        END AS timing_pts
+      FROM facilities f
+      LEFT JOIN purchase_signals ps ON ps.facility_id = f.id AND ps.is_active = true
+      LEFT JOIN equipment_records er ON er.facility_id = f.id
+      LEFT JOIN facility_contacts fc ON fc.facility_id = f.id
+      GROUP BY f.id, f.fiscal_year_end_month
+    )
+    UPDATE facilities f
+    SET signal_score = LEAST(100, GREATEST(0,
+          ROUND((ss.sig_pts + ss.equip_pts + ss.contact_pts + ss.timing_pts)::numeric)
+        ))::smallint,
+        updated_at = now()
+    FROM signal_scores ss
+    WHERE f.id = ss.facility_id
+    RETURNING f.id
+  `));
+  const updated = result.rows.length;
+
+  // Engagement recomputation — only for existing account-facility links
   const acctFacs = await db
     .select({
       accountId: accountFacilities.accountId,
