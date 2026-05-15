@@ -360,7 +360,13 @@ export async function customFetch<T = unknown>(
 
   const requestInfo = { method, url: resolveUrl(input) };
 
-  const response = await fetch(input, { ...init, method, headers });
+  // Always send cookies so Clerk session tokens reach the API server.
+  // In a browser context this is equivalent to credentials: "same-origin" when
+  // the Vite proxy is in use (same origin), and works correctly for cross-origin
+  // deployments where cookies are set with SameSite=None;Secure.
+  const credentials = init.credentials ?? "include";
+
+  const response = await fetch(input, { ...init, method, headers, credentials });
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);

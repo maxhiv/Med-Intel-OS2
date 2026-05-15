@@ -27,21 +27,24 @@ import { logger } from "../lib/logger";
 const USA_SPENDING_URL =
   "https://api.usaspending.gov/api/v2/search/spending_by_award/";
 
-// Proxy for ≥ 10,000 patient visits/year: HRSA New Access Point awards
-// typically run $650k–$2M for sites serving that volume; $250k floor captures
-// expansion awards to existing sites while excluding tiny demonstration grants.
 const MIN_AWARD_AMOUNT = 250_000;
-
-// CMX target markets (mirrors conFilingsIngestor + medicareUtilIngestor)
-const TARGET_STATES = new Set([
-  "IL", "MI", "NY", "VA", "CT", "MD", "KY", "MS", "AL", "GA", "MA",
-  "OH", "IN", "WI", "MN", "MO", "TN", "NC", "FL", "TX", "CA",
-]);
-
-const DELAY_MS = 200;
+const DELAY_MS = 300;
+const FETCH_TIMEOUT_MS = 30_000;
 const MONTHS_BACK = 24;
 
+// Default market coverage — can be narrowed per-run via opts.states
+const DEFAULT_TARGET_STATES = [
+  "IL", "MI", "NY", "VA", "CT", "MD", "KY", "MS", "AL", "GA", "MA",
+  "OH", "IN", "WI", "MN", "MO", "TN", "NC", "FL", "TX", "CA",
+];
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: ac.signal }).finally(() => clearTimeout(t));
+}
 
 export interface HrsaIngestResult {
   signalsInserted: number;
@@ -120,10 +123,11 @@ async function matchOrCreateFacility(award: SpendingAward): Promise<string | nul
 }
 
 export async function ingestHrsa(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; states?: string[] } = {},
 ): Promise<HrsaIngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
   const result: HrsaIngestResult = { signalsInserted: 0, errors: 0 };
+  const targetStates = opts.states?.length ? opts.states : DEFAULT_TARGET_STATES;
 
   const requestBody = {
     filters: {
@@ -135,7 +139,6 @@ export async function ingestHrsa(
         },
       ],
       award_type_codes: ["A", "B", "C", "D"],
-      // Health center / FQHC keywords matching HRSA Bureau of Primary Health Care
       keywords: [
         "community health center",
         "federally qualified health center",
@@ -143,7 +146,7 @@ export async function ingestHrsa(
         "new access point",
         "health center program",
       ],
-      recipient_location_state_codes: Array.from(TARGET_STATES),
+      recipient_location_state_codes: targetStates,
       time_period: [
         {
           start_date: cutoffDate(),
@@ -169,12 +172,12 @@ export async function ingestHrsa(
   };
 
   try {
-    const res = await fetch(USA_SPENDING_URL, {
+    const res = await fetchWithTimeout(USA_SPENDING_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        "User-Agent": "MedIntel/1.0",
+        "User-Agent": `MedIntelOS ${process.env.PLATFORM_ADMIN_EMAIL ?? "research@medintel.ai"}`,
       },
       body: JSON.stringify(requestBody),
     });
@@ -194,7 +197,7 @@ export async function ingestHrsa(
 
       // Target-state filter (belt + suspenders — also enforced in the API query)
       const state = (award.recipient_location_state_code ?? "").trim().toUpperCase();
-      if (state && !TARGET_STATES.has(state)) continue;
+      if (state && targetStates.length > 0 && !targetStates.includes(state)) continue;
 
       try {
         const facilityId = await matchOrCreateFacility(award);

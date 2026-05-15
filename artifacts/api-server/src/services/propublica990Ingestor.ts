@@ -20,7 +20,10 @@ import { logger } from "../lib/logger";
 
 const PP_SEARCH = "https://projects.propublica.org/nonprofits/api/v2/search.json";
 const PP_ORG = "https://projects.propublica.org/nonprofits/api/v2/organizations";
-const DELAY_MS = 300;
+// ProPublica enforces ~1 req/sec per IP. Keep at least 1 s between facility
+// iterations (including on errors — skipping the delay on failure cascades
+// into burst-rejections on the next facility).
+const DELAY_MS = 1_100;
 const GRANT_THRESHOLD = 1_000_000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -280,9 +283,10 @@ export async function ingestPropublica990(
     } catch (err) {
       logger.warn({ err, facilityId: f.id, ein }, "propublica_990 fetch error");
       result.errors += 1;
-      continue;
     }
 
+    // Always sleep — including after errors. Skipping the delay on failure
+    // bursts the next request immediately, triggering cascading 429s.
     await sleep(DELAY_MS);
   }
 
