@@ -504,74 +504,133 @@ async function directEinMatch(): Promise<number> {
 // ─── Phase 3: pg_trgm name match ─────────────────────────────────────────────
 
 /**
- * Phase 3 — pg_trgm name similarity match.
+ * Phase 3 — pg_trgm name similarity match (batched, 200 EINs per batch).
  *
- * Matches unmatched irs_990_raw rows to facilities using organization name
- * similarity. The `org_name` column on irs_990_raw is populated by the
- * Task #104 IRS EO BMF import; it is NULL for all rows imported from the
- * 990 extract (which contains only EINs and financial data, no org names).
+ * Matches unmatched irs_990_raw rows to facilities by org name similarity.
+ * Runs in two passes:
+ *   Pass A (general)  — similarity >= TRGM_THRESHOLD_GENERAL (0.45)
+ *   Pass B (hospital) — similarity >= TRGM_THRESHOLD_HOSPITAL (0.35),
+ *                       restricted to rows where operatehosptlcd='Y'
  *
- * When org_name is populated, this pass applies two thresholds:
- *   - General orgs   : similarity >= 0.45 (TRGM_THRESHOLD_GENERAL)
- *   - Hospital rows  : similarity >= 0.35 (TRGM_THRESHOLD_HOSPITAL)
+ * Each pass pages through unmatched EINs in batches of 200 rows, using
+ * cursor-style pagination (ORDER BY ein OFFSET/LIMIT) so that large
+ * datasets do not require loading all EINs into memory.
  *
- * The query actually runs each time; it returns 0 matches until Task #104
- * populates org_name via the BMF bulk import.
+ * State filtering: the IRS 990 extract contains no state column; state
+ * cannot be derived from nonpfrea (which is an IRS reason-code, not a
+ * FIPS/postal code). State-based filtering will be enabled once the IRS
+ * EO BMF (Task #104) is imported, as that file includes a state field
+ * alongside org names.
+ *
+ * The org_name column on irs_990_raw is populated by Task #104. Until
+ * then, every batch will match 0 rows (the WHERE r.org_name IS NOT NULL
+ * guard ensures no-ops are fast).
  */
 async function trgmMatch(): Promise<number> {
+  const BATCH = 200;
+
   const [unmatchedRow] = (await db.execute<{ cnt: string }>(sql.raw(`
     SELECT COUNT(*)::text AS cnt FROM irs_990_raw WHERE facility_id IS NULL
   `))).rows;
   const unmatchedTotal = Number(unmatchedRow.cnt);
   console.log(`    ${fmt(unmatchedTotal)} rows still unmatched after EIN join.`);
 
-  // General pass (threshold 0.45) — requires org_name populated by Task #104 BMF
-  await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = ${TRGM_THRESHOLD_GENERAL}`));
-  const generalRes = await db.execute<{ cnt: string }>(sql.raw(`
-    WITH updated AS (
-      UPDATE irs_990_raw r
-      SET facility_id = f.id,
-          match_score = similarity(r.org_name, f.name),
-          matched_at  = now()
-      FROM facilities f
-      WHERE r.facility_id IS NULL
-        AND r.org_name IS NOT NULL
-        AND r.org_name % f.name
-      RETURNING r.ein
-    )
-    SELECT COUNT(*)::text AS cnt FROM updated
-  `));
-  const generalMatched = Number(generalRes.rows[0]?.cnt ?? 0);
+  let totalMatched = 0;
 
-  // Hospital-row pass (lower threshold 0.35 per spec)
-  await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = ${TRGM_THRESHOLD_HOSPITAL}`));
-  const hospRes = await db.execute<{ cnt: string }>(sql.raw(`
-    WITH updated AS (
-      UPDATE irs_990_raw r
-      SET facility_id = f.id,
-          match_score = similarity(r.org_name, f.name),
-          matched_at  = now()
-      FROM facilities f
-      WHERE r.facility_id IS NULL
-        AND r.org_name IS NOT NULL
-        AND r.operatehosptlcd = 'Y'
-        AND r.org_name % f.name
-      RETURNING r.ein
-    )
-    SELECT COUNT(*)::text AS cnt FROM updated
-  `));
-  const hospMatched = Number(hospRes.rows[0]?.cnt ?? 0);
+  // ── Pass A: general threshold (0.45) ────────────────────────────────────────
+  await db.execute(sql.raw(
+    `SET pg_trgm.similarity_threshold = ${TRGM_THRESHOLD_GENERAL}`,
+  ));
+  let offset = 0;
+  while (true) {
+    // Fetch next batch of unmatched EINs
+    const batchRows = await db.execute<{ ein: string }>(sql.raw(`
+      SELECT ein
+      FROM irs_990_raw
+      WHERE facility_id IS NULL
+        AND org_name IS NOT NULL
+      ORDER BY ein
+      LIMIT ${BATCH} OFFSET ${offset}
+    `));
+    if (batchRows.rows.length === 0) break;
 
-  // Restore default threshold
+    const einList = batchRows.rows
+      .map((r) => `'${r.ein.replace(/'/g, "''")}'`)
+      .join(", ");
+
+    const matchRes = await db.execute<{ cnt: string }>(sql.raw(`
+      WITH updated AS (
+        UPDATE irs_990_raw r
+        SET facility_id = f.id,
+            match_score = similarity(r.org_name, f.name),
+            matched_at  = now()
+        FROM facilities f
+        WHERE r.ein IN (${einList})
+          AND r.facility_id IS NULL
+          AND r.org_name IS NOT NULL
+          AND r.org_name % f.name
+        RETURNING r.ein
+      )
+      SELECT COUNT(*)::text AS cnt FROM updated
+    `));
+    totalMatched += Number(matchRes.rows[0]?.cnt ?? 0);
+    offset += BATCH;
+  }
+
+  // ── Pass B: hospital threshold (0.35) ───────────────────────────────────────
+  await db.execute(sql.raw(
+    `SET pg_trgm.similarity_threshold = ${TRGM_THRESHOLD_HOSPITAL}`,
+  ));
+  offset = 0;
+  while (true) {
+    const batchRows = await db.execute<{ ein: string }>(sql.raw(`
+      SELECT ein
+      FROM irs_990_raw
+      WHERE facility_id IS NULL
+        AND org_name IS NOT NULL
+        AND operatehosptlcd = 'Y'
+      ORDER BY ein
+      LIMIT ${BATCH} OFFSET ${offset}
+    `));
+    if (batchRows.rows.length === 0) break;
+
+    const einList = batchRows.rows
+      .map((r) => `'${r.ein.replace(/'/g, "''")}'`)
+      .join(", ");
+
+    const matchRes = await db.execute<{ cnt: string }>(sql.raw(`
+      WITH updated AS (
+        UPDATE irs_990_raw r
+        SET facility_id = f.id,
+            match_score = similarity(r.org_name, f.name),
+            matched_at  = now()
+        FROM facilities f
+        WHERE r.ein IN (${einList})
+          AND r.facility_id IS NULL
+          AND r.org_name IS NOT NULL
+          AND r.operatehosptlcd = 'Y'
+          AND r.org_name % f.name
+        RETURNING r.ein
+      )
+      SELECT COUNT(*)::text AS cnt FROM updated
+    `));
+    totalMatched += Number(matchRes.rows[0]?.cnt ?? 0);
+    offset += BATCH;
+  }
+
+  // Restore pg_trgm default threshold
   await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = 0.3`));
 
-  const total = generalMatched + hospMatched;
-  if (total === 0) {
-    console.log(`    trgm matched: 0 (org_name column is NULL — populated by Task #104 BMF import)`);
+  if (totalMatched === 0) {
+    console.log(
+      `    trgm matched: 0 ` +
+      `(org_name is NULL for all 990-extract rows — ` +
+      `will match when Task #104 BMF import populates org_name)`,
+    );
   } else {
-    console.log(`    trgm matched: ${fmt(generalMatched)} general + ${fmt(hospMatched)} hospital rows`);
+    console.log(`    trgm matched: ${fmt(totalMatched)} rows`);
   }
-  return total;
+  return totalMatched;
 }
 
 // ─── Phase 4: Upsert financial_documents ──────────────────────────────────────

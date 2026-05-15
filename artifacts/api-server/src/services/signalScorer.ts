@@ -445,80 +445,135 @@ async function recomputeAccountContactsForFacility(
 }
 
 /**
- * Recompute signal_score for every facility in one bulk SQL UPDATE,
- * then recompute engagement for each account-facility pair.
+ * Recompute signal_score for every facility using a single bulk SQL UPDATE.
+ * Pre-aggregates each one-to-many table (signals, equipment, contacts) in
+ * separate CTEs before joining to facilities — avoids cross-product row
+ * inflation that would occur from a naive multi-table JOIN.
  *
- * Uses a single UPDATE … FROM subquery to avoid N+1 queries across
- * all 183k+ facilities. Cross-source bonuses and equipment urgency are
- * evaluated in SQL alongside signal weights.
+ * Cross-source bonuses from CROSS_SOURCE_BONUS_RULES are computed in SQL
+ * using array_agg to collect each facility's signal-type set.
+ * FYE timing bonus is computed per-facility via the existing
+ * computeTimingBonus() helper after the bulk UPDATE (only for facilities
+ * that have a fiscal_year_end_month set).
  */
 export async function recomputeAllScores(): Promise<{ updated: number }> {
-  // Build the CASE … END expression for per-signal weights inline
   const weightCases = Object.entries(WEIGHTS)
-    .map(([type, w]) => `WHEN ps.signal_type::text = '${type}' THEN ${w}`)
+    .map(([t, w]) => `WHEN '${t}' THEN ${w}`)
     .join("\n          ");
 
-  // Single bulk UPDATE: score = clamp(0, 100, ROUND(SUM(weight * conf/100)))
-  // Also adds +5 for verified contacts, equipment urgency, and FYE bonus.
-  const result = await db.execute<{ cnt: string }>(sql.raw(`
-    WITH signal_scores AS (
+  const result = await db.execute<{ id: string }>(sql.raw(`
+    WITH
+    -- 1. Signal points + type array, aggregated per facility (no other joins here)
+    fac_sigs AS (
       SELECT
-        f.id AS facility_id,
+        facility_id,
+        array_agg(DISTINCT signal_type::text) AS types,
+        bool_or(source = 'usa_spending' AND signal_type::text = 'rfp_posted') AS has_usa_spending_rfp,
         COALESCE(SUM(
-          CASE ${weightCases}
-               ELSE 5
-          END * COALESCE(ps.confidence, 50) / 100.0
-        ), 0) AS sig_pts,
-        COALESCE(SUM(
-          CASE er.urgency_tier
-            WHEN 'critical' THEN 15
-            WHEN 'high'     THEN 8
-            WHEN 'medium'   THEN 3
-            ELSE 0
-          END
-        ), 0) AS equip_pts,
-        CASE WHEN COUNT(fc.id) FILTER (WHERE fc.human_verified) > 0 THEN 5 ELSE 0 END AS contact_pts,
-        -- FYE timing bonus (≤30d→20, ≤60d→15, ≤90d→10, ≤180d→5)
-        CASE
-          WHEN f.fiscal_year_end_month IS NULL THEN 0
-          WHEN (
-            DATE_TRUNC('month', NOW() + INTERVAL '1 month' *
-              MOD(f.fiscal_year_end_month - EXTRACT(MONTH FROM NOW())::int + 12, 12)
-            )
-          ) - NOW() <= INTERVAL '30 days'  THEN 20
-          WHEN (
-            DATE_TRUNC('month', NOW() + INTERVAL '1 month' *
-              MOD(f.fiscal_year_end_month - EXTRACT(MONTH FROM NOW())::int + 12, 12)
-            )
-          ) - NOW() <= INTERVAL '60 days'  THEN 15
-          WHEN (
-            DATE_TRUNC('month', NOW() + INTERVAL '1 month' *
-              MOD(f.fiscal_year_end_month - EXTRACT(MONTH FROM NOW())::int + 12, 12)
-            )
-          ) - NOW() <= INTERVAL '90 days'  THEN 10
-          WHEN (
-            DATE_TRUNC('month', NOW() + INTERVAL '1 month' *
-              MOD(f.fiscal_year_end_month - EXTRACT(MONTH FROM NOW())::int + 12, 12)
-            )
-          ) - NOW() <= INTERVAL '180 days' THEN 5
-          ELSE 0
-        END AS timing_pts
+          CASE signal_type::text
+            ${weightCases}
+            ELSE 5
+          END * COALESCE(confidence, 50) / 100.0
+        ), 0) AS sig_pts
+      FROM purchase_signals
+      WHERE is_active = true
+      GROUP BY facility_id
+    ),
+    -- 2. Cross-source bonuses derived from the type array
+    cross_bonus AS (
+      SELECT
+        facility_id,
+        (
+          CASE WHEN 'con_approved' = ANY(types)
+                AND ('bond_issued' = ANY(types) OR 'bond_issuance' = ANY(types)) THEN 20 ELSE 0 END
+        + CASE WHEN 'con_filed' = ANY(types)
+                AND ('bond_issued' = ANY(types) OR 'bond_issuance' = ANY(types)) THEN 15 ELSE 0 END
+        + CASE WHEN has_usa_spending_rfp THEN 12 ELSE 0 END
+        + CASE WHEN 'grant_awarded' = ANY(types)
+                AND ('con_filed' = ANY(types) OR 'con_approved' = ANY(types)) THEN 12 ELSE 0 END
+        + CASE WHEN 'hcris_depreciation_spike' = ANY(types)
+                AND ('con_filed' = ANY(types) OR 'con_approved' = ANY(types)) THEN 10 ELSE 0 END
+        + CASE WHEN 'high_utilization' = ANY(types)
+                AND ('con_filed' = ANY(types) OR 'con_approved' = ANY(types)) THEN 10 ELSE 0 END
+        + CASE WHEN 'high_utilization' = ANY(types)
+                AND ('eol_equipment' = ANY(types) OR 'equipment_age_7yr' = ANY(types)) THEN 8 ELSE 0 END
+        + CASE WHEN 'adverse_event_spike' = ANY(types)
+                AND 'hcris_depreciation_spike' = ANY(types) THEN 8 ELSE 0 END
+        + CASE WHEN 'clinical_trial' = ANY(types)
+                AND 'grant_awarded' = ANY(types) THEN 8 ELSE 0 END
+        + CASE WHEN 'system_signal_propagated' = ANY(types)
+                AND (
+                  'con_filed'                = ANY(types) OR
+                  'con_approved'             = ANY(types) OR
+                  'bond_issued'              = ANY(types) OR
+                  'bond_issuance'            = ANY(types) OR
+                  'rfp_posted'               = ANY(types) OR
+                  'hcris_depreciation_spike' = ANY(types)
+                ) THEN 10 ELSE 0 END
+        ) AS bonus_pts
+      FROM fac_sigs
+    ),
+    -- 3. Equipment urgency, aggregated separately (no signal join)
+    equip AS (
+      SELECT
+        facility_id,
+        SUM(CASE urgency_tier
+              WHEN 'critical' THEN 15
+              WHEN 'high'     THEN 8
+              WHEN 'medium'   THEN 3
+              ELSE 0
+            END) AS pts
+      FROM equipment_records
+      GROUP BY facility_id
+    ),
+    -- 4. Verified-contact bonus (+5 per facility, not per contact)
+    contacts AS (
+      SELECT DISTINCT facility_id, 5 AS pts
+      FROM facility_contacts
+      WHERE human_verified = true
+    ),
+    -- 5. Combine everything without further one-to-many joins
+    scores AS (
+      SELECT
+        f.id,
+        LEAST(100, GREATEST(0, ROUND((
+          COALESCE(fs.sig_pts,  0) +
+          COALESCE(cb.bonus_pts, 0) +
+          COALESCE(e.pts,        0) +
+          COALESCE(c.pts,        0)
+        )::numeric)))::smallint AS new_score
       FROM facilities f
-      LEFT JOIN purchase_signals ps ON ps.facility_id = f.id AND ps.is_active = true
-      LEFT JOIN equipment_records er ON er.facility_id = f.id
-      LEFT JOIN facility_contacts fc ON fc.facility_id = f.id
-      GROUP BY f.id, f.fiscal_year_end_month
+      LEFT JOIN fac_sigs    fs ON fs.facility_id = f.id
+      LEFT JOIN cross_bonus cb ON cb.facility_id = f.id
+      LEFT JOIN equip        e ON  e.facility_id = f.id
+      LEFT JOIN contacts     c ON  c.facility_id = f.id
     )
     UPDATE facilities f
-    SET signal_score = LEAST(100, GREATEST(0,
-          ROUND((ss.sig_pts + ss.equip_pts + ss.contact_pts + ss.timing_pts)::numeric)
-        ))::smallint,
-        updated_at = now()
-    FROM signal_scores ss
-    WHERE f.id = ss.facility_id
+    SET signal_score = s.new_score,
+        updated_at   = now()
+    FROM scores s
+    WHERE f.id = s.id
     RETURNING f.id
   `));
   const updated = result.rows.length;
+
+  // Apply FYE timing bonus for facilities that have a month set —
+  // this is a small subset (~5k) so per-facility queries are acceptable.
+  const withFye = await db
+    .select({ id: facilities.id, fiscalYearEndMonth: facilities.fiscalYearEndMonth })
+    .from(facilities)
+    .where(sql`${facilities.fiscalYearEndMonth} IS NOT NULL`);
+  for (const f of withFye) {
+    const bonus = computeTimingBonus(f.fiscalYearEndMonth);
+    if (bonus > 0) {
+      await db.execute(sql.raw(`
+        UPDATE facilities
+        SET signal_score = LEAST(100, signal_score + ${bonus})::smallint,
+            updated_at   = now()
+        WHERE id = '${f.id}'
+      `));
+    }
+  }
 
   // Engagement recomputation — only for existing account-facility links
   const acctFacs = await db
