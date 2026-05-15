@@ -1268,4 +1268,72 @@ router.post(
   },
 );
 
+// ─── Signal coverage by state ─────────────────────────────────────────────────
+//
+// GET /admin/signal-coverage[?states=IL,TX]
+//
+// Returns per-state counts of total facilities, scraped facilities, and
+// facilities that have at least one active signal.  Accessible via platform
+// admin Clerk session OR the INTERNAL_ADMIN_KEY header (for the bulk-ingest
+// script which runs outside a browser session).
+
+router.get("/admin/signal-coverage", async (req, res) => {
+  const internalKey = process.env.INTERNAL_ADMIN_KEY;
+  const providedKey = req.headers["x-internal-admin-key"];
+  const isInternalCaller = internalKey && providedKey === internalKey;
+
+  if (!isInternalCaller) {
+    if (!req.currentUser) { res.status(401).json({ error: "unauthenticated" }); return; }
+    if (!req.isPlatformAdmin) { res.status(403).json({ error: "forbidden" }); return; }
+  }
+
+  const statesQs = typeof req.query.states === "string" ? req.query.states.trim() : "";
+  const filterStates = statesQs
+    ? statesQs.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
+    : [];
+
+  try {
+    // Build the per-state aggregation via raw SQL for efficiency.
+    const stateFilter = filterStates.length > 0
+      ? sql`WHERE f.state = ANY(ARRAY[${sql.raw(filterStates.map((s) => `'${s.replace(/'/g, "")}'`).join(","))}])`
+      : sql`WHERE f.state IS NOT NULL`;
+
+    type CoverageRow = { state: string; total: number; scraped: number; with_signals: number };
+
+    const result = await db.execute<CoverageRow>(sql`
+      SELECT
+        f.state,
+        COUNT(*)::int                                               AS total,
+        COUNT(*) FILTER (WHERE f.last_scraped_at IS NOT NULL)::int AS scraped,
+        COUNT(DISTINCT ps.facility_id)::int                        AS with_signals
+      FROM facilities f
+      LEFT JOIN purchase_signals ps
+        ON ps.facility_id = f.id AND ps.is_active = true
+      ${stateFilter}
+      GROUP BY f.state
+      ORDER BY f.state
+    `);
+
+    const coverage = (result.rows as CoverageRow[]).map((r) => ({
+      state: r.state,
+      total: Number(r.total),
+      scraped: Number(r.scraped),
+      withSignals: Number(r.with_signals),
+    }));
+
+    const totals = coverage.reduce(
+      (acc, r) => ({
+        total: acc.total + r.total,
+        scraped: acc.scraped + r.scraped,
+        withSignals: acc.withSignals + r.withSignals,
+      }),
+      { total: 0, scraped: 0, withSignals: 0 },
+    );
+
+    res.json({ coverage, totals });
+  } catch (err) {
+    res.status(500).json({ error: "query_failed", detail: String(err) });
+  }
+});
+
 export default router;
