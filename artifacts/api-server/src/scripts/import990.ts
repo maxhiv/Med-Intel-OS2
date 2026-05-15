@@ -7,14 +7,14 @@
  * Phase 2 — EIN match    : Direct JOIN on facilities.ein (backfilled from
  *                          prior propublica signals). Updates facility_id,
  *                          match_score=1.000, matched_at on irs_990_raw.
- * Phase 3 — Trgm match   : Phase 3.A fetches org names from ProPublica
- *                          Nonprofit Explorer for hospital rows (operatehosptlcd
- *                          ='Y', ~2,248 EINs); IRS 990 extract has no name col.
- *                          Phase 3.B runs two-pass trgm (0.45 general / 0.35
- *                          hospital) over pre-materialised frozen EIN list
- *                          (no OFFSET over mutable set); each batch selects
- *                          the single best facility per EIN via
- *                          ROW_NUMBER() OVER (PARTITION BY ein ORDER BY sim DESC).
+ * Phase 3 — Trgm match   : Two-pass pg_trgm (0.45 general / 0.35 hospital)
+ *                          over all irs_990_raw rows where org_name IS NOT NULL.
+ *                          Pre-materialised frozen EIN list (no mutable OFFSET).
+ *                          Each batch uses ROW_NUMBER() OVER (PARTITION BY ein
+ *                          ORDER BY sim DESC) for deterministic top-1 selection.
+ *                          On match: updates irs_990_raw AND facilities.ein.
+ *                          org_name is populated by Task #104 BMF import; until
+ *                          then the WHERE guard short-circuits with 0 matches.
  * Phase 4 — Fin docs     : Upsert financial_documents per spec mapping:
  *                          capitalExpenditures = deprcatndepletn,
  *                          operatingIncome = totrevenue - totfuncexpns,
@@ -528,237 +528,102 @@ async function directEinMatch(): Promise<number> {
 
 // ─── Phase 3: pg_trgm name match ─────────────────────────────────────────────
 
-// ─── ProPublica name fetcher (used by Phase 3.A) ─────────────────────────────
-
-const PROPUBLICA_CONCURRENCY = 15;   // parallel in-flight requests
-const PROPUBLICA_DELAY_MS    = 50;   // ms between launches to avoid burst
-
-/** Fetch org name+state for one EIN from ProPublica Nonprofit Explorer. */
-async function fetchOrgName(
-  ein: string,
-): Promise<{ name: string; state: string } | null> {
-  try {
-    const url = `https://projects.propublica.org/nonprofits/api/v2/organizations/${ein}.json`;
-    const res  = await fetch(url, { signal: AbortSignal.timeout(8_000) });
-    if (!res.ok) return null;
-    const json = await res.json() as { organization?: { name?: string; state?: string } };
-    const org  = json?.organization;
-    if (!org?.name) return null;
-    return { name: org.name, state: org.state ?? "" };
-  } catch {
-    return null;
-  }
-}
-
-/** Simple concurrency pool — runs `tasks` with at most `concurrency` in-flight. */
-async function runConcurrent<T>(
-  tasks: (() => Promise<T>)[],
-  concurrency: number,
-): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  let nextIdx = 0;
-
-  async function worker() {
-    while (nextIdx < tasks.length) {
-      const idx = nextIdx++;
-      results[idx] = await tasks[idx]();
-    }
-  }
-  await Promise.all(Array.from({ length: concurrency }, worker));
-  return results;
-}
-
 /**
- * Phase 3 — pg_trgm name similarity match.
+ * Phase 3 — pg_trgm name-similarity match.
  *
- * Phase 3.A — Org name population:
- *   The IRS 990 extract CSV contains no org name column (confirmed: 246
- *   columns per the IRS EO layout document; none is an org name field).
- *   The IRS EO BMF download URL (apps.irs.gov/pub/epostcard/…) is not
- *   reachable from this environment (returns 404 redirect).
+ * Two passes over irs_990_raw rows where org_name IS NOT NULL:
+ *   Pass A (general)  — similarity >= 0.45, all unmatched rows with a name.
+ *   Pass B (hospital) — similarity >= 0.35, restricted to operatehosptlcd='Y'.
  *
- *   This phase resolves the gap by fetching org names from the ProPublica
- *   Nonprofit Explorer public API for all irs_990_raw rows where
- *   operatehosptlcd='Y' (hospitals, ~2,248 rows). Responses include the
- *   organisation name and state, which are stored in irs_990_raw.org_name.
- *   Up to PROPUBLICA_CONCURRENCY (15) requests run in parallel; each has
- *   an 8-second timeout. EINs that return no data are skipped silently.
+ * org_name is populated by the IRS EO BMF import (Task #104). The IRS 990
+ * extract has no name column; until BMF runs, org_name IS NULL everywhere and
+ * both passes complete immediately with 0 matches.
  *
- * Phase 3.B — Trgm matching:
- *   Matching strategy:
- *   - Pass A: general threshold (TRGM_THRESHOLD_GENERAL = 0.45).
- *   - Pass B: hospital threshold (TRGM_THRESHOLD_HOSPITAL = 0.35),
- *             restricted to rows where operatehosptlcd='Y'.
+ * Keyset batching: candidate EINs are pre-materialised into a frozen array
+ * before the loop. Slicing that array avoids OFFSET drift on a mutable table.
  *
- *   Keyset batching: all unmatched EINs with an org_name are pre-materialised
- *   into a TypeScript array before the match loop begins. The loop slices
- *   that frozen array in groups of TRGM_BATCH. This avoids the race between
- *   OFFSET-pagination and live updates that would skip rows in a mutable
- *   result set.
+ * Top-1 selection: each batch UPDATE uses a ranked CTE
+ * (ROW_NUMBER() OVER (PARTITION BY r.ein ORDER BY sim DESC)) so exactly one
+ * facility — the highest-similarity match — is chosen per EIN.
  *
- *   Top-1 ranking: each batch UPDATE uses a window function
- *   (ROW_NUMBER() OVER (PARTITION BY r.ein ORDER BY sim DESC)) to select
- *   exactly the highest-similarity facility per EIN. This prevents one EIN
- *   from being linked to multiple facilities and avoids arbitrary assignment
- *   when two facilities share similar names.
+ * On match: irs_990_raw.facility_id and facilities.ein are both persisted
+ * in a single statement via chained CTEs.
  *
- *   State context: the IRS EO BMF state field is stored in irs_990_raw when
- *   available from Phase 3.A; future runs after a full BMF import (Task #104)
- *   will add a WHERE r.state = f.state filter to the match SQL automatically
- *   via the same keyset/top-1 approach.
+ * State filtering: the 990 extract contains no state column. When Task #104
+ * adds a state field to irs_990_raw, the JOIN can be restricted with
+ * AND r.state = f.state without changing the batching or ranking logic.
  */
 async function trgmMatch(): Promise<number> {
   const TRGM_BATCH = 200;
 
-  // ── Phase 3.A: Populate org_name for hospital rows via ProPublica ────────────
-  const hospitalEins = (await db.execute<{ ein: string }>(sql.raw(`
-    SELECT ein FROM irs_990_raw
-    WHERE operatehosptlcd = 'Y'
-      AND org_name IS NULL
-    ORDER BY ein
-  `))).rows.map((r) => r.ein);
+  const [unmatchedRow] = (await db.execute<{ cnt: string }>(sql.raw(
+    `SELECT COUNT(*)::text AS cnt FROM irs_990_raw WHERE facility_id IS NULL`,
+  ))).rows;
+  console.log(`  Phase 3: ${fmt(Number(unmatchedRow.cnt))} rows unmatched after EIN join; running trgm...`);
 
-  console.log(`  Phase 3.A: fetching org names for ${fmt(hospitalEins.length)} hospital EINs via ProPublica...`);
-
-  let namesFetched = 0;
-  let namesMissed  = 0;
-  const updateBuf: Array<{ ein: string; name: string; state: string }> = [];
-
-  const tasks = hospitalEins.map((ein, i) => async () => {
-    // Stagger launches to avoid burst
-    await new Promise(r => setTimeout(r, i % PROPUBLICA_CONCURRENCY * PROPUBLICA_DELAY_MS));
-    const result = await fetchOrgName(ein);
-    if (result) {
-      updateBuf.push({ ein, name: result.name, state: result.state });
-      namesFetched++;
-    } else {
-      namesMissed++;
-    }
-    if ((namesFetched + namesMissed) % 500 === 0) {
-      console.log(`    ... ${fmt(namesFetched + namesMissed)}/${fmt(hospitalEins.length)} EINs looked up`);
-    }
-  });
-
-  await runConcurrent(tasks, PROPUBLICA_CONCURRENCY);
-  console.log(`    ProPublica: ${fmt(namesFetched)} names fetched, ${fmt(namesMissed)} EINs not found.`);
-
-  // Persist fetched names — batch as raw-SQL UPDATE with CASE expression
-  // to avoid N individual round-trips.
-  const UPD_BATCH = 200;
-  for (let i = 0; i < updateBuf.length; i += UPD_BATCH) {
-    const slice = updateBuf.slice(i, i + UPD_BATCH);
-    const nameCase  = slice.map(r =>
-      `WHEN '${r.ein.replace(/'/g, "''")}' THEN '${r.name.replace(/'/g, "''")}'`
-    ).join(" ");
-    const stateCase = slice.map(r =>
-      `WHEN '${r.ein.replace(/'/g, "''")}' THEN '${r.state.replace(/'/g, "''")}'`
-    ).join(" ");
-    const einList   = slice.map(r => `'${r.ein.replace(/'/g, "''")}'`).join(", ");
-    await db.execute(sql.raw(`
-      UPDATE irs_990_raw
-      SET org_name   = CASE ein ${nameCase}  END,
-          updated_at = now()
-      WHERE ein IN (${einList})
-    `));
-    // Store state in a separate column if/when it is added; for now, append to
-    // org_name comment field is not correct — we intentionally only persist
-    // org_name. State-keyed matching can be wired after Task #104 BMF import
-    // adds the state column to irs_990_raw.
-    void stateCase; // used only for future WHERE r.state = f.state guard
-  }
-  console.log(`    ${fmt(updateBuf.length)} org_name values written to irs_990_raw.`);
-
-  // ── Phase 3.B: Trgm matching ─────────────────────────────────────────────────
-  const [unmatchedRow] = (await db.execute<{ cnt: string }>(sql.raw(`
-    SELECT COUNT(*)::text AS cnt FROM irs_990_raw WHERE facility_id IS NULL
-  `))).rows;
-  console.log(`    ${fmt(Number(unmatchedRow.cnt))} rows still unmatched after EIN join.`);
-
-  let totalMatched = 0;
-
-  /**
-   * Run one trgm pass.
-   * @param threshold pg_trgm.similarity_threshold to SET before matching
-   * @param hospitalOnly restrict candidate EINs to operatehosptlcd='Y'
-   */
   async function runPass(threshold: number, hospitalOnly: boolean): Promise<number> {
     await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = ${threshold}`));
 
-    // Pre-materialise ALL unmatched EINs with org_names — the frozen array
-    // is sliced for batching, so advancing the index never skips rows due
-    // to live updates on the underlying table.
-    const candidateRows = (await db.execute<{ ein: string }>(sql.raw(`
-      SELECT ein
-      FROM irs_990_raw
+    const allEins = (await db.execute<{ ein: string }>(sql.raw(`
+      SELECT ein FROM irs_990_raw
       WHERE facility_id IS NULL
-        AND org_name IS NOT NULL
+        AND org_name    IS NOT NULL
         ${hospitalOnly ? "AND operatehosptlcd = 'Y'" : ""}
       ORDER BY ein
-    `))).rows;
+    `))).rows.map((r) => r.ein);
 
-    const allEins = candidateRows.map((r) => r.ein);
-    let passMatched = 0;
-
+    let matched = 0;
     for (let i = 0; i < allEins.length; i += TRGM_BATCH) {
-      const slice   = allEins.slice(i, i + TRGM_BATCH);
-      const einList = slice.map((e) => `'${e.replace(/'/g, "''")}'`).join(", ");
+      const einList = allEins
+        .slice(i, i + TRGM_BATCH)
+        .map((e) => `'${e.replace(/'/g, "''")}'`)
+        .join(", ");
 
-      // Select the single best-matching facility per EIN using a ranked CTE.
-      // ROW_NUMBER() OVER (PARTITION BY r.ein ORDER BY sim DESC) ensures that
-      // even when multiple facilities clear the similarity threshold, we pick
-      // exactly one (the highest-similarity candidate) per 990 row.
-      const matchRes = await db.execute<{ cnt: string }>(sql.raw(`
+      const res = await db.execute<{ cnt: string }>(sql.raw(`
         WITH candidates AS (
-          SELECT
-            r.ein,
-            f.id                              AS fac_id,
-            similarity(r.org_name, f.name)   AS sim
+          SELECT r.ein, f.id AS fac_id, similarity(r.org_name, f.name) AS sim
           FROM irs_990_raw r
-          JOIN facilities  f
-            ON r.org_name % f.name
+          JOIN facilities  f ON r.org_name % f.name
           WHERE r.ein IN (${einList})
             AND r.facility_id IS NULL
-            AND r.org_name IS NOT NULL
+            AND r.org_name    IS NOT NULL
             ${hospitalOnly ? "AND r.operatehosptlcd = 'Y'" : ""}
         ),
         ranked AS (
           SELECT ein, fac_id, sim,
-            ROW_NUMBER() OVER (
-              PARTITION BY ein
-              ORDER BY sim DESC
-            ) AS rn
+            ROW_NUMBER() OVER (PARTITION BY ein ORDER BY sim DESC) AS rn
           FROM candidates
         ),
-        updated AS (
+        upd_990 AS (
           UPDATE irs_990_raw r
           SET facility_id = ranked.fac_id,
               match_score = ranked.sim,
               matched_at  = now()
           FROM ranked
-          WHERE r.ein       = ranked.ein
-            AND ranked.rn   = 1
-          RETURNING r.ein
+          WHERE r.ein = ranked.ein AND ranked.rn = 1
+          RETURNING r.ein, ranked.fac_id
+        ),
+        upd_fac AS (
+          UPDATE facilities f
+          SET ein        = upd_990.ein,
+              updated_at = now()
+          FROM upd_990
+          WHERE f.id = upd_990.fac_id
+            AND f.ein IS NULL
         )
-        SELECT COUNT(*)::text AS cnt FROM updated
+        SELECT COUNT(*)::text AS cnt FROM upd_990
       `));
-      passMatched += Number(matchRes.rows[0]?.cnt ?? 0);
+      matched += Number(res.rows[0]?.cnt ?? 0);
     }
-
-    return passMatched;
+    return matched;
   }
 
   const generalMatched  = await runPass(TRGM_THRESHOLD_GENERAL,  false);
   const hospitalMatched = await runPass(TRGM_THRESHOLD_HOSPITAL, true);
-  totalMatched = generalMatched + hospitalMatched;
-
-  // Restore pg_trgm default threshold
   await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = 0.3`));
 
-  console.log(
-    `    trgm matched: ${fmt(generalMatched)} general + ` +
-    `${fmt(hospitalMatched)} hospital-threshold rows (total ${fmt(totalMatched)}).`,
-  );
-  return totalMatched;
+  console.log(`  trgm: ${fmt(generalMatched)} general + ${fmt(hospitalMatched)} hospital = ${fmt(generalMatched + hospitalMatched)} total.`);
+  return generalMatched + hospitalMatched;
 }
 
 // ─── Phase 4: Upsert financial_documents ──────────────────────────────────────
