@@ -13,8 +13,7 @@ declare global {
   }
 }
 
-const PLATFORM_ADMIN_EMAIL =
-  process.env.PLATFORM_ADMIN_EMAIL || "max@hansenholdingsllc.com";
+const PLATFORM_ADMIN_EMAIL = process.env.PLATFORM_ADMIN_EMAIL ?? "";
 
 async function loadUserContext(req: Request): Promise<void> {
   const auth = getAuth(req);

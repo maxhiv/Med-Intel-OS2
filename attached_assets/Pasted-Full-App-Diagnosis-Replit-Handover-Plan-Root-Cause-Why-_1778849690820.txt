@@ -1,0 +1,245 @@
+Full App Diagnosis & Replit Handover Plan
+Root Cause: Why APIs Aren't Working
+THE PRIMARY ISSUE — No /api proxy in the frontend
+
+The Vite dev server (artifacts/web/vite.config.ts) has no server.proxy configuration. The frontend makes calls to relative paths like /api/leads, /api/facilities, etc., which go to the Vite server on its port — but the Express API server is on a completely different port. Every API call gets a 404 from Vite.
+
+The fix is a single block in vite.config.ts:
+
+server: {
+  port,
+  proxy: {
+    '/api': {
+      target: `http://localhost:${process.env.API_PORT ?? 3001}`,
+      changeOrigin: true,
+    },
+  },
+  // ...rest unchanged
+},
+THE SECONDARY ISSUE — Platform admin account not seeded
+
+If DATABASE_URL is set but the seed script (lib/db/src/seed.ts) hasn't been run, there's no hansen-holdings account in the database. The auth.ts middleware tries to auto-attach the platform admin to that account (WHERE slug = 'hansen-holdings') — if it doesn't exist, req.currentAccount is null, and requireAccount returns HTTP 403 on every protected route. Every page shows empty.
+
+THE TERTIARY ISSUE — PLATFORM_ADMIN_EMAIL mismatch
+
+auth.ts line 17 defaults to "max@hansenholdingsllc.com" but replit.nix sets PLATFORM_ADMIN_EMAIL = "maxhanseniv@gmail.com". If the Clerk account uses the Gmail address but the code defaults to the other, platform-admin privileges won't fire correctly.
+
+Replit Handover Plan
+Hand the following to Replit support/agent verbatim:
+
+REPLIT HANDOVER — MedIntel OS2 Fix Plan
+
+Repository: maxhiv/Med-Intel-OS2, branch claude/add-live-data-streams-FoSz4
+
+Step 0 — Fix the git lock (immediate blocker)
+rm -f /home/runner/workspace/.git/index.lock
+git status   # confirm clean
+Step 1 — Add the Vite API proxy (root cause of all API failures)
+Edit artifacts/web/vite.config.ts. In the server: block, add a proxy entry so that /api calls from the React app are forwarded to the Express API server:
+
+server: {
+  port,
+  strictPort: true,
+  host: "0.0.0.0",
+  allowedHosts: true,
+  proxy: {
+    '/api': {
+      target: `http://localhost:${process.env.API_PORT ?? '3001'}`,
+      changeOrigin: true,
+      secure: false,
+    },
+  },
+  fs: { strict: true },
+},
+Also add the same proxy to the preview: block for production previews.
+
+Step 2 — Verify environment variables in Replit Secrets
+Open the Secrets panel and confirm ALL of these are set:
+
+Key	Required	Notes
+DATABASE_URL	YES	PostgreSQL connection string. Must be set before any API works.
+CLERK_SECRET_KEY	YES	sk_test_... or sk_live_...
+VITE_CLERK_PUBLISHABLE_KEY	YES	pk_test_... or pk_live_...
+CLERK_PUBLISHABLE_KEY	YES	Same as above (backend needs it too)
+CRM_ENCRYPTION_KEY	YES	Already in replit.nix: oWWY+QkP...
+PLATFORM_ADMIN_EMAIL	YES	Already in replit.nix: maxhanseniv@gmail.com — must match Clerk login email
+PORT	YES	For the API server (e.g. 3001)
+API_PORT	Recommended	For the Vite proxy target (e.g. 3001)
+Step 3 — Run the database seed (fixes 403 on every route)
+After DATABASE_URL is confirmed, run:
+
+pnpm --filter @workspace/db push          # apply schema migrations
+pnpm --filter @workspace/db tsx src/seed.ts   # create extensions, RLS policies, platform admin account
+This creates the hansen-holdings account that auth.ts looks for when auto-attaching the platform admin. Without it, requireAccount returns 403 on every API call.
+
+Step 4 — Fix PORT conflict between web and API servers
+Both Vite (artifacts/web/vite.config.ts) and the API server (artifacts/api-server/src/index.ts) read from process.env.PORT and throw if it's missing. They cannot share the same port. Replit must set them differently:
+
+In replit.nix or workflow configs:
+
+API server: PORT=3001 (or 8082 per .replit port mapping)
+Vite: PORT=8080 (or 8081 per .replit port mapping)
+Confirm the two workflows launch with different PORT values, e.g.:
+
+# Workflow 1: API
+PORT=3001 pnpm --filter @workspace/api-server start
+# Workflow 2: Web  
+PORT=8080 API_PORT=3001 pnpm --filter @workspace/web dev
+Step 5 — Merge conflict resolution for reports.tsx
+In the Replit git merge UI, reports.tsx has a conflict. Accept the incoming (origin/main) version — it's the complete 245-line implementation with the Create Template dialog and Run Report functionality.
+
+From the shell (if UI is blocked):
+
+git checkout --theirs artifacts/web/src/pages/reports.tsx
+git add artifacts/web/src/pages/reports.tsx
+git commit -m "Resolve reports.tsx conflict — keep full implementation from origin/main"
+Step 6 — Verify Clerk JWT template includes email
+In the Clerk dashboard (Auth pane → JWT Templates), confirm the session token includes email in the claims. The auth.ts middleware (line 26) reads sessionClaims?.email. Without it, the JIT user-provisioning fallback hits the Clerk API on every request, adding latency and potential failures.
+
+Step 7 — Smoke test checklist after fixes
+# 1. Health check (no auth required)
+curl http://localhost:3001/api/health
+
+# 2. Verify /api proxy works from the web port
+curl http://localhost:8080/api/health
+
+# 3. Sign in via browser, then open DevTools → Network
+#    Filter by /api — look for 401 (not authed), 403 (no account), or 200 (working)
+#    If you see 403 with {"error":"no_account_assigned"} → seed not run (Step 3)
+#    If you see net::ERR_CONNECTION_REFUSED → proxy not configured (Step 1)
+#    If you see 404 from Vite → proxy not configured (Step 1)
+Known bugs fixed on branch claude/add-live-data-streams-FoSz4
+These are already committed and pushed — Replit just needs to merge:
+
+POST /facilities/:id/contacts — "Add Contact" button now opens a form and saves
+reports.tsx — full Create Template + Run Report dialogs (replaces 76-line stub)
+facilities/detail.tsx — Edit Facility dialog, Sync NPI button, full signal/contact/equipment tabs
+contacts.tsx — URL param pre-selection, confidence scores, email status
+sequences.tsx — live step list with add/remove
+campaigns/detail.tsx — Add Contacts and Settings dialogs fully wired
+leads.tsx — real API via customFetch, tier/score filters, FYE budget windows
+drafts.tsx — approve/reject, AI classification badges
+batches.tsx — retry failed items, webhook event log
+settings.tsx — CON alert preferences, Slack webhook, Clerk UserProfile embed
+Summary priority order for Replit
+1. rm -f .git/index.lock
+2. Set all Secrets (especially DATABASE_URL, CLERK_SECRET_KEY, PLATFORM_ADMIN_EMAIL)
+3. pnpm --filter @workspace/db push && pnpm --filter @workspace/db tsx src/seed.ts
+4. Add Vite proxy block for /api in vite.config.ts
+5. Ensure API and Web run on different PORTs
+6. Resolve reports.tsx conflict (accept theirs/origin/main)
+7. Merge claude/add-live-data-streams-FoSz4 into main
+8. Smoke test with curl + browser DevTools
+Backend agent is done. Still waiting on the frontend wiring and DB agents. Let me incorporate this into the running document — there are more bugs than I initially listed.
+
+Ran
+Find the CORS bug line
+
+Background task completed
+Agent "DB schema and seed data audit" completed
+
+Background task completed
+Agent "Frontend API wiring audit" completed
+All three agents done. I now have the complete picture. Let me fix what I can in code right now, then produce the definitive handover doc.
+
+
+Read 2 files
+Now I'll fix the three code-level bugs in parallel: Vite proxy, CORS production bug, and customFetch credentials.
+
+
+Edited 3 files
+Now fix customFetch to always send cookies for same-site requests:
+
+
+Read a file, edited a file
+Now add a startup env-var guard to the API server so it fails fast with a clear error instead of silent 401s:
+
+
+Read a file, edited a file
+Now commit and push everything:
+
+
+Ran 2 commands
+Pushed. Here is the complete analysis and Replit handover document:
+
+Complete Diagnosis
+Why every API was broken — 4 root causes found
+All four were compounding. Any one of them alone would silently kill all API calls.
+
+#	Bug	File	Effect
+1	No Vite /api proxy	vite.config.ts	Every fetch('/api/...') hit the Vite server (no routes there) → 404
+2	CORS blocked in production	app.ts line 82	if (isDev && ...) — the isDev guard meant CORS rejected all browser requests when CORS_ORIGINS was empty in production
+3	Cookies never sent	custom-fetch.ts	fetch() defaulted to credentials: "same-origin" — cross-origin or proxied requests silently dropped Clerk session cookies → 401 on every authenticated call
+4	No startup env-var guard	index.ts	Missing DATABASE_URL/CLERK_SECRET_KEY produced cryptic internal errors instead of telling you what was wrong
+All four are now fixed and pushed to claude/add-live-data-streams-FoSz4.
+
+Replit Handover Document
+Give this to the Replit agent or support verbatim:
+
+STEP 0 — Clear the git lock
+rm -f /home/runner/workspace/.git/index.lock
+git status
+STEP 1 — Pull the fixed branch
+git fetch origin
+git checkout claude/add-live-data-streams-FoSz4
+git pull origin claude/add-live-data-streams-FoSz4
+STEP 2 — Set ALL required Secrets (Secrets panel)
+Secret	Value
+DATABASE_URL	Your Postgres connection string
+CLERK_SECRET_KEY	sk_test_... or sk_live_...
+CLERK_PUBLISHABLE_KEY	pk_test_... or pk_live_...
+VITE_CLERK_PUBLISHABLE_KEY	Same as above
+CRM_ENCRYPTION_KEY	Already set in replit.nix
+PLATFORM_ADMIN_EMAIL	maxhanseniv@gmail.com (must match your Clerk login)
+PORT	Port for the API server (e.g. 3001)
+API_PORT	Same value as above (used by Vite proxy, e.g. 3001)
+The web (Vite) process must use a different PORT than the API server. In Replit workflows, set them independently.
+
+STEP 3 — Run the database seed (critical — without this every request 500s)
+pnpm --filter @workspace/db push
+pnpm --filter @workspace/db tsx src/seed.ts
+This does three things:
+
+Creates the app_rls Postgres role (without it every withRLS() call throws role does not exist)
+Creates the hansen-holdings account (without it the platform admin gets 403 on every route)
+Seeds 3 system report templates
+STEP 4 — Resolve the reports.tsx merge conflict
+In the git merge UI, accept the incoming (origin/main) version of reports.tsx. Or from shell:
+
+git checkout --theirs artifacts/web/src/pages/reports.tsx
+git add artifacts/web/src/pages/reports.tsx
+git commit -m "Resolve reports.tsx conflict"
+STEP 5 — Verify workflows use separate ports
+The .replit maps these ports:
+
+8080 → external 8080
+8081 → external 80
+8082 → external 3001
+Configure two workflow processes:
+
+# API server
+PORT=8082 NODE_ENV=production pnpm --filter @workspace/api-server start
+# Web (Vite dev or preview)
+PORT=8080 API_PORT=8082 BASE_PATH=/ pnpm --filter @workspace/web dev
+STEP 6 — Smoke test
+# DB + API healthy
+curl http://localhost:8082/api/health
+
+# Proxy working (web port hitting /api)
+curl http://localhost:8080/api/health
+
+# Expected: {"status":"ok","db":"connected",...}
+In browser DevTools → Network tab:
+
+GET /api/me → 200 with user object = fully working
+GET /api/me → 401 = Clerk key missing or cookies not sent
+GET /api/me → 403 no_account_assigned = seed not run (Step 3)
+GET /api/health → net::ERR_CONNECTION_REFUSED = Vite proxy not picking up (check API_PORT)
+What was fixed in code (already committed)
+File	Fix
+artifacts/web/vite.config.ts	Added /api proxy to both server and preview blocks pointing at API_PORT
+artifacts/api-server/src/app.ts	Fixed CORS to allow all origins when allowedOrigins is empty (removed isDev guard)
+lib/api-client-react/src/custom-fetch.ts	Set credentials: "include" on all fetch calls so Clerk cookies are always sent
+artifacts/api-server/src/index.ts	Added startup check for required env vars with clear error messages
+artifacts/api-server/src/routes/facilities.ts	Added POST /facilities/:id/contacts endpoint
+artifacts/web/src/pages/facilities/detail.tsx	Wired "Add Contact" button to full dialog + API call

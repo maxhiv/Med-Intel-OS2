@@ -9,8 +9,7 @@
  */
 import { pool } from "./index";
 
-const PLATFORM_ADMIN_EMAIL =
-  process.env.PLATFORM_ADMIN_EMAIL || "max@hansenholdingsllc.com";
+const PLATFORM_ADMIN_EMAIL = process.env.PLATFORM_ADMIN_EMAIL ?? "";
 
 const PAID_SOURCES = [
   "apollo",
