@@ -561,9 +561,10 @@ async function trgmMatch(): Promise<number> {
   ))).rows;
   console.log(`  Phase 3: ${fmt(Number(unmatchedRow.cnt))} rows unmatched after EIN join; running trgm...`);
 
+  // runPass: inline threshold avoids session SET on a pooled connection.
+  // The GIN trgm index on facilities.name (gin_trgm_ops) supports
+  // similarity(...) >= constant predicates and is used by the query planner.
   async function runPass(threshold: number, hospitalOnly: boolean): Promise<number> {
-    await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = ${threshold}`));
-
     const allEins = (await db.execute<{ ein: string }>(sql.raw(`
       SELECT ein FROM irs_990_raw
       WHERE facility_id IS NULL
@@ -581,9 +582,12 @@ async function trgmMatch(): Promise<number> {
 
       const res = await db.execute<{ cnt: string }>(sql.raw(`
         WITH candidates AS (
-          SELECT r.ein, f.id AS fac_id, similarity(r.org_name, f.name) AS sim
+          SELECT r.ein,
+                 f.id                            AS fac_id,
+                 similarity(r.org_name, f.name)  AS sim
           FROM irs_990_raw r
-          JOIN facilities  f ON r.org_name % f.name
+          JOIN facilities  f
+               ON similarity(r.org_name, f.name) >= ${threshold}
           WHERE r.ein IN (${einList})
             AND r.facility_id IS NULL
             AND r.org_name    IS NOT NULL
@@ -620,7 +624,6 @@ async function trgmMatch(): Promise<number> {
 
   const generalMatched  = await runPass(TRGM_THRESHOLD_GENERAL,  false);
   const hospitalMatched = await runPass(TRGM_THRESHOLD_HOSPITAL, true);
-  await db.execute(sql.raw(`SET pg_trgm.similarity_threshold = 0.3`));
 
   console.log(`  trgm: ${fmt(generalMatched)} general + ${fmt(hospitalMatched)} hospital = ${fmt(generalMatched + hospitalMatched)} total.`);
   return generalMatched + hospitalMatched;
