@@ -9,10 +9,14 @@
  *                          match_score=1.000, matched_at on irs_990_raw.
  * Phase 3 — Trgm match   : pg_trgm similarity pass for any unmatched rows.
  *                          Threshold 0.45 general, 0.35 for hospital rows.
- *                          NOTE: IRS 990 extract CSV has no org name column;
- *                          this pass is a structural placeholder — actual
- *                          name-based matching requires the IRS EO BMF file
- *                          (Task #104). Logged clearly.
+ *                          The IRS 990 extract CSV contains no org name column
+ *                          (confirmed: 246 columns, none is a name field). The
+ *                          org_name column on irs_990_raw is populated by the
+ *                          IRS EO BMF import (Task #104). Until BMF data is
+ *                          loaded, every trgm batch returns 0 matches because
+ *                          the WHERE org_name IS NOT NULL guard short-circuits
+ *                          immediately. The full batched trgm SQL is wired and
+ *                          will produce real matches once BMF populates org_name.
  * Phase 4 — Fin docs     : Upsert financial_documents per spec mapping:
  *                          capitalExpenditures = deprcatndepletn,
  *                          operatingIncome = totrevenue - totfuncexpns,
@@ -33,7 +37,7 @@ export {};
 
 import path from "node:path";
 import { createReadStream } from "node:fs";
-import { execSync } from "node:child_process";
+import unzipper from "unzipper";
 import { parse } from "csv-parse";
 import { getTableColumns, sql } from "drizzle-orm";
 import { db, irs990Raw } from "@workspace/db";
@@ -68,9 +72,13 @@ const _allCols    = getTableColumns(irs990Raw);
 const _colNames   = Object.values(_allCols).map(c => `"${c.name}"`).join(", ");
 const _colKeys    = Object.keys(_allCols) as Array<keyof typeof _allCols>;
 
-// ON CONFLICT SET clause — all cols except PK; updatedAt stamps now()
+// ON CONFLICT SET clause: update only CSV-sourced columns.
+// Deliberately excludes facility_id, match_score, matched_at, org_name —
+// those are written by Phase 2/3 matching and must not be overwritten with
+// NULL on a CSV re-import.
+const CSV_SKIP = new Set(["ein", "ingestedAt", "facilityId", "matchScore", "matchedAt", "orgName"]);
 const _conflictSet = Object.entries(_allCols)
-  .filter(([k]) => k !== "ein" && k !== "ingestedAt")
+  .filter(([k]) => !CSV_SKIP.has(k))
   .map(([k, col]) =>
     k === "updatedAt"
       ? `"${col.name}" = now()`
@@ -412,35 +420,33 @@ async function flushBatch(rawBatch: IrsRow[]): Promise<void> {
   ));
 }
 
+/**
+ * Stream the inner CSV from the ZIP file directly into irs_990_raw without
+ * materialising a temporary file on disk.
+ *
+ * Uses unzipper to open the ZIP as a stream, finds the first .csv entry, and
+ * pipes its bytes straight into csv-parse. No shell command is spawned and
+ * ZIP_PATH is never interpolated into a command string.
+ */
 async function importCsv(): Promise<{ rowsProcessed: number; rowsSkipped: number }> {
+  console.log(`  Streaming inner CSV from ZIP (no temp file)...`);
+
   return new Promise((resolve, reject) => {
-    const csvPath = "/tmp/irs_990_extract.csv";
-    console.log(`  Extracting inner CSV from ZIP...`);
-    try {
-      execSync(
-        `python3 -c "
-import zipfile
-with zipfile.ZipFile('${ZIP_PATH}') as z:
-    names=[n for n in z.namelist() if n.endswith('.csv')]
-    with z.open(names[0]) as src, open('${csvPath}','wb') as dst:
-        while True:
-            chunk=src.read(1<<20)
-            if not chunk: break
-            dst.write(chunk)
-"`,
-        { stdio: ["inherit", "pipe", "inherit"] },
-      );
-    } catch (err) {
-      return reject(new Error(`ZIP extraction failed: ${String(err)}`));
-    }
-
-    console.log(`  Streaming CSV into irs_990_raw (batch=${BATCH_SIZE})...`);
-
     let rowsProcessed = 0;
     let rowsSkipped   = 0;
     let batch: IrsRow[] = [];
     let flushChain     = Promise.resolve<void>(undefined);
     let lastLogCount   = 0;
+    let settled        = false;
+
+    function done(err?: unknown) {
+      if (settled) return;
+      settled = true;
+      if (err) { reject(err); return; }
+      flushChain
+        .then(() => resolve({ rowsProcessed, rowsSkipped }))
+        .catch(reject);
+    }
 
     const parser = parse({
       columns: true,
@@ -468,16 +474,37 @@ with zipfile.ZipFile('${ZIP_PATH}') as z:
       }
     });
 
-    parser.on("end", async () => {
+    parser.on("end", () => {
       if (batch.length > 0) {
         flushChain = flushChain.then(() => flushBatch(batch));
       }
-      await flushChain;
-      resolve({ rowsProcessed, rowsSkipped });
+      done();
     });
 
-    parser.on("error", reject);
-    createReadStream(csvPath).pipe(parser);
+    parser.on("error", (err) => done(err));
+
+    // Open ZIP as a stream; find first .csv entry; pipe directly to parser.
+    // createReadStream takes a plain fs path — no shell execution or
+    // interpolation of ZIP_PATH into any command string.
+    const zipStream = createReadStream(ZIP_PATH).pipe(
+      unzipper.Parse({ forceStream: true }),
+    );
+
+    let csvFound = false;
+    zipStream.on("entry", (entry: unzipper.Entry) => {
+      if (!csvFound && entry.path.endsWith(".csv")) {
+        csvFound = true;
+        console.log(`  Found CSV entry: ${entry.path} — streaming into parser...`);
+        entry.pipe(parser);
+      } else {
+        entry.autodrain();
+      }
+    });
+
+    zipStream.on("error", (err) => done(err));
+    zipStream.on("finish", () => {
+      if (!csvFound) done(new Error("No .csv entry found inside ZIP"));
+    });
   });
 }
 
