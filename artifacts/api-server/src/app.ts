@@ -79,7 +79,7 @@ app.use(
       // Same-origin / curl / server-to-server requests have no Origin header.
       if (!origin) return cb(null, true);
       if (allowedOrigins.has(origin)) return cb(null, true);
-      if (isDev && allowedOrigins.size === 0) return cb(null, true);
+      if (allowedOrigins.size === 0) return cb(null, true);
       return cb(new Error("origin_not_allowed"));
     },
   }),

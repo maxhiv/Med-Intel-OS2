@@ -29,6 +29,10 @@ if (!process.env.BASE_PATH && !isBuild) {
   );
 }
 
+// API server port — defaults to 3001. Set API_PORT in the environment when
+// the api-server and web processes use different PORT values (which they must).
+const apiPort = process.env.API_PORT ?? "3001";
+
 export default defineConfig({
   base: basePath,
   define: {},
@@ -67,6 +71,13 @@ export default defineConfig({
     strictPort: true,
     host: "0.0.0.0",
     allowedHosts: true,
+    proxy: {
+      "/api": {
+        target: `http://localhost:${apiPort}`,
+        changeOrigin: true,
+        secure: false,
+      },
+    },
     fs: {
       strict: true,
     },
@@ -75,5 +86,12 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
+    proxy: {
+      "/api": {
+        target: `http://localhost:${apiPort}`,
+        changeOrigin: true,
+        secure: false,
+      },
+    },
   },
 });
