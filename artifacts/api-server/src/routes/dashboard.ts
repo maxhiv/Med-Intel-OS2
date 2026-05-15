@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { sql, desc, eq, and, inArray } from "drizzle-orm";
+import { sql, desc, eq, and } from "drizzle-orm";
 import {
   db,
   facilities,
@@ -14,99 +14,44 @@ import { requireAccount } from "../middlewares/auth";
 
 const router: IRouter = Router();
 
-async function tenantFacilityIds(accountId: string): Promise<string[]> {
-  const rows = await db
-    .select({ id: accountFacilities.facilityId })
-    .from(accountFacilities)
-    .where(eq(accountFacilities.accountId, accountId));
-  return rows.map((r) => r.id);
-}
-
 router.get("/dashboard/summary", requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
-  const facIds = await tenantFacilityIds(accountId);
 
-  let totalFacilities = 0;
-  let totalContacts = 0;
-  let verifiedContacts = 0;
-  let activeSignals = 0;
-  let avgScore = 0;
-  let signalsByType: { signalType: string; count: number }[] = [];
+  const countsResult = await db.execute(sql`
+    SELECT
+      COUNT(DISTINCT f.id)::int                                             AS "totalFacilities",
+      COUNT(DISTINCT fc.id)::int                                            AS "totalContacts",
+      COUNT(DISTINCT fc.id) FILTER (WHERE fc.human_verified = true)::int   AS "verifiedContacts",
+      COUNT(DISTINCT ps.id) FILTER (WHERE ps.is_active = true)::int        AS "activeSignals",
+      COALESCE(AVG(f.signal_score), 0)::float                              AS "avgScore"
+    FROM account_facilities af
+    JOIN facilities f ON f.id = af.facility_id
+    LEFT JOIN facility_contacts fc ON fc.facility_id = f.id
+    LEFT JOIN purchase_signals ps ON ps.facility_id = f.id
+    WHERE af.account_id = ${accountId}
+  `);
+  const counts = countsResult.rows[0] as Record<string, unknown>;
 
-  if (facIds.length > 0) {
-    const [fc] = await db
-      .select({ c: sql<number>`count(*)::int` })
-      .from(facilities)
-      .where(inArray(facilities.id, facIds));
-    totalFacilities = fc.c;
-
-    const [tc] = await db
-      .select({ c: sql<number>`count(*)::int` })
-      .from(facilityContacts)
-      .where(inArray(facilityContacts.facilityId, facIds));
-    totalContacts = tc.c;
-
-    const [vc] = await db
-      .select({ c: sql<number>`count(*)::int` })
-      .from(facilityContacts)
-      .where(
-        and(
-          inArray(facilityContacts.facilityId, facIds),
-          eq(facilityContacts.humanVerified, true),
-        ),
-      );
-    verifiedContacts = vc.c;
-
-    const [as_] = await db
-      .select({ c: sql<number>`count(*)::int` })
-      .from(purchaseSignals)
-      .where(
-        and(
-          inArray(purchaseSignals.facilityId, facIds),
-          eq(purchaseSignals.isActive, true),
-        ),
-      );
-    activeSignals = as_.c;
-
-    const [avg] = await db
-      .select({ a: sql<number>`COALESCE(AVG(signal_score), 0)::float` })
-      .from(facilities)
-      .where(inArray(facilities.id, facIds));
-    avgScore = avg.a;
-
-    signalsByType = await db
-      .select({
-        signalType: sql<string>`signal_type::text`,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(purchaseSignals)
-      .where(
-        and(
-          inArray(purchaseSignals.facilityId, facIds),
-          eq(purchaseSignals.isActive, true),
-        ),
-      )
-      .groupBy(purchaseSignals.signalType);
-  }
+  const signalsByTypeResult = await db.execute(sql`
+    SELECT ps.signal_type::text AS "signalType", COUNT(*)::int AS count
+    FROM account_facilities af
+    JOIN purchase_signals ps ON ps.facility_id = af.facility_id
+    WHERE af.account_id = ${accountId}
+      AND ps.is_active = true
+    GROUP BY ps.signal_type
+  `);
+  const signalsByType = signalsByTypeResult.rows as Array<Record<string, unknown>>;
 
   const [pendingDrafts] = await db
     .select({ c: sql<number>`count(*)::int` })
     .from(outreachDrafts)
-    .where(
-      and(
-        eq(outreachDrafts.accountId, accountId),
-        eq(outreachDrafts.status, "pending"),
-      ),
-    );
+    .where(and(eq(outreachDrafts.accountId, accountId), eq(outreachDrafts.status, "pending")));
+
   const [approvedDrafts] = await db
     .select({ c: sql<number>`count(*)::int` })
     .from(outreachDrafts)
-    .where(
-      and(
-        eq(outreachDrafts.accountId, accountId),
-        eq(outreachDrafts.status, "approved"),
-      ),
-    );
+    .where(and(eq(outreachDrafts.accountId, accountId), eq(outreachDrafts.status, "approved")));
+
   const [myCampaigns] = await db
     .select({ c: sql<number>`count(*)::int` })
     .from(campaigns)
@@ -116,16 +61,8 @@ router.get("/dashboard/summary", requireAccount, async (req, res) => {
   const [batchesToday] = await db
     .select({ c: sql<number>`count(*)::int` })
     .from(syncBatches)
-    .where(
-      and(
-        eq(syncBatches.accountId, accountId),
-        eq(syncBatches.batchDate, today),
-      ),
-    );
+    .where(and(eq(syncBatches.accountId, accountId), eq(syncBatches.batchDate, today)));
 
-  // Engagement aggregates over the last 30 days. `sentCount` is anything that
-  // left the platform (synced to a CRM); the rates are computed off that base
-  // so they reflect actual deliverability rather than total drafts generated.
   const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const [eng] = await db
     .select({
@@ -136,26 +73,28 @@ router.get("/dashboard/summary", requireAccount, async (req, res) => {
     })
     .from(outreachDrafts)
     .where(eq(outreachDrafts.accountId, accountId));
+
   const sentCount = eng?.sent ?? 0;
   const openedCount = eng?.opened ?? 0;
   const repliedCount = eng?.replied ?? 0;
   const bouncedCount = eng?.bounced ?? 0;
-  const replyRate =
-    sentCount > 0 ? Number(((repliedCount / sentCount) * 100).toFixed(1)) : 0;
-  const bounceRate =
-    sentCount > 0 ? Number(((bouncedCount / sentCount) * 100).toFixed(1)) : 0;
+  const replyRate = sentCount > 0 ? Number(((repliedCount / sentCount) * 100).toFixed(1)) : 0;
+  const bounceRate = sentCount > 0 ? Number(((bouncedCount / sentCount) * 100).toFixed(1)) : 0;
 
   res.json({
-    totalFacilities,
-    totalContacts,
-    verifiedContacts,
-    activeSignals,
+    totalFacilities: counts?.totalFacilities ?? 0,
+    totalContacts: counts?.totalContacts ?? 0,
+    verifiedContacts: counts?.verifiedContacts ?? 0,
+    activeSignals: counts?.activeSignals ?? 0,
     pendingDrafts: pendingDrafts.c,
     approvedDrafts: approvedDrafts.c,
     batchesToday: batchesToday.c,
     myCampaigns: myCampaigns.c,
-    avgSignalScore: Number(avgScore.toFixed(1)),
-    signalsByType,
+    avgSignalScore: Number(Number(counts?.avgScore ?? 0).toFixed(1)),
+    signalsByType: signalsByType.map((r) => ({
+      signalType: r.signalType,
+      count: r.count,
+    })),
     sentCount,
     openedCount,
     repliedCount,
@@ -168,11 +107,7 @@ router.get("/dashboard/summary", requireAccount, async (req, res) => {
 router.get("/dashboard/recent-signals", requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
   const limit = Math.min(Number(req.query.limit) || 20, 100);
-  const facIds = await tenantFacilityIds(accountId);
-  if (facIds.length === 0) {
-    res.json([]);
-    return;
-  }
+
   const rows = await db
     .select({
       id: purchaseSignals.id,
@@ -186,26 +121,25 @@ router.get("/dashboard/recent-signals", requireAccount, async (req, res) => {
       detectedAt: purchaseSignals.detectedAt,
       isActive: purchaseSignals.isActive,
     })
-    .from(purchaseSignals)
+    .from(accountFacilities)
+    .innerJoin(purchaseSignals, eq(purchaseSignals.facilityId, accountFacilities.facilityId))
     .innerJoin(facilities, eq(facilities.id, purchaseSignals.facilityId))
     .where(
       and(
+        eq(accountFacilities.accountId, accountId),
         eq(purchaseSignals.isActive, true),
-        inArray(purchaseSignals.facilityId, facIds),
       ),
     )
     .orderBy(desc(purchaseSignals.detectedAt))
     .limit(limit);
+
   res.json(rows);
 });
 
 router.get("/dashboard/top-facilities", requireAccount, async (req, res) => {
   const accountId = req.currentAccount!.id;
   const limit = Math.min(Number(req.query.limit) || 10, 50);
-  // Rank by the tenant-scoped combination of objective facility score plus
-  // this account's engagement score. Engagement is per-tenant and lives on
-  // `account_facilities.engagement_score`, so other tenants' replies and
-  // bounces never influence this ordering.
+
   const rows = await db
     .select({
       id: facilities.id,
@@ -227,6 +161,7 @@ router.get("/dashboard/top-facilities", requireAccount, async (req, res) => {
       ),
     )
     .limit(limit);
+
   res.json(rows);
 });
 
