@@ -1,23 +1,31 @@
 /**
- * Continuous bulk ingestor — loops the /signals/ingest/bulk endpoint for
- * target states until every facility has been scraped at least once.
+ * Continuous bulk ingestor — calls ingestors directly (no HTTP) so there is
+ * no request-timeout ceiling.  Loops until every IL+TX facility has been
+ * scraped at least once, then exits cleanly.
  *
- * Designed for filling a fresh database with IL + TX signals before lead
- * qualification begins.  Run it, let it churn, and stop it once the
- * coverage table shows 100 % for both states.
- *
- * Auth: uses INTERNAL_ADMIN_KEY (Replit Secret) — must be set before running.
- *
- * Usage:
+ * Run with:
  *   pnpm --filter @workspace/api-server run bulk-ingest
  *
  * Environment overrides:
  *   INGEST_STATES         Comma-sep state codes  (default: IL,TX)
  *   INGEST_LIMIT          Facilities per source   (default: 500)
- *   INGEST_ROUND_PAUSE_MS Pause between rounds    (default: 15000)
+ *   INGEST_ROUND_PAUSE_MS Pause between rounds    (default: 10000)
  */
 
 export {};
+
+import { sql } from "drizzle-orm";
+import { db } from "@workspace/db";
+import { recomputeAllScores } from "../services/signalScorer";
+import { ingestFdaClassification } from "../services/fdaClassificationIngestor";
+import { ingestNppes }             from "../services/nppesIngestor";
+import { ingestCmsData }           from "../services/cmsDataIngestor";
+import { ingestUsaSpending }       from "../services/usaSpendingIngestor";
+import { ingestClinicalTrials }    from "../services/clinicalTrialsIngestor";
+import { ingestSecEdgar }          from "../services/secEdgarIngestor";
+import { ingestPropublica990 }     from "../services/propublica990Ingestor";
+import { ingestHrsa }              from "../services/hrsaIngestor";
+import { ingestUsda }              from "../services/usdaIngestor";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -26,100 +34,59 @@ const STATES = (process.env.INGEST_STATES ?? "IL,TX")
   .map((s) => s.trim().toUpperCase())
   .filter(Boolean);
 
-const LIMIT            = Math.max(1, Math.min(Number(process.env.INGEST_LIMIT ?? 500), 2000));
-const ROUND_PAUSE_MS   = Math.max(5000, Number(process.env.INGEST_ROUND_PAUSE_MS ?? 15_000));
-
-// ─── Validate env ─────────────────────────────────────────────────────────────
-
-const internalKey = process.env.INTERNAL_ADMIN_KEY;
-if (!internalKey) {
-  console.error(
-    "ERROR: INTERNAL_ADMIN_KEY secret is not set.\n" +
-    "Add it in the Replit Secrets panel, then restart and re-run.",
-  );
-  process.exit(1);
-}
-
-const port = process.env.PORT ?? "8080";
-const bulkUrl     = `http://localhost:${port}/api/signals/ingest/bulk`;
-const coverageUrl = `http://localhost:${port}/api/admin/signal-coverage`;
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface SourceResult {
-  status: "ok" | "error";
-  signalsInserted: number;
-  facilitiesUpdated: number;
-  errors: number;
-  errorMsg?: string;
-  durationMs: number;
-}
-
-interface BulkResponse {
-  states: string[];
-  limitPerSource: number;
-  totalSignals: number;
-  totalFacilitiesUpdated: number;
-  totalErrors: number;
-  sources: Record<string, SourceResult>;
-}
-
-interface CoverageRow {
-  state: string;
-  total: number;
-  scraped: number;
-  withSignals: number;
-}
+const LIMIT          = Math.max(1, Math.min(Number(process.env.INGEST_LIMIT ?? 500), 2000));
+const ROUND_PAUSE_MS = Math.max(5_000, Number(process.env.INGEST_ROUND_PAUSE_MS ?? 10_000));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-function fmt(n: number) {
-  return n.toLocaleString("en-US");
-}
-
+function fmt(n: number) { return n.toLocaleString("en-US"); }
 function pct(num: number, den: number) {
-  if (den === 0) return "—";
-  return `${((num / den) * 100).toFixed(1)}%`;
+  return den === 0 ? "—" : `${((num / den) * 100).toFixed(1)}%`;
 }
-
 function bar(num: number, den: number, width = 20) {
   if (den === 0) return "[" + " ".repeat(width) + "]";
   const filled = Math.round((num / den) * width);
   return "[" + "█".repeat(filled) + "░".repeat(width - filled) + "]";
 }
 
-// ─── Coverage check via DB (direct query through the API) ────────────────────
+// ─── Coverage query ───────────────────────────────────────────────────────────
 
-async function fetchCoverage(): Promise<CoverageRow[] | null> {
-  try {
-    const res = await fetch(coverageUrl, {
-      headers: {
-        "x-internal-admin-key": internalKey!,
-        Accept: "application/json",
-      },
-    });
-    if (!res.ok) return null;
-    const json = await res.json() as { coverage?: CoverageRow[] };
-    return json.coverage ?? null;
-  } catch {
-    return null;
-  }
+interface CoverageRow { state: string; total: number; scraped: number; withSignals: number }
+
+async function getCoverage(): Promise<CoverageRow[]> {
+  const stateList = STATES.map((s) => `'${s}'`).join(",");
+  const result = await db.execute<{
+    state: string; total: string; scraped: string; with_signals: string;
+  }>(sql.raw(`
+    SELECT
+      f.state,
+      COUNT(*)::int                                               AS total,
+      COUNT(*) FILTER (WHERE f.last_scraped_at IS NOT NULL)::int AS scraped,
+      COUNT(DISTINCT ps.facility_id)::int                        AS with_signals
+    FROM facilities f
+    LEFT JOIN purchase_signals ps ON ps.facility_id = f.id AND ps.is_active = true
+    WHERE f.state IN (${stateList})
+    GROUP BY f.state
+    ORDER BY f.state
+  `));
+  return (result.rows as { state: string; total: string; scraped: string; with_signals: string }[]).map((r) => ({
+    state: r.state,
+    total: Number(r.total),
+    scraped: Number(r.scraped),
+    withSignals: Number(r.with_signals),
+  }));
 }
 
 function printCoverage(rows: CoverageRow[]) {
-  const targeted = rows.filter((r) => STATES.includes(r.state));
-  if (targeted.length === 0) return;
-  console.log("\n  State   Total       Scraped        Signals");
-  console.log("  ─────────────────────────────────────────────────────");
-  for (const r of targeted) {
-    const scrapedBar = bar(r.scraped, r.total);
-    const scrapedPct = pct(r.scraped, r.total);
-    const sigPct     = pct(r.withSignals, r.total);
+  console.log("\n  State   Total      Scraped                       Signals");
+  console.log("  ──────────────────────────────────────────────────────────");
+  for (const r of rows) {
     console.log(
-      `  ${r.state.padEnd(6)} ${fmt(r.total).padStart(7)}   ` +
-      `${scrapedBar} ${scrapedPct.padStart(6)}   signals: ${sigPct.padStart(6)} (${fmt(r.withSignals)})`,
+      `  ${r.state.padEnd(6)} ${fmt(r.total).padStart(7)}  ` +
+      `${bar(r.scraped, r.total)} ${pct(r.scraped, r.total).padStart(6)}  ` +
+      `signals: ${pct(r.withSignals, r.total).padStart(6)} (${fmt(r.withSignals)})`,
     );
   }
 }
@@ -132,113 +99,116 @@ function allScraped(rows: CoverageRow[]) {
   );
 }
 
-// ─── One ingestion round ──────────────────────────────────────────────────────
+// ─── One round ────────────────────────────────────────────────────────────────
 
-async function runRound(round: number): Promise<BulkResponse | null> {
-  console.log(`\n  Round ${round} — ingesting ${STATES.join(" + ")} (limit ${fmt(LIMIT)}/source)`);
+interface RunResult { name: string; signals: number; facilities: number; errors: number; ms: number }
+
+async function runOne(
+  name: string,
+  fn: () => Promise<{ signalsInserted: number; errors: number; facilitiesScanned?: number }>,
+): Promise<RunResult> {
   const t0 = Date.now();
   try {
-    const res = await fetch(bulkUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-internal-admin-key": internalKey!,
-      },
-      body: JSON.stringify({ states: STATES, limitPerSource: LIMIT, recomputeScores: false }),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      console.error(`  HTTP ${res.status}: ${body.slice(0, 200)}`);
-      return null;
-    }
-    const json = await res.json() as BulkResponse;
-    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-    console.log(`  Done in ${elapsed}s — +${fmt(json.totalSignals)} signals, ${fmt(json.totalFacilitiesUpdated)} facilities touched`);
-
-    // Print per-source breakdown
-    const maxName = Math.max(...Object.keys(json.sources).map((n) => n.length));
-    for (const [name, r] of Object.entries(json.sources)) {
-      if (name === "score_recompute") continue;
-      const icon  = r.status === "ok" ? "  OK" : " ERR";
-      const sigs  = r.signalsInserted > 0 ? `+${fmt(r.signalsInserted)} sigs`.padStart(14) : "             ";
-      const upd   = r.facilitiesUpdated > 0 ? `${fmt(r.facilitiesUpdated)} fac`.padStart(10) : "         ";
-      const errs  = r.errors > 0 ? `  ${r.errors} err` : "";
-      const ms    = `${(r.durationMs / 1000).toFixed(1)}s`.padStart(7);
-      console.log(`  ${icon}  ${name.padEnd(maxName)}  ${sigs}  ${upd} ${ms}${errs}`);
-    }
-
-    return json;
+    const r = await fn();
+    return { name, signals: r.signalsInserted, facilities: r.facilitiesScanned ?? 0, errors: r.errors, ms: Date.now() - t0 };
   } catch (err) {
-    console.error(`  Failed to reach API server: ${String(err)}`);
-    return null;
+    console.error(`  [${name}] threw: ${String(err).slice(0, 120)}`);
+    return { name, signals: 0, facilities: 0, errors: 1, ms: Date.now() - t0 };
   }
 }
 
-// ─── Main loop ────────────────────────────────────────────────────────────────
+async function runRound(round: number): Promise<{ signals: number; facilities: number }> {
+  console.log(`\n  ── Round ${round} ──────────────────────────────────────────────`);
 
-console.log("\n" + "═".repeat(70));
+  const opts = { limit: LIMIT, states: STATES };
+
+  // Batch A: parallel (fast / no per-facility HTTP)
+  const batchA = await Promise.all([
+    runOne("fda_class",   () => ingestFdaClassification(opts)),
+    runOne("nppes",       () => ingestNppes(opts)),
+  ]);
+
+  // Batch B: parallel (moderate rate)
+  const batchB = await Promise.all([
+    runOne("cms_data",      () => ingestCmsData(opts)),
+    runOne("usa_spending",  () => ingestUsaSpending(opts)),
+    runOne("clinical_trials", () => ingestClinicalTrials(opts)),
+    runOne("sec_edgar",     () => ingestSecEdgar(opts)),
+  ]);
+
+  // Batch C: sequential (rate-sensitive)
+  const batchC: RunResult[] = [];
+  batchC.push(await runOne("propublica_990", () => ingestPropublica990(opts)));
+  batchC.push(await runOne("hrsa",           () => ingestHrsa(opts)));
+  batchC.push(await runOne("usda",           () => ingestUsda(opts)));
+
+  const all = [...batchA, ...batchB, ...batchC];
+
+  // Print per-source table
+  const maxName = Math.max(...all.map((r) => r.name.length));
+  for (const r of all) {
+    const icon = r.errors > 0 ? " ERR" : "  OK";
+    const sigs = r.signals > 0  ? `+${fmt(r.signals)} sigs`.padStart(14) : "".padStart(14);
+    const fac  = r.facilities > 0 ? `${fmt(r.facilities)} fac`.padStart(10) : "".padStart(10);
+    const errs = r.errors > 0  ? `  ${r.errors} err` : "";
+    const ms   = `${(r.ms / 1000).toFixed(1)}s`.padStart(7);
+    console.log(`  ${icon}  ${r.name.padEnd(maxName)}  ${sigs}  ${fac} ${ms}${errs}`);
+  }
+
+  const totalSignals    = all.reduce((s, r) => s + r.signals, 0);
+  const totalFacilities = all.reduce((s, r) => s + r.facilities, 0);
+  console.log(`\n  Round ${round} done — +${fmt(totalSignals)} signals, ${fmt(totalFacilities)} facilities touched`);
+  return { signals: totalSignals, facilities: totalFacilities };
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
+console.log("\n" + "═".repeat(68));
 console.log("  MedIntel OS — Continuous Bulk Ingestor");
-console.log(`  Target states : ${STATES.join(", ")}`);
+console.log(`  States        : ${STATES.join(", ")}`);
 console.log(`  Limit/source  : ${fmt(LIMIT)} facilities per round`);
 console.log(`  Round pause   : ${(ROUND_PAUSE_MS / 1000).toFixed(0)}s`);
-console.log(`  Endpoint      : ${bulkUrl}`);
-console.log("═".repeat(70));
+console.log("═".repeat(68));
 
-// Wait for the API server to be ready (up to 30s)
-console.log("\nWaiting for API server to be ready...");
-for (let attempt = 0; attempt < 30; attempt++) {
-  try {
-    const probe = await fetch(`http://localhost:${port}/api/health`);
-    if (probe.ok) { console.log("  API server is up.\n"); break; }
-  } catch { /* not ready yet */ }
-  if (attempt === 29) {
-    console.error("API server did not become ready in 30s. Exiting.");
-    process.exit(1);
-  }
-  await sleep(1000);
+// Confirm DB is reachable before starting
+try {
+  await db.execute(sql`SELECT 1`);
+  console.log("\n  DB connected.\n");
+} catch (err) {
+  console.error("DB connection failed:", String(err));
+  process.exit(1);
 }
 
 let round = 0;
-let totalSignals = 0;
-let totalFacilities = 0;
-let consecutiveNulls = 0;
+let cumSignals = 0;
+let cumFacilities = 0;
 
 while (true) {
   round++;
 
-  // Coverage report
-  const coverage = await fetchCoverage();
-  if (coverage) {
+  // Coverage snapshot
+  let coverage: CoverageRow[] = [];
+  try {
+    coverage = await getCoverage();
     printCoverage(coverage);
-    if (allScraped(coverage)) {
-      console.log("\n" + "═".repeat(70));
-      console.log("  ALL FACILITIES SCRAPED — Database is fully populated!");
-      console.log(`  ${fmt(totalSignals)} total signals inserted across ${round - 1} rounds.`);
-      console.log("═".repeat(70) + "\n");
-      process.exit(0);
-    }
-  } else {
-    console.log("  (coverage endpoint unavailable — continuing)");
+  } catch (err) {
+    console.warn("  Coverage query failed:", String(err));
   }
 
-  // Run the round
-  const result = await runRound(round);
-
-  if (result) {
-    totalSignals    += result.totalSignals;
-    totalFacilities += result.totalFacilitiesUpdated;
-    consecutiveNulls = 0;
-  } else {
-    consecutiveNulls++;
-    if (consecutiveNulls >= 5) {
-      console.error("\nAPI server unreachable 5 rounds in a row — giving up.");
-      process.exit(1);
-    }
-    console.log(`  Retrying in ${(ROUND_PAUSE_MS / 1000).toFixed(0)}s...`);
+  if (coverage.length > 0 && allScraped(coverage)) {
+    console.log("\n" + "═".repeat(68));
+    console.log("  ALL FACILITIES SCRAPED — recomputing scores...");
+    await recomputeAllScores();
+    console.log(`  Done. ${fmt(cumSignals)} total signals across ${round - 1} rounds.`);
+    console.log("═".repeat(68) + "\n");
+    process.exit(0);
   }
 
-  console.log(`\n  Cumulative: ${fmt(totalSignals)} signals, ${fmt(totalFacilities)} facility-touches across ${round} rounds.`);
-  console.log(`  Pausing ${(ROUND_PAUSE_MS / 1000).toFixed(0)}s before next round...`);
+  const { signals, facilities } = await runRound(round);
+  cumSignals    += signals;
+  cumFacilities += facilities;
 
+  console.log(`\n  Cumulative: ${fmt(cumSignals)} signals, ${fmt(cumFacilities)} facility-touches, ${round} rounds`);
+  console.log(`  Pausing ${(ROUND_PAUSE_MS / 1000).toFixed(0)}s...\n`);
   await sleep(ROUND_PAUSE_MS);
 }
