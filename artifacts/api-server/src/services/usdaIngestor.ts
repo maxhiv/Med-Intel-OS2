@@ -14,10 +14,17 @@ import { logger } from "../lib/logger";
 const USA_SPENDING_URL =
   "https://api.usaspending.gov/api/v2/search/spending_by_award/";
 const MIN_AWARD_AMOUNT = 100_000;
-const DELAY_MS = 200;
+const DELAY_MS = 300;
+const FETCH_TIMEOUT_MS = 30_000;
 const MONTHS_BACK = 24;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: ac.signal }).finally(() => clearTimeout(t));
+}
 
 export interface UsdaIngestResult {
   signalsInserted: number;
@@ -61,10 +68,14 @@ async function matchFacility(recipientName: string | undefined): Promise<string 
 }
 
 export async function ingestUsda(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; states?: string[] } = {},
 ): Promise<UsdaIngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
   const result: UsdaIngestResult = { signalsInserted: 0, errors: 0 };
+
+  const stateFilter = opts.states?.length
+    ? { recipient_location_state_codes: opts.states }
+    : {};
 
   const body = {
     filters: {
@@ -79,6 +90,7 @@ export async function ingestUsda(
       keywords: ["community facility", "health", "hospital", "rural health", "clinic"],
       time_period: [{ start_date: cutoffDate(), end_date: new Date().toISOString().slice(0, 10) }],
       award_amounts: [{ lower_bound: MIN_AWARD_AMOUNT }],
+      ...stateFilter,
     },
     fields: ["Award_ID", "Recipient_Name", "Award_Amount", "Start_Date", "Description"],
     page: 1,
@@ -88,12 +100,12 @@ export async function ingestUsda(
   };
 
   try {
-    const res = await fetch(USA_SPENDING_URL, {
+    const res = await fetchWithTimeout(USA_SPENDING_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        "User-Agent": "MedIntel/1.0",
+        "User-Agent": `MedIntelOS ${process.env.PLATFORM_ADMIN_EMAIL ?? "research@medintel.ai"}`,
       },
       body: JSON.stringify(body),
     });

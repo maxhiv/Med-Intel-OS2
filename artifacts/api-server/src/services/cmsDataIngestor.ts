@@ -15,9 +15,16 @@ import { db, facilities, purchaseSignals } from "@workspace/db";
 import { logger } from "../lib/logger";
 
 const CMS_API = "https://data.cms.gov/resource/xubh-q36u.json";
-const DELAY_MS = 200;
+const DELAY_MS = 250;
+const FETCH_TIMEOUT_MS = 15_000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: ac.signal }).finally(() => clearTimeout(t));
+}
 
 interface CmsHospital {
   provider_id?: string;
@@ -35,7 +42,7 @@ export interface IngestResult {
 }
 
 export async function ingestCmsData(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; states?: string[] } = {},
 ): Promise<IngestResult> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 500));
   const result: IngestResult = {
@@ -44,10 +51,14 @@ export async function ingestCmsData(
     errors: 0,
   };
 
+  const stateFilter = opts.states?.length
+    ? sql`${facilities.state} = ANY(ARRAY[${sql.raw(opts.states.map(s => `'${s}'`).join(","))}])`
+    : sql`${facilities.state} IS NOT NULL`;
+
   const targets = await db
     .select()
     .from(facilities)
-    .where(sql`${facilities.state} IS NOT NULL`)
+    .where(stateFilter)
     .orderBy(sql`${facilities.lastScrapedAt} NULLS FIRST`)
     .limit(limit);
 
@@ -62,10 +73,10 @@ export async function ingestCmsData(
         $where: where,
         $limit: "3",
       });
-      const res = await fetch(`${CMS_API}?${params}`, {
+      const res = await fetchWithTimeout(`${CMS_API}?${params}`, {
         headers: {
           Accept: "application/json",
-          "User-Agent": "MedIntel/1.0",
+          "User-Agent": `MedIntelOS ${process.env.PLATFORM_ADMIN_EMAIL ?? "research@medintel.ai"}`,
         },
       });
       if (!res.ok) {
@@ -114,7 +125,6 @@ export async function ingestCmsData(
     } catch (err) {
       logger.warn({ err, facilityId: f.id }, "cms_data fetch error");
       result.errors += 1;
-      continue;
     }
 
     await sleep(DELAY_MS);
