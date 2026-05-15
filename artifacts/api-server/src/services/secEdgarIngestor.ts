@@ -20,7 +20,7 @@ import { logger } from "../lib/logger";
 
 const EDGAR_SEARCH = "https://efts.sec.gov/LATEST/search-index";
 const EDGAR_FORMS = "10-K,8-K,S-1,FWP,424B3,424B4,424B5";
-const DELAY_MS = 200;
+const DELAY_MS = 500;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -61,19 +61,25 @@ async function searchEdgar(
     startdt: oneYearAgo(),
     enddt: today(),
   });
-  const res = await fetch(`${EDGAR_SEARCH}?${params}`, {
-    headers: { Accept: "application/json", "User-Agent": "MedIntelOS research@medintel.ai" },
-  });
-  if (!res.ok) {
-    return { accessions: [], httpError: res.status !== 404 };
+  const url = `${EDGAR_SEARCH}?${params}`;
+  const headers = { Accept: "application/json", "User-Agent": "MedIntelOS research@medintel.ai" };
+
+  // Retry up to 3 times on 500 with exponential backoff (500ms, 1s, 2s).
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(500 * Math.pow(2, attempt - 1));
+    const res = await fetch(url, { headers });
+    if (res.status === 500) continue;          // transient — retry
+    if (!res.ok) return { accessions: [], httpError: res.status !== 404 };
+    const json = (await res.json()) as EdgarResponse;
+    const hits = json.hits?.hits ?? [];
+    const accessions = hits
+      .slice(0, maxHits)
+      .map((h) => h._source?.accession_no ?? "")
+      .filter(Boolean);
+    return { accessions, httpError: false };
   }
-  const json = (await res.json()) as EdgarResponse;
-  const hits = json.hits?.hits ?? [];
-  const accessions = hits
-    .slice(0, maxHits)
-    .map((h) => h._source?.accession_no ?? "")
-    .filter(Boolean);
-  return { accessions, httpError: false };
+  // All retries exhausted — treat as a transient skip, not a hard error.
+  return { accessions: [], httpError: false };
 }
 
 export interface IngestResult {
@@ -105,7 +111,7 @@ export async function ingestSecEdgar(
     result.facilitiesScanned += 1;
     try {
       // Search by facility's own name.
-      const facilityTerm = f.name.split(/[,\-]/)[0].trim();
+      const facilityTerm = f.name.split(/[,\-]/)[0].trim().replace(/'/g, "").slice(0, 50);
       const { accessions: directList, httpError: directErr } = await searchEdgar(facilityTerm, 5);
       if (directErr) result.errors += 1;
       const directAccessions = new Set(directList);
@@ -116,7 +122,7 @@ export async function ingestSecEdgar(
       const systemTerms = new Set<string>();
 
       if (f.systemName) {
-        const st = f.systemName.split(/[,\-]/)[0].trim();
+        const st = f.systemName.split(/[,\-]/)[0].trim().replace(/'/g, "").slice(0, 50);
         if (st.toLowerCase() !== facilityTerm.toLowerCase()) systemTerms.add(st);
       }
 
@@ -132,7 +138,7 @@ export async function ingestSecEdgar(
           if (parentName) parentNameCache.set(f.parentSystemId, parentName);
         }
         if (parentName) {
-          const pt = parentName.split(/[,\-]/)[0].trim();
+          const pt = parentName.split(/[,\-]/)[0].trim().replace(/'/g, "").slice(0, 50);
           if (pt.toLowerCase() !== facilityTerm.toLowerCase()) systemTerms.add(pt);
         }
       }
