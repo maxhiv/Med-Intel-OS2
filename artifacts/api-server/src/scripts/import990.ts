@@ -872,36 +872,30 @@ async function emitSignals(): Promise<{ total: number; byType: Record<string, nu
       AND totrevenue > ${FINANCIAL_HEALTH_MIN_REVENUE}
   `));
 
+  // financial_health: batch INSERT via VALUES list (500 rows/batch) to avoid
+  // per-row round-trips. Confidence is decile-scaled in JS before building SQL.
   let healthCount = 0;
-  // Batch in groups of 500 for efficiency
-  const healthBatch = healthRows.rows;
-  for (let i = 0; i < healthBatch.length; i += 500) {
-    const chunk = healthBatch.slice(i, i + 500);
-    for (const r of chunk) {
-      const rev  = Number(r.totrevenue ?? 0);
-      const conf = revenueDecileConf(rev);
+  const HEALTH_BATCH = 500;
+  const healthBatch  = healthRows.rows;
+  for (let i = 0; i < healthBatch.length; i += HEALTH_BATCH) {
+    const chunk = healthBatch.slice(i, i + HEALTH_BATCH);
+    const values = chunk.map((r) => {
+      const conf = revenueDecileConf(Number(r.totrevenue ?? 0));
       const meta = JSON.stringify({
-        totrevenue:     r.totrevenue    ?? null,
-        totnetassetend: r.totnetassetend ?? null,
-        totliabend:     r.totliabend    ?? null,
-      });
-      await db.execute(sql.raw(`
-        INSERT INTO purchase_signals
-          (facility_id, signal_type, signal_value, confidence, source, metadata, is_active, detected_at)
-        VALUES (
-          '${r.facility_id}',
-          'financial_health',
-          'irs_990:health:${r.ein}',
-          ${conf},
-          'irs_990',
-          '${meta.replace(/'/g, "''")}',
-          true,
-          now()
-        )
-        ON CONFLICT DO NOTHING
-      `));
-      healthCount++;
-    }
+        totrevenue:      r.totrevenue     ?? null,
+        totnetassetend:  r.totnetassetend ?? null,
+        totliabend:      r.totliabend     ?? null,
+      }).replace(/'/g, "''");
+      return `('${r.facility_id}','financial_health','irs_990:health:${r.ein}',${conf},'irs_990','${meta}',true,now())`;
+    }).join(",");
+    const res = await db.execute<{ id: string }>(sql.raw(`
+      INSERT INTO purchase_signals
+        (facility_id, signal_type, signal_value, confidence, source, metadata, is_active, detected_at)
+      VALUES ${values}
+      ON CONFLICT DO NOTHING
+      RETURNING id
+    `));
+    healthCount += res.rows.length;
   }
   counts["financial_health"] = healthCount;
   console.log(`    financial_health   : ${fmt(healthCount)}`);
@@ -993,6 +987,14 @@ const { updated } = await recomputeAllScores();
 console.log(`  Scores updated for ${fmt(updated)} facilities.`);
 
 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-console.log(`\n  Summary: ${fmt(Number(raw.total))} EINs | ${fmt(totalMatched)} matched | ${fmt(signalTotal)} signals | ${elapsed}s`);
+console.log("\n" + "═".repeat(68));
+console.log("  Final metrics:");
+console.log(`    Rows processed (irs_990_raw)  : ${fmt(Number(raw.total))}`);
+console.log(`    EINs with org_name (BMF)      : ${fmt(bmfNamed)}`);
+console.log(`    Facilities matched — direct   : ${fmt(totalMatched)}`);
+console.log(`    Facilities matched — trgm     : ${fmt(trgmMatched)}`);
+console.log(`    Facilities matched — total    : ${fmt(totalMatched + trgmMatched)}`);
+console.log(`    Signals inserted              : ${fmt(signalTotal)}`);
+console.log(`    Elapsed                       : ${elapsed}s`);
 console.log("═".repeat(68) + "\n");
 process.exit(0);
