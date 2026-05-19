@@ -8,7 +8,7 @@
  *
  * Docs: https://npiregistry.cms.hhs.gov/api-page
  */
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import {
   db,
   facilities,
@@ -17,6 +17,7 @@ import {
   type Facility,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { enrichContact } from "./enrichment";
 
 const NPPES_API = "https://npiregistry.cms.hhs.gov/api/";
 
@@ -179,35 +180,49 @@ export async function ingestNppes(opts: {
     for (const record of nppesResults) {
       if (record.basic?.status !== "A") continue;
       const b = record.basic;
-      const firstName = b.authorized_official_first_name?.trim();
-      const lastName  = b.authorized_official_last_name?.trim();
+      // Normalize to null (not empty string) so the dedupe WHERE clause matches
+      // what we actually store and reruns don't create duplicates.
+      const firstName = b.authorized_official_first_name?.trim() || null;
+      const lastName  = b.authorized_official_last_name?.trim()  || null;
       if (!firstName && !lastName) continue;
 
-      // Upsert: skip if this name is already stored for this facility.
+      // Idempotent check: match on facilityId + (firstName IS NULL or firstName = ?)
+      // using isNull() when the value is absent so the WHERE clause mirrors the
+      // stored NULL rather than comparing against an empty string.
       const [existing] = await db
         .select({ id: facilityContacts.id })
         .from(facilityContacts)
         .where(
           and(
             eq(facilityContacts.facilityId, f.id),
-            eq(facilityContacts.firstName, firstName ?? ""),
-            eq(facilityContacts.lastName,  lastName  ?? ""),
+            firstName ? eq(facilityContacts.firstName, firstName) : isNull(facilityContacts.firstName),
+            lastName  ? eq(facilityContacts.lastName,  lastName)  : isNull(facilityContacts.lastName),
           ),
         )
         .limit(1);
       if (existing) continue;
 
-      await db.insert(facilityContacts).values({
+      const [inserted] = await db.insert(facilityContacts).values({
         facilityId:  f.id,
-        firstName:   firstName ?? null,
-        lastName:    lastName  ?? null,
-        title:       b.authorized_official_title_or_position?.trim() ?? null,
-        phone:       b.authorized_official_telephone_number?.trim() ?? null,
+        firstName,
+        lastName,
+        title:       b.authorized_official_title_or_position?.trim() || null,
+        phone:       b.authorized_official_telephone_number?.trim()  || null,
         department:  null,
         dataSource:  "nppes",
         confidenceScore: 50,
         buyingAuthorityScore: 30,
-      });
+      }).returning({ id: facilityContacts.id });
+
+      // Run the enrichment waterfall for the newly created contact so
+      // free-source adapters can boost confidence immediately.
+      if (inserted) {
+        try {
+          await enrichContact(inserted.id);
+        } catch (err) {
+          logger.warn({ err, contactId: inserted.id, facilityId: f.id }, "nppes contact enrichment failed");
+        }
+      }
     }
 
     await db
