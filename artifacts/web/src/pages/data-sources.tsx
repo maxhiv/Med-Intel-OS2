@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -409,7 +409,7 @@ export default function DataSourcesPage() {
               filtered.map((src) => {
                 const isExpanded = expandedRows.has(src.id);
                 return (
-                  <>
+                  <React.Fragment key={src.id}>
                     <tr
                       key={src.id}
                       className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
@@ -465,7 +465,7 @@ export default function DataSourcesPage() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </React.Fragment>
                 );
               })
             )}

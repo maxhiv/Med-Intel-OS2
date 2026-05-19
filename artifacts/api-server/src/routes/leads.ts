@@ -5,7 +5,7 @@
  * cross-source bonus matches, contacts, and FYE timing fields.
  */
 import { Router, type IRouter } from "express";
-import { eq, and, gte, inArray, sql, desc, exists } from "drizzle-orm";
+import { eq, and, gte, inArray, sql, desc, exists, asc } from "drizzle-orm";
 import {
   db,
   facilities,
@@ -156,7 +156,7 @@ router.get("/leads", requireAccount, async (req, res) => {
     .from(facilities)
     .innerJoin(accountFacilities, eq(accountFacilities.facilityId, facilities.id))
     .where(whereClause)
-    .orderBy(desc(facilities.signalScore))
+    .orderBy(desc(facilities.signalScore), desc(accountFacilities.dealScore))
     .limit(limit)
     .offset(offset);
 

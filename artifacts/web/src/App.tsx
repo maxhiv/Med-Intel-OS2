@@ -49,12 +49,22 @@ function isAuthError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401;
 }
 
+let _authExpiryHandled = false;
+
 function handleAuthExpiry(): void {
+  if (_authExpiryHandled) return;
+  _authExpiryHandled = true;
   queryClient.clear();
   const signInUrl = `${basePath}/sign-in`;
   if (!window.location.pathname.startsWith(`${basePath}/sign-in`)) {
     window.location.replace(signInUrl);
   }
+  setTimeout(() => { _authExpiryHandled = false; }, 5000);
+}
+
+// Listen for 401s emitted directly from the fetch wrapper (covers non-React-Query calls).
+if (typeof window !== "undefined") {
+  window.addEventListener("auth:expired", () => handleAuthExpiry());
 }
 
 const queryClient = new QueryClient({
