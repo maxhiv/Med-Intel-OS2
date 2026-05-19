@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@clerk/react";
 import { Button } from "@/components/ui/button";
@@ -7,10 +8,13 @@ export default function LandingPage() {
   const { isSignedIn, isLoaded } = useAuth();
   const [, setLocation] = useLocation();
 
-  if (isLoaded && isSignedIn) {
-    setLocation("/dashboard");
-    return null;
-  }
+  useEffect(() => {
+    if (isLoaded && isSignedIn) {
+      setLocation("/dashboard");
+    }
+  }, [isLoaded, isSignedIn, setLocation]);
+
+  if (isLoaded && isSignedIn) return null;
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground selection:bg-primary selection:text-primary-foreground">

@@ -131,6 +131,108 @@ const PRIORITY_TEXT: Record<ActionPriority, string> = {
   low:    "text-blue-700",
 };
 
+interface FinancialDoc {
+  id: string;
+  fiscalYear: number | null;
+  docType: string | null;
+  sourceUrl: string | null;
+  totalRevenue: number | null;
+  operatingIncome: number | null;
+  operatingMarginPct: number | null;
+  capitalExpenditures: number | null;
+  longTermDebt: number | null;
+  daysCashOnHand: number | null;
+  netPatientRevenue: number | null;
+}
+
+function fmt$(n: number | null | undefined): string {
+  if (n == null) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000_000) return `${n < 0 ? "-" : ""}$${(abs / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `${n < 0 ? "-" : ""}$${(abs / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${n < 0 ? "-" : ""}$${(abs / 1_000).toFixed(0)}K`;
+  return `${n < 0 ? "-" : ""}$${abs.toFixed(0)}`;
+}
+
+function fmt1(n: number | null | undefined, suffix = ""): string {
+  if (n == null) return "—";
+  return `${n.toFixed(1)}${suffix}`;
+}
+
+function FinancialsPanel({ financials }: { financials: FinancialDoc[] | undefined }) {
+  if (!financials || financials.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Financial Documents</CardTitle>
+          <CardDescription>HCRIS cost reports and structured financial filings</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="py-12 text-center text-muted-foreground">
+            <DollarSign className="h-10 w-10 mx-auto mb-3 opacity-20" />
+            <p className="text-sm">No financial documents found for this facility.</p>
+            <p className="text-xs mt-1 max-w-xs mx-auto">
+              Financial data is sourced from HCRIS cost reports. Documents appear here after the financial ingest pipeline runs.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {financials.map((doc) => (
+        <Card key={doc.id}>
+          <CardHeader>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <DollarSign className="h-4 w-4 text-green-600" />
+                {doc.docType ?? "Financial Document"}
+                {doc.fiscalYear && (
+                  <span className="ml-1 text-muted-foreground font-normal text-sm">
+                    — FY {doc.fiscalYear}
+                  </span>
+                )}
+              </CardTitle>
+              {doc.sourceUrl && (
+                <a
+                  href={doc.sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary underline"
+                >
+                  View Source
+                </a>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              <FinRow label="Total Revenue" value={fmt$(doc.totalRevenue)} />
+              <FinRow label="Net Patient Revenue" value={fmt$(doc.netPatientRevenue)} />
+              <FinRow label="Operating Income" value={fmt$(doc.operatingIncome)} />
+              <FinRow label="Operating Margin" value={fmt1(doc.operatingMarginPct, "%")} />
+              <FinRow label="Capital Expenditures" value={fmt$(doc.capitalExpenditures)} />
+              <FinRow label="Long-Term Debt" value={fmt$(doc.longTermDebt)} />
+              <FinRow label="Days Cash on Hand" value={fmt1(doc.daysCashOnHand, " days")} />
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function FinRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="font-semibold text-sm">{value}</p>
+    </div>
+  );
+}
+
 export default function FacilityDetailPage() {
   const params = useParams();
   const id = params.id as string;
@@ -406,90 +508,9 @@ export default function FacilityDetailPage() {
 
             {/* Financials tab */}
             <TabsContent value="financials" className="mt-4 space-y-4">
-              {(() => {
-                const FINANCIAL_TYPES = new Set([
-                  "financial_signal", "bond_issuance", "bond_issued", "sec_edgar",
-                  "usa_spending", "hcris_depreciation_spike", "grant_award",
-                  "grant_awarded", "medicare_util", "hcris",
-                ]);
-                const financialSignals = signals.filter((s) => {
-                  const key = s.signalType.toLowerCase().replace(/[\s-]/g, "_");
-                  return (
-                    FINANCIAL_TYPES.has(key) ||
-                    key.includes("financial") ||
-                    key.includes("bond") ||
-                    key.includes("grant") ||
-                    key.includes("hcris") ||
-                    key.includes("spending") ||
-                    key.includes("medicare") ||
-                    key.includes("edgar")
-                  );
-                });
-
-                if (financialSignals.length === 0) {
-                  return (
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Financial Signals</CardTitle>
-                        <CardDescription>Bond issuances, grant awards, HCRIS filings, and SEC disclosures</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="py-12 text-center text-muted-foreground">
-                          <DollarSign className="h-10 w-10 mx-auto mb-3 opacity-20" />
-                          <p className="text-sm">No financial signals detected for this facility.</p>
-                          <p className="text-xs mt-1">Financial signals are detected from HCRIS, SEC EDGAR, bond issuance databases, and USASpending.gov.</p>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  );
-                }
-
-                return (
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <DollarSign className="h-4 w-4 text-green-600" />
-                        Financial Signals
-                      </CardTitle>
-                      <CardDescription>
-                        {financialSignals.length} financial signal{financialSignals.length !== 1 ? "s" : ""} — bond issuances, grant awards, HCRIS filings, and SEC disclosures
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="divide-y border border-border rounded-md">
-                        {financialSignals.map((signal) => {
-                          const cfg = getSignalConfig(signal.signalType);
-                          const Icon = cfg.icon;
-                          return (
-                            <div key={signal.id} className="p-4 flex items-start gap-4">
-                              <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${cfg.bg}`}>
-                                <Icon className={`h-4 w-4 ${cfg.color}`} />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex flex-wrap items-start justify-between gap-2">
-                                  <span className="font-medium text-sm">{signal.signalType.replace(/_/g, " ")}</span>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <ConfidenceBadge confidence={signal.confidence} />
-                                    <span className="text-xs text-muted-foreground" title={absoluteDate(signal.detectedAt)}>
-                                      {relativeDate(signal.detectedAt)}
-                                    </span>
-                                  </div>
-                                </div>
-                                <div className="text-xs text-muted-foreground mt-1">
-                                  Source: <span className="font-mono">{signal.source}</span>
-                                  {signal.signalValue && (
-                                    <span className="ml-2 font-semibold text-foreground/80">— {signal.signalValue}</span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })()}
+              <FinancialsPanel
+                financials={(facility as unknown as Record<string, unknown>).financials as FinancialDoc[] | undefined}
+              />
             </TabsContent>
 
             {/* Contacts tab */}

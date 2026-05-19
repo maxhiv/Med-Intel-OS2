@@ -18,6 +18,7 @@ import {
   purchaseSignals,
   facilityContacts,
   equipmentRecords,
+  financialDocuments,
   accountFacilities,
   contactValidationLog,
 } from "@workspace/db";
@@ -227,7 +228,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
     res.status(404).json({ error: "not_found" });
     return;
   }
-  const [signals, contacts, equipment, signalBreakdown] = await Promise.all([
+  const [signals, contacts, equipment, financials, signalBreakdown] = await Promise.all([
     db
       .select()
       .from(purchaseSignals)
@@ -248,6 +249,12 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
       .from(equipmentRecords)
       .where(eq(equipmentRecords.facilityId, id))
       .limit(200),
+    db
+      .select()
+      .from(financialDocuments)
+      .where(eq(financialDocuments.facilityId, id))
+      .orderBy(desc(financialDocuments.fiscalYear))
+      .limit(10),
     computeSignalBreakdown(id),
   ]);
 
@@ -256,6 +263,7 @@ router.get("/facilities/:id", requireAccount, async (req, res) => {
     signals,
     contacts,
     equipment,
+    financials,
     signalBreakdown,
     activeSignalCount: signals.length,
     contactCount: contacts.length,

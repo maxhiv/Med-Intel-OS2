@@ -5,7 +5,7 @@
  * cross-source bonus matches, contacts, and FYE timing fields.
  */
 import { Router, type IRouter } from "express";
-import { eq, and, gte, inArray, sql, desc, exists, asc } from "drizzle-orm";
+import { eq, and, gte, inArray, sql, desc, exists } from "drizzle-orm";
 import {
   db,
   facilities,
