@@ -169,7 +169,20 @@ export interface FacilityListResponse {
   offset?: number;
 }
 
-export type FacilityDetailFinancialsItem = { [key: string]: unknown };
+export interface FacilityDetailFinancialsItem {
+  id: string;
+  facilityId: string;
+  fiscalYear?: number | null;
+  docType?: string | null;
+  sourceUrl?: string | null;
+  totalRevenue?: number | null;
+  operatingIncome?: number | null;
+  operatingMarginPct?: number | null;
+  capitalExpenditures?: number | null;
+  longTermDebt?: number | null;
+  daysCashOnHand?: number | null;
+  netPatientRevenue?: number | null;
+}
 
 export interface PurchaseSignal {
   id: string;

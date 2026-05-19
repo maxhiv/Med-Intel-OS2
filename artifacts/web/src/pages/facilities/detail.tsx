@@ -4,6 +4,7 @@ import {
   useGetFacility,
   useSyncFacilityFromNpi,
   useUpdateFacility,
+  type FacilityDetailFinancialsItem,
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -131,20 +132,6 @@ const PRIORITY_TEXT: Record<ActionPriority, string> = {
   low:    "text-blue-700",
 };
 
-interface FinancialDoc {
-  id: string;
-  fiscalYear: number | null;
-  docType: string | null;
-  sourceUrl: string | null;
-  totalRevenue: number | null;
-  operatingIncome: number | null;
-  operatingMarginPct: number | null;
-  capitalExpenditures: number | null;
-  longTermDebt: number | null;
-  daysCashOnHand: number | null;
-  netPatientRevenue: number | null;
-}
-
 function fmt$(n: number | null | undefined): string {
   if (n == null) return "—";
   const abs = Math.abs(n);
@@ -159,7 +146,7 @@ function fmt1(n: number | null | undefined, suffix = ""): string {
   return `${n.toFixed(1)}${suffix}`;
 }
 
-function FinancialsPanel({ financials }: { financials: FinancialDoc[] | undefined }) {
+function FinancialsPanel({ financials }: { financials: FacilityDetailFinancialsItem[] | undefined }) {
   if (!financials || financials.length === 0) {
     return (
       <Card>
@@ -509,7 +496,7 @@ export default function FacilityDetailPage() {
             {/* Financials tab */}
             <TabsContent value="financials" className="mt-4 space-y-4">
               <FinancialsPanel
-                financials={(facility as unknown as Record<string, unknown>).financials as FinancialDoc[] | undefined}
+                financials={facility.financials}
               />
             </TabsContent>
 
