@@ -12,6 +12,7 @@ import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import {
   db,
   facilities,
+  facilityContacts,
   purchaseSignals,
   type Facility,
 } from "@workspace/db";
@@ -47,6 +48,11 @@ interface NppesBasic {
   status?: string;
   name?: string;
   organization_name?: string;
+  authorized_official_first_name?: string;
+  authorized_official_last_name?: string;
+  authorized_official_title_or_position?: string;
+  authorized_official_telephone_number?: string;
+  authorized_official_credential?: string;
 }
 
 interface NppesResult {
@@ -167,6 +173,41 @@ export async function ingestNppes(opts: {
         });
         result.signalsInserted += 1;
       }
+    }
+
+    // Extract authorized official as a facility contact (type-2 org records only).
+    for (const record of nppesResults) {
+      if (record.basic?.status !== "A") continue;
+      const b = record.basic;
+      const firstName = b.authorized_official_first_name?.trim();
+      const lastName  = b.authorized_official_last_name?.trim();
+      if (!firstName && !lastName) continue;
+
+      // Upsert: skip if this name is already stored for this facility.
+      const [existing] = await db
+        .select({ id: facilityContacts.id })
+        .from(facilityContacts)
+        .where(
+          and(
+            eq(facilityContacts.facilityId, f.id),
+            eq(facilityContacts.firstName, firstName ?? ""),
+            eq(facilityContacts.lastName,  lastName  ?? ""),
+          ),
+        )
+        .limit(1);
+      if (existing) continue;
+
+      await db.insert(facilityContacts).values({
+        facilityId:  f.id,
+        firstName:   firstName ?? null,
+        lastName:    lastName  ?? null,
+        title:       b.authorized_official_title_or_position?.trim() ?? null,
+        phone:       b.authorized_official_telephone_number?.trim() ?? null,
+        department:  null,
+        dataSource:  "nppes",
+        confidenceScore: 50,
+        buyingAuthorityScore: 30,
+      });
     }
 
     await db

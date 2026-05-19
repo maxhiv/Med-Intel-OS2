@@ -1,13 +1,14 @@
 /**
  * Continuous bulk ingestor — calls ingestors directly (no HTTP) so there is
- * no request-timeout ceiling.  Loops until every IL+TX facility has been
+ * no request-timeout ceiling.  Loops until every target-state facility has been
  * scraped at least once, then exits cleanly.
  *
  * Run with:
  *   pnpm --filter @workspace/api-server run bulk-ingest
  *
  * Environment overrides:
- *   INGEST_STATES         Comma-sep state codes  (default: IL,TX)
+ *   INGEST_STATES         Comma-sep state codes  (default: top-20 by facility count)
+ *   INGEST_ALL_STATES     Set to "1" to run all 50 US states + DC
  *   INGEST_LIMIT          Facilities per source   (default: 500)
  *   INGEST_ROUND_PAUSE_MS Pause between rounds    (default: 10000)
  */
@@ -17,22 +18,34 @@ export {};
 import { sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import { recomputeAllScores } from "../services/signalScorer";
-import { ingestFdaClassification } from "../services/fdaClassificationIngestor";
-import { ingestNppes }             from "../services/nppesIngestor";
-import { ingestCmsData }           from "../services/cmsDataIngestor";
-import { ingestUsaSpending }       from "../services/usaSpendingIngestor";
-import { ingestClinicalTrials }    from "../services/clinicalTrialsIngestor";
-import { ingestSecEdgar }          from "../services/secEdgarIngestor";
-import { ingestPropublica990 }     from "../services/propublica990Ingestor";
-import { ingestHrsa }              from "../services/hrsaIngestor";
-import { ingestUsda }              from "../services/usdaIngestor";
+import { ingestFdaClassification }  from "../services/fdaClassificationIngestor";
+import { ingestNppes }              from "../services/nppesIngestor";
+import { ingestCmsData }            from "../services/cmsDataIngestor";
+import { ingestUsaSpending }        from "../services/usaSpendingIngestor";
+import { ingestClinicalTrials }     from "../services/clinicalTrialsIngestor";
+import { ingestSecEdgar }           from "../services/secEdgarIngestor";
+import { ingestPropublica990 }      from "../services/propublica990Ingestor";
+import { ingestHrsa }               from "../services/hrsaIngestor";
+import { ingestUsda }               from "../services/usdaIngestor";
+import { ingestHcris }              from "../services/hcrisIngestor";
+import { ingestFda510k }            from "../services/fda510kIngestor";
+import { ingestFdaMaude }           from "../services/fdaMaudeIngestor";
+import { ingestSamGov }             from "../services/samGovIngestor";
+import { ingestEmma }               from "../services/emmaIngestor";
+import { ingestFdaRecalls }         from "../services/fdaRecallsIngestor";
+import { ingestMedicareUtil }       from "../services/medicareUtilIngestor";
+import { ingestConFilings }         from "../services/conFilingsIngestor";
+import { TOP_20_STATES, ALL_50_STATES } from "../services/nationalIngest";
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const STATES = (process.env.INGEST_STATES ?? "IL,TX")
-  .split(",")
-  .map((s) => s.trim().toUpperCase())
-  .filter(Boolean);
+const DEFAULT_STATES = process.env.INGEST_ALL_STATES === "1"
+  ? ALL_50_STATES
+  : TOP_20_STATES;
+
+const STATES = process.env.INGEST_STATES
+  ? process.env.INGEST_STATES.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean)
+  : DEFAULT_STATES;
 
 const LIMIT          = Math.max(1, Math.min(Number(process.env.INGEST_LIMIT ?? 500), 2000));
 const ROUND_PAUSE_MS = Math.max(5_000, Number(process.env.INGEST_ROUND_PAUSE_MS ?? 10_000));
@@ -120,20 +133,23 @@ async function runOne(
 async function runRound(round: number): Promise<{ signals: number; facilities: number }> {
   console.log(`\n  ── Round ${round} ──────────────────────────────────────────────`);
 
-  const opts = { limit: LIMIT, states: STATES };
+  const opts       = { limit: LIMIT, states: STATES };
+  const optsNoSt   = { limit: LIMIT };
 
   // Batch A: parallel (fast / no per-facility HTTP)
   const batchA = await Promise.all([
-    runOne("fda_class",   () => ingestFdaClassification(opts)),
-    runOne("nppes",       () => ingestNppes(opts)),
+    runOne("fda_class",  () => ingestFdaClassification(opts)),
+    runOne("nppes",      () => ingestNppes(opts)),
+    runOne("fda_510k",   () => ingestFda510k(optsNoSt)),
   ]);
 
   // Batch B: parallel (moderate rate)
   const batchB = await Promise.all([
-    runOne("cms_data",      () => ingestCmsData(opts)),
-    runOne("usa_spending",  () => ingestUsaSpending(opts)),
+    runOne("cms_data",        () => ingestCmsData(opts)),
+    runOne("usa_spending",    () => ingestUsaSpending(opts)),
     runOne("clinical_trials", () => ingestClinicalTrials(opts)),
-    runOne("sec_edgar",     () => ingestSecEdgar(opts)),
+    runOne("sec_edgar",       () => ingestSecEdgar(opts)),
+    runOne("hcris",           () => ingestHcris(optsNoSt)),
   ]);
 
   // Batch C: sequential (rate-sensitive)
@@ -141,6 +157,12 @@ async function runRound(round: number): Promise<{ signals: number; facilities: n
   batchC.push(await runOne("propublica_990", () => ingestPropublica990(opts)));
   batchC.push(await runOne("hrsa",           () => ingestHrsa(opts)));
   batchC.push(await runOne("usda",           () => ingestUsda(opts)));
+  batchC.push(await runOne("emma",           () => ingestEmma(optsNoSt)));
+  batchC.push(await runOne("fda_maude",      () => ingestFdaMaude(optsNoSt)));
+  batchC.push(await runOne("fda_recalls",    () => ingestFdaRecalls(optsNoSt)));
+  batchC.push(await runOne("medicare_util",  () => ingestMedicareUtil(optsNoSt)));
+  batchC.push(await runOne("sam_gov",        () => ingestSamGov(optsNoSt)));
+  batchC.push(await runOne("con_filings",    () => ingestConFilings()));
 
   const all = [...batchA, ...batchB, ...batchC];
 

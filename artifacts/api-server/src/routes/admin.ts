@@ -44,6 +44,12 @@ import {
   type CredentialFieldSpec,
 } from "../services/crmAdapters";
 import { runImport990 } from "../services/import990Runner";
+import {
+  startNationalIngest,
+  nationalIngestJob,
+  TOP_20_STATES,
+  ALL_50_STATES,
+} from "../services/nationalIngest";
 
 const SUPPORTED_WEBHOOK_CRMS = ["ghl", "hubspot", "salesforce"] as const;
 type WebhookCrm = (typeof SUPPORTED_WEBHOOK_CRMS)[number];
@@ -1483,5 +1489,109 @@ router.post("/admin/seed-account-facilities", async (req, res) => {
     res.status(500).json({ error: "seed_failed", detail: String(err) });
   }
 });
+
+// ─── National Ingest trigger ──────────────────────────────────────────────────
+//
+// POST /api/admin/ingest/national
+//   Spawns a full national ingest round in the background.
+//   Auth: requirePlatformAdmin (Clerk platform-admin role).
+//   Body params (all optional):
+//     allStates   boolean   true → all 50 states, false/omitted → top-20
+//     states      string[]  explicit state list (overrides allStates)
+//     limit       number    facilities per source (default 500, max 2000)
+//
+// GET /api/admin/ingest/status
+//   Returns current job state + signal coverage by state and source.
+//   Auth: requirePlatformAdmin.
+
+router.post(
+  "/admin/ingest/national",
+  requirePlatformAdmin,
+  async (req, res) => {
+    if (nationalIngestJob.status === "running") {
+      res.status(409).json({ alreadyRunning: true, job: nationalIngestJob });
+      return;
+    }
+
+    const body = req.body ?? {};
+    let states: string[] | undefined;
+    if (Array.isArray(body.states) && body.states.length > 0) {
+      states = (body.states as unknown[])
+        .map((s) => String(s).toUpperCase().trim())
+        .filter(Boolean);
+    } else if (body.allStates === true) {
+      states = ALL_50_STATES;
+    }
+    // If nothing specified, nationalIngest.ts defaults to TOP_20_STATES.
+
+    const limit =
+      typeof body.limit === "number" && body.limit > 0
+        ? Math.min(Math.round(body.limit), 2000)
+        : 500;
+
+    const { started, job } = startNationalIngest({
+      states,
+      limit,
+      recomputeScores: body.recomputeScores !== false,
+    });
+
+    res.status(started ? 202 : 409).json({ started, job });
+  },
+);
+
+router.get(
+  "/admin/ingest/status",
+  requirePlatformAdmin,
+  async (_req, res) => {
+    // Signal coverage by source
+    const bySource = await db.execute<{ source: string; count: string }>(sql.raw(`
+      SELECT source, COUNT(*)::int AS count
+      FROM purchase_signals
+      WHERE is_active = true
+      GROUP BY source
+      ORDER BY count DESC
+    `));
+
+    // Signal coverage by state (top 30)
+    const byState = await db.execute<{
+      state: string;
+      total_facilities: string;
+      facilities_with_signals: string;
+      total_signals: string;
+    }>(sql.raw(`
+      SELECT
+        f.state,
+        COUNT(DISTINCT f.id)::int            AS total_facilities,
+        COUNT(DISTINCT ps.facility_id)::int  AS facilities_with_signals,
+        COUNT(ps.id)::int                    AS total_signals
+      FROM facilities f
+      LEFT JOIN purchase_signals ps
+        ON ps.facility_id = f.id AND ps.is_active = true
+      GROUP BY f.state
+      ORDER BY total_signals DESC
+      LIMIT 30
+    `));
+
+    res.json({
+      job: nationalIngestJob,
+      top20States: TOP_20_STATES,
+      bySource: (bySource.rows as { source: string; count: string }[]).map((r) => ({
+        source: r.source,
+        count: Number(r.count),
+      })),
+      byState: (byState.rows as {
+        state: string;
+        total_facilities: string;
+        facilities_with_signals: string;
+        total_signals: string;
+      }[]).map((r) => ({
+        state: r.state,
+        totalFacilities: Number(r.total_facilities),
+        facilitiesWithSignals: Number(r.facilities_with_signals),
+        totalSignals: Number(r.total_signals),
+      })),
+    });
+  },
+);
 
 export default router;

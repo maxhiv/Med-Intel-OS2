@@ -12,18 +12,6 @@ env = { "CI" = "true" }
 runButton = "Project"
 
 [[workflows.workflow]]
-name = "Bulk Ingest IL+TX"
-author = "agent"
-mode = "parallel"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm --filter @workspace/api-server run bulk-ingest"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
 name = "artifacts/web: web"
 author = "agent"
 mode = "sequential"
@@ -80,6 +68,26 @@ waitForPort = 8081
 [workflows.workflow.tasks.env]
 PORT = "8081"
 BASE_PATH = "/__mockup"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Bulk Ingest National"
+
+[[workflows.workflow]]
+name = "Bulk Ingest National"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm --filter @workspace/api-server run bulk-ingest"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [agent]
 stack = "PNPM_WORKSPACE"

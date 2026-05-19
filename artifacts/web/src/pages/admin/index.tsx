@@ -11,8 +11,10 @@ import {
   useAdminEncryptionKeyStatus,
   useAdminEncryptionKeyRotate,
   useAdminEncryptionKeyRotationLog,
+  customFetch,
   type SubAccount,
 } from "@workspace/api-client-react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Redirect } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -20,7 +22,8 @@ import { ConReviewQueue } from "./ConReviewQueue";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ShieldAlert, Activity, CheckCircle2, XCircle, AlertTriangle, KeyRound, RefreshCw, Lock, Link2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { ShieldAlert, Activity, CheckCircle2, XCircle, AlertTriangle, KeyRound, RefreshCw, Lock, Link2, Database, Play, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { SubAccountCredentialsDialog } from "./sub-account-credentials";
 import { WebhookConfigRow } from "@/components/admin/webhook-config-row";
@@ -100,6 +103,244 @@ function BudgetEditor({
       >
         Cancel
       </Button>
+    </div>
+  );
+}
+
+interface IngestJob {
+  status: "idle" | "running" | "done" | "error";
+  jobId: string;
+  startedAt: string;
+  finishedAt: string | null;
+  states: string[];
+  signalsInserted: number;
+  facilitiesScanned: number;
+  errors: number;
+  currentSource: string | null;
+  completedSources: string[];
+  errorMessage?: string;
+}
+
+interface IngestStatus {
+  job: IngestJob;
+  bySource: { source: string; count: number }[];
+  byState: { state: string; totalFacilities: number; facilitiesWithSignals: number; totalSignals: number }[];
+  top20States: string[];
+}
+
+function jobStatusBadge(status: IngestJob["status"]) {
+  if (status === "running") return <Badge className="bg-blue-500 text-white">Running</Badge>;
+  if (status === "done")    return <Badge className="bg-green-600 text-white">Done</Badge>;
+  if (status === "error")   return <Badge variant="destructive">Error</Badge>;
+  return <Badge variant="secondary">Idle</Badge>;
+}
+
+function NationalIngestPanel() {
+  const { toast } = useToast();
+  const [allStates, setAllStates] = useState(false);
+
+  const statusQ = useQuery<IngestStatus>({
+    queryKey: ["admin", "ingest", "status"],
+    queryFn: () => customFetch("/api/admin/ingest/status"),
+    refetchInterval: (query) => {
+      const status = (query.state.data as IngestStatus | undefined)?.job?.status;
+      return status === "running" ? 2_000 : 30_000;
+    },
+  });
+
+  const triggerMut = useMutation<{ started: boolean; job: IngestJob }, Error, { allStates: boolean }>({
+    mutationFn: (vars) =>
+      customFetch("/api/admin/ingest/national", {
+        method: "POST",
+        body: JSON.stringify({ allStates: vars.allStates, recomputeScores: true }),
+      }),
+    onSuccess: (data) => {
+      if (data.started) {
+        toast({ title: "National ingest started", description: `Job ${data.job.jobId.slice(0, 8)}… running in background` });
+      } else {
+        toast({ title: "Already running", description: "Wait for the current job to finish.", variant: "destructive" });
+      }
+      statusQ.refetch();
+    },
+    onError: (err) => {
+      toast({ title: "Failed to start ingest", description: String(err), variant: "destructive" });
+    },
+  });
+
+  const data = statusQ.data;
+  const job = data?.job;
+  const isRunning = job?.status === "running";
+
+  const totalSourceSignals = data?.bySource.reduce((s, r) => s + r.count, 0) ?? 0;
+  const topStatesBySignals = data?.byState.slice(0, 15) ?? [];
+
+  return (
+    <div className="space-y-4">
+      {/* Trigger card */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="h-5 w-5" /> National Data Ingest
+          </CardTitle>
+          <CardDescription>
+            Run all 17 ingestors (NPPES, CMS, FDA, HCRIS, SAM.gov, CON filings, and more) across
+            the {allStates ? "all 50 US states + DC" : "top-20 states by facility count"}.
+            Runs in the background — this page will poll for progress.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <Button
+              disabled={isRunning || triggerMut.isPending}
+              onClick={() => triggerMut.mutate({ allStates })}
+              className="flex items-center gap-2"
+            >
+              {(isRunning || triggerMut.isPending)
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Play className="h-4 w-4" />}
+              {isRunning ? "Ingest Running…" : "Run National Ingest"}
+            </Button>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={allStates}
+                onChange={(e) => setAllStates(e.target.checked)}
+                className="accent-primary"
+              />
+              Include all 50 states
+            </label>
+            <Button variant="ghost" size="sm" onClick={() => statusQ.refetch()} className="ml-auto">
+              <RefreshCw className="h-4 w-4 mr-1" /> Refresh
+            </Button>
+          </div>
+
+          {/* Job status */}
+          {job && job.status !== "idle" && (
+            <div className="border rounded-md p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Last job</span>
+                {jobStatusBadge(job.status)}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                <div>
+                  <span className="text-muted-foreground">Started</span>
+                  <div className="font-mono text-xs">{new Date(job.startedAt).toLocaleTimeString()}</div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Signals</span>
+                  <div className="font-bold text-primary">+{job.signalsInserted.toLocaleString()}</div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Facilities</span>
+                  <div className="font-bold">{job.facilitiesScanned.toLocaleString()}</div>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Errors</span>
+                  <div className={job.errors > 0 ? "text-destructive font-bold" : ""}>{job.errors}</div>
+                </div>
+              </div>
+              {isRunning && job.currentSource && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Currently running: <span className="font-mono">{job.currentSource}</span>
+                  {" — "}completed: {job.completedSources.join(", ") || "—"}
+                </div>
+              )}
+              {job.status === "done" && job.finishedAt && (
+                <div className="text-xs text-muted-foreground">
+                  Finished at {new Date(job.finishedAt).toLocaleTimeString()}{" "}
+                  ({Math.round((new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()) / 1000)}s)
+                  — sources: {job.completedSources.join(", ")}
+                </div>
+              )}
+              {job.status === "error" && job.errorMessage && (
+                <Alert variant="destructive" className="mt-2 py-2">
+                  <AlertDescription className="text-xs font-mono">{job.errorMessage}</AlertDescription>
+                </Alert>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Signal coverage by source */}
+      {data && data.bySource.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Signal Coverage by Source</CardTitle>
+            <CardDescription>
+              {totalSourceSignals.toLocaleString()} active signals across {data.bySource.length} sources
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-1">
+              {data.bySource.map((row) => {
+                const pct = totalSourceSignals > 0 ? Math.round((row.count / totalSourceSignals) * 100) : 0;
+                return (
+                  <div key={row.source} className="flex items-center gap-3 py-1">
+                    <span className="font-mono text-xs w-40 truncate text-muted-foreground">{row.source}</span>
+                    <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
+                      <div className="bg-primary h-2 rounded-full" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="text-sm font-medium w-20 text-right">{row.count.toLocaleString()}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Signal coverage by state */}
+      {data && topStatesBySignals.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Signal Coverage by State</CardTitle>
+            <CardDescription>Top 15 states by total signals</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-muted-foreground text-left">
+                    <th className="pb-2 font-medium">State</th>
+                    <th className="pb-2 font-medium text-right">Facilities</th>
+                    <th className="pb-2 font-medium text-right">w/ Signals</th>
+                    <th className="pb-2 font-medium text-right">Coverage</th>
+                    <th className="pb-2 font-medium text-right">Total Signals</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topStatesBySignals.map((row) => {
+                    const pct = row.totalFacilities > 0
+                      ? Math.round((row.facilitiesWithSignals / row.totalFacilities) * 100)
+                      : 0;
+                    return (
+                      <tr key={row.state} className="border-b last:border-0">
+                        <td className="py-1.5 font-mono font-medium">{row.state}</td>
+                        <td className="py-1.5 text-right text-muted-foreground">{row.totalFacilities.toLocaleString()}</td>
+                        <td className="py-1.5 text-right">{row.facilitiesWithSignals.toLocaleString()}</td>
+                        <td className="py-1.5 text-right">
+                          <span className={pct >= 50 ? "text-green-600 font-medium" : pct >= 20 ? "text-amber-600" : "text-muted-foreground"}>
+                            {pct}%
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-right font-medium text-primary">{row.totalSignals.toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {statusQ.isLoading && (
+        <div className="text-sm text-muted-foreground flex items-center gap-2">
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading ingest status…
+        </div>
+      )}
     </div>
   );
 }
@@ -539,6 +780,7 @@ export default function AdminPage() {
           <TabsTrigger value="webhooks" data-testid="tab-webhooks">CRM Webhooks</TabsTrigger>
           <TabsTrigger value="encryption-key">Encryption Key</TabsTrigger>
           <TabsTrigger value="con-review" data-testid="tab-con-review">CON Review</TabsTrigger>
+          <TabsTrigger value="ingest" data-testid="tab-ingest">National Ingest</TabsTrigger>
         </TabsList>
 
         <TabsContent value="sources" className="mt-4">
@@ -845,6 +1087,10 @@ export default function AdminPage() {
 
         <TabsContent value="encryption-key" className="mt-4">
           <EncryptionKeyPanel />
+        </TabsContent>
+
+        <TabsContent value="ingest" className="mt-4">
+          <NationalIngestPanel />
         </TabsContent>
       </Tabs>
 
