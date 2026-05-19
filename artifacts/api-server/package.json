@@ -11,7 +11,8 @@
     "test": "vitest run",
     "bulk-ingest": "tsx src/scripts/continuousBulkIngest.ts",
     "import-990": "tsx src/scripts/import990.ts",
-    "backfill-eins": "tsx src/scripts/backfillEins.ts"
+    "backfill-eins": "tsx src/scripts/backfillEins.ts",
+    "import-eo-bmf": "tsx src/scripts/importEoBmf.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
