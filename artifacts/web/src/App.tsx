@@ -49,33 +49,53 @@ function isAuthError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401;
 }
 
-let _authExpiryHandled = false;
+// Deduplicate concurrent auth-expiry checks — only one verification in flight at a time.
+let _authCheckScheduled = false;
 
-function handleAuthExpiry(): void {
-  if (_authExpiryHandled) return;
-  _authExpiryHandled = true;
-  queryClient.clear();
-  const signInUrl = `${basePath}/sign-in`;
-  if (!window.location.pathname.startsWith(`${basePath}/sign-in`)) {
-    window.location.replace(signInUrl);
-  }
-  setTimeout(() => { _authExpiryHandled = false; }, 5000);
+/**
+ * Called when any API request returns 401.
+ * Schedules a 1.5-second delayed verification against /api/me before redirecting.
+ * This prevents redirect loops during Clerk's automatic JWT refresh window.
+ */
+function scheduleAuthCheck(): void {
+  if (_authCheckScheduled) return;
+  _authCheckScheduled = true;
+
+  setTimeout(() => {
+    _authCheckScheduled = false;
+    const apiBase = basePath || "";
+    fetch(`${apiBase}/api/me`, { credentials: "include" })
+      .then((r) => {
+        if (r.status === 401) {
+          // Session is truly expired — clear cache and redirect once.
+          queryClient.clear();
+          const signInUrl = `${basePath}/sign-in`;
+          if (!window.location.pathname.startsWith(`${basePath}/sign-in`)) {
+            window.location.replace(signInUrl);
+          }
+        }
+        // If status is 200/304, the Clerk JWT refreshed; nothing to do.
+      })
+      .catch(() => {
+        // Network error — don't redirect, may recover.
+      });
+  }, 3000);
 }
 
 // Listen for 401s emitted directly from the fetch wrapper (covers non-React-Query calls).
 if (typeof window !== "undefined") {
-  window.addEventListener("auth:expired", () => handleAuthExpiry());
+  window.addEventListener("auth:expired", () => scheduleAuthCheck());
 }
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error) => {
-      if (isAuthError(error)) handleAuthExpiry();
+      if (isAuthError(error)) scheduleAuthCheck();
     },
   }),
   mutationCache: new MutationCache({
     onError: (error) => {
-      if (isAuthError(error)) handleAuthExpiry();
+      if (isAuthError(error)) scheduleAuthCheck();
     },
   }),
   defaultOptions: {

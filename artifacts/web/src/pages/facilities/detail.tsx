@@ -305,13 +305,14 @@ export default function FacilityDetailPage() {
         {/* Main tabs */}
         <div className="md:col-span-3">
           <Tabs defaultValue="signals" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
+            <TabsList className="grid w-full grid-cols-4">
               <TabsTrigger value="signals">
                 Signals
                 {signals.length > 0 && (
                   <Badge variant="secondary" className="ml-1.5 text-xs h-4 px-1">{signals.length}</Badge>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="financials">Financials</TabsTrigger>
               <TabsTrigger value="contacts">Contacts</TabsTrigger>
               <TabsTrigger value="equipment">Equipment</TabsTrigger>
             </TabsList>
@@ -401,6 +402,94 @@ export default function FacilityDetailPage() {
                   )}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            {/* Financials tab */}
+            <TabsContent value="financials" className="mt-4 space-y-4">
+              {(() => {
+                const FINANCIAL_TYPES = new Set([
+                  "financial_signal", "bond_issuance", "bond_issued", "sec_edgar",
+                  "usa_spending", "hcris_depreciation_spike", "grant_award",
+                  "grant_awarded", "medicare_util", "hcris",
+                ]);
+                const financialSignals = signals.filter((s) => {
+                  const key = s.signalType.toLowerCase().replace(/[\s-]/g, "_");
+                  return (
+                    FINANCIAL_TYPES.has(key) ||
+                    key.includes("financial") ||
+                    key.includes("bond") ||
+                    key.includes("grant") ||
+                    key.includes("hcris") ||
+                    key.includes("spending") ||
+                    key.includes("medicare") ||
+                    key.includes("edgar")
+                  );
+                });
+
+                if (financialSignals.length === 0) {
+                  return (
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Financial Signals</CardTitle>
+                        <CardDescription>Bond issuances, grant awards, HCRIS filings, and SEC disclosures</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="py-12 text-center text-muted-foreground">
+                          <DollarSign className="h-10 w-10 mx-auto mb-3 opacity-20" />
+                          <p className="text-sm">No financial signals detected for this facility.</p>
+                          <p className="text-xs mt-1">Financial signals are detected from HCRIS, SEC EDGAR, bond issuance databases, and USASpending.gov.</p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                }
+
+                return (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <DollarSign className="h-4 w-4 text-green-600" />
+                        Financial Signals
+                      </CardTitle>
+                      <CardDescription>
+                        {financialSignals.length} financial signal{financialSignals.length !== 1 ? "s" : ""} — bond issuances, grant awards, HCRIS filings, and SEC disclosures
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="divide-y border border-border rounded-md">
+                        {financialSignals.map((signal) => {
+                          const cfg = getSignalConfig(signal.signalType);
+                          const Icon = cfg.icon;
+                          return (
+                            <div key={signal.id} className="p-4 flex items-start gap-4">
+                              <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${cfg.bg}`}>
+                                <Icon className={`h-4 w-4 ${cfg.color}`} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <span className="font-medium text-sm">{signal.signalType.replace(/_/g, " ")}</span>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <ConfidenceBadge confidence={signal.confidence} />
+                                    <span className="text-xs text-muted-foreground" title={absoluteDate(signal.detectedAt)}>
+                                      {relativeDate(signal.detectedAt)}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="text-xs text-muted-foreground mt-1">
+                                  Source: <span className="font-mono">{signal.source}</span>
+                                  {signal.signalValue && (
+                                    <span className="ml-2 font-semibold text-foreground/80">— {signal.signalValue}</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
             </TabsContent>
 
             {/* Contacts tab */}

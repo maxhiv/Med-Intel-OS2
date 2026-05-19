@@ -175,13 +175,16 @@ export default function ContactsPage() {
                 ) : (
                   <tr>
                     <td colSpan={5} className="h-48 text-center text-muted-foreground">
-                      <div className="flex flex-col items-center justify-center gap-2">
+                      <div className="flex flex-col items-center justify-center gap-3">
                         <Users className="h-8 w-8 mb-2 opacity-20" />
                         <p className="font-medium">No contacts found for this facility</p>
-                        <p className="text-xs max-w-xs leading-relaxed">
+                        <p className="text-xs max-w-xs leading-relaxed text-center">
                           Contacts are enriched automatically via the NPPES registry and data waterfall.
-                          Click <strong>Enrich</strong> on a facility or run the contact ingest pipeline from Admin to populate decision-makers.
+                          Run the contact ingest pipeline from Admin to populate decision-makers.
                         </p>
+                        <Button variant="outline" size="sm" asChild>
+                          <Link href="/admin">Go to Admin — Run Ingest</Link>
+                        </Button>
                       </div>
                     </td>
                   </tr>

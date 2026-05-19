@@ -445,7 +445,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="text-right">
-                      <div className="text-lg font-bold text-primary">{facility.signalScore}</div>
+                      <div className="text-lg font-bold text-primary">{facility.signalScore ?? 0}</div>
                       <div className="text-xs text-muted-foreground">Score</div>
                     </div>
                     <Button variant="secondary" size="sm" asChild>
