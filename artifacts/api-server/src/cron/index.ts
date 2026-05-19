@@ -44,6 +44,7 @@ import { ingestHrsa } from "../services/hrsaIngestor";
 import { ingestUsda } from "../services/usdaIngestor";
 import { ingestMedicareUtil } from "../services/medicareUtilIngestor";
 import { propagateSystemSignals } from "../services/systemSignalPropagator";
+import { startNationalIngest } from "../services/nationalIngest";
 
 let started = false;
 const locks = new Set<string>();
@@ -213,6 +214,24 @@ export function startCron(): void {
     { timezone: tz },
   );
 
+  // Nightly national ingest — runs all states / all sources in one sweep so
+  // signal data stays fresh without manual triggering. Schedule is
+  // configurable via NATIONAL_INGEST_CRON (default: 02:00 nightly).
+  const nationalIngestCron =
+    process.env["NATIONAL_INGEST_CRON"] ?? "0 2 * * *";
+  cron.schedule(
+    nationalIngestCron,
+    guarded("nationalIngest", async () => {
+      const { started } = startNationalIngest();
+      if (started) {
+        logger.info("national ingest started by cron");
+      } else {
+        logger.warn("national ingest skipped by cron — a run is already in progress");
+      }
+    }),
+    { timezone: tz },
+  );
+
   // Every 2 minutes — classify any new inbound CRM replies with Anthropic so
   // the Drafts page can surface qualified replies and so unsubscribe /
   // not-interested replies pause the contact's sequence enrollment quickly.
@@ -225,6 +244,7 @@ export function startCron(): void {
   );
 
   logger.info(
-    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings, ingestFreeApis (15 sources), rolloverSpendCounters, classifyReplies",
+    { nationalIngestCron },
+    "Cron jobs scheduled: dailyBatch, recomputeSignals, enrichmentTick, ingestClinicalTrials, ingestConFilings, ingestFreeApis (15 sources), rolloverSpendCounters, classifyReplies, nationalIngest",
   );
 }
