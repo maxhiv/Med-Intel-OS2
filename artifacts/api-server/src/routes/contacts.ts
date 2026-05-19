@@ -46,6 +46,8 @@ router.get("/contacts", requireAccount, async (req, res) => {
     .limit(limit)
     .offset(offset);
 
+  // `total` reflects the current page size (post-limit). A separate COUNT query
+  // would be needed for a true global total if pagination is added later.
   res.json({ contacts: rows, total: rows.length, limit, offset });
 });
 

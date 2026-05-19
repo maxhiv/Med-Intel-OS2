@@ -54,7 +54,7 @@ let _authCheckScheduled = false;
 
 /**
  * Called when any API request returns 401.
- * Schedules a 1.5-second delayed verification against /api/me before redirecting.
+ * Schedules a 3-second delayed verification against /api/me before redirecting.
  * This prevents redirect loops during Clerk's automatic JWT refresh window.
  */
 function scheduleAuthCheck(): void {
@@ -83,7 +83,9 @@ function scheduleAuthCheck(): void {
 }
 
 // Listen for 401s emitted directly from the fetch wrapper (covers non-React-Query calls).
-if (typeof window !== "undefined") {
+// Guard with a named handler to avoid duplicate registrations under HMR.
+if (typeof window !== "undefined" && !(window as unknown as Record<string, unknown>).__authExpiredListenerRegistered) {
+  (window as unknown as Record<string, unknown>).__authExpiredListenerRegistered = true;
   window.addEventListener("auth:expired", () => scheduleAuthCheck());
 }
 
