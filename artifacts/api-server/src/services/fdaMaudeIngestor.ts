@@ -7,16 +7,23 @@
  * `compliance_citation` purchase signal keyed by `maude:{mdr_report_key}` so
  * reruns are idempotent. HTTP 404 = no results, not an error.
  *
+ * In addition, manufacturer contact fields embedded in each device entry
+ * (manufacturer_d_contact_f_name / l_name / t_name / p_n) are extracted and
+ * upserted into `facility_contacts` (dataSource: "fda_maude") following the
+ * same idempotent pattern used by nppesIngestor.ts.
+ *
  * Docs: https://open.fda.gov/apis/device/event/
  */
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import {
   db,
   facilities,
+  facilityContacts,
   purchaseSignals,
   type Facility,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
+import { enrichContact } from "./enrichment";
 
 const FDA_MAUDE_API = "https://api.fda.gov/device/event.json";
 
@@ -26,6 +33,16 @@ const IMAGING_DEVICE_REGEX =
 interface MaudeDevice {
   generic_name?: string;
   brand_name?: string;
+  /** Manufacturer name for the device */
+  manufacturer_d_name?: string;
+  /** Manufacturer contact — first name */
+  manufacturer_d_contact_f_name?: string;
+  /** Manufacturer contact — last name */
+  manufacturer_d_contact_l_name?: string;
+  /** Manufacturer contact — title */
+  manufacturer_d_contact_t_name?: string;
+  /** Manufacturer contact — phone number */
+  manufacturer_d_contact_p_n?: string;
 }
 
 interface MaudeEvent {
@@ -79,7 +96,56 @@ async function fetchMaudeForFacility(
 export interface IngestResult {
   facilitiesScanned: number;
   signalsInserted: number;
+  contactsUpserted: number;
   errors: number;
+}
+
+async function upsertMaudeContact(
+  facilityId: string,
+  device: MaudeDevice,
+  result: IngestResult,
+): Promise<void> {
+  const firstName = device.manufacturer_d_contact_f_name?.trim() || null;
+  const lastName  = device.manufacturer_d_contact_l_name?.trim()  || null;
+  if (!firstName && !lastName) return;
+
+  const title = device.manufacturer_d_contact_t_name?.trim() || null;
+  const phone = device.manufacturer_d_contact_p_n?.trim()    || null;
+
+  const [existing] = await db
+    .select({ id: facilityContacts.id })
+    .from(facilityContacts)
+    .where(
+      and(
+        eq(facilityContacts.facilityId, facilityId),
+        firstName ? eq(facilityContacts.firstName, firstName) : isNull(facilityContacts.firstName),
+        lastName  ? eq(facilityContacts.lastName,  lastName)  : isNull(facilityContacts.lastName),
+      ),
+    )
+    .limit(1);
+  if (existing) return;
+
+  const [inserted] = await db.insert(facilityContacts).values({
+    facilityId,
+    firstName,
+    lastName,
+    title,
+    phone,
+    department: null,
+    dataSource: "fda_maude",
+    confidenceScore: 45,
+    buyingAuthorityScore: 25,
+  }).returning({ id: facilityContacts.id });
+
+  result.contactsUpserted += 1;
+
+  if (inserted) {
+    try {
+      await enrichContact(inserted.id);
+    } catch (err) {
+      logger.warn({ err, contactId: inserted.id, facilityId }, "fda_maude contact enrichment failed");
+    }
+  }
 }
 
 export async function ingestFdaMaude(opts: {
@@ -97,6 +163,7 @@ export async function ingestFdaMaude(opts: {
   const result: IngestResult = {
     facilitiesScanned: 0,
     signalsInserted: 0,
+    contactsUpserted: 0,
     errors: 0,
   };
 
@@ -138,17 +205,28 @@ export async function ingestFdaMaude(opts: {
           ),
         )
         .limit(1);
-      if (exists) continue;
+      if (!exists) {
+        await db.insert(purchaseSignals).values({
+          facilityId: f.id,
+          signalType: "compliance_citation",
+          signalValue,
+          confidence: 45,
+          source: "fda_maude",
+          isActive: true,
+        });
+        result.signalsInserted += 1;
+      }
 
-      await db.insert(purchaseSignals).values({
-        facilityId: f.id,
-        signalType: "compliance_citation",
-        signalValue,
-        confidence: 45,
-        source: "fda_maude",
-        isActive: true,
-      });
-      result.signalsInserted += 1;
+      // Extract manufacturer contacts from device entries and upsert into
+      // facility_contacts so reps get warm leads with titles and phone numbers.
+      for (const device of event.device ?? []) {
+        if (
+          !IMAGING_DEVICE_REGEX.test(device.generic_name ?? "") &&
+          !IMAGING_DEVICE_REGEX.test(device.brand_name ?? "")
+        ) continue;
+
+        await upsertMaudeContact(f.id, device, result);
+      }
     }
 
     await db
