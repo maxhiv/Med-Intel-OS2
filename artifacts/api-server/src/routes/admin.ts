@@ -43,6 +43,7 @@ import {
   listCrmAdapters,
   type CredentialFieldSpec,
 } from "../services/crmAdapters";
+import { runImport990 } from "../services/import990Runner";
 
 const SUPPORTED_WEBHOOK_CRMS = ["ghl", "hubspot", "salesforce"] as const;
 type WebhookCrm = (typeof SUPPORTED_WEBHOOK_CRMS)[number];
@@ -1334,6 +1335,115 @@ router.get("/admin/signal-coverage", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: "query_failed", detail: String(err) });
   }
+});
+
+// ─── IRS 990 import trigger ───────────────────────────────────────────────────
+//
+// POST /admin/run-990-import
+//   Kicks off the full 7-phase IRS 990 pipeline in the background and returns
+//   202 Accepted immediately (the import takes ~100 s).
+//   Returns 409 if an import is already running (single-flight guard).
+//
+// GET /admin/990-import/status
+//   Returns the status of the latest import job (running / done / failed / idle).
+//
+// Auth: INTERNAL_ADMIN_KEY header only.
+//
+// Optional POST body:
+//   { signalsOnly: true }  — skip Phase 1 CSV import; re-run phases 2-7 only.
+//   { zipPath: "/abs/path" } — override the ZIP source path.
+
+interface Import990Job {
+  status: "running" | "done" | "failed" | "idle";
+  startedAt: string | null;
+  finishedAt: string | null;
+  signalsOnly: boolean;
+  zipPath: string | null;
+  result: import("../services/import990Runner").Import990Result | null;
+  error: string | null;
+}
+
+const import990Job: Import990Job = {
+  status: "idle",
+  startedAt: null,
+  finishedAt: null,
+  signalsOnly: false,
+  zipPath: null,
+  result: null,
+  error: null,
+};
+
+function requireInternalAdminKey(req: import("express").Request, res: import("express").Response): boolean {
+  const internalKey = process.env.INTERNAL_ADMIN_KEY;
+  const providedKey = req.headers["x-internal-admin-key"];
+  if (!internalKey || providedKey !== internalKey) {
+    res.status(401).json({ error: "unauthorized" });
+    return false;
+  }
+  return true;
+}
+
+router.post("/admin/run-990-import", async (req, res) => {
+  if (!requireInternalAdminKey(req, res)) return;
+
+  if (import990Job.status === "running") {
+    res.status(409).json({
+      error: "import_already_running",
+      startedAt: import990Job.startedAt,
+    });
+    return;
+  }
+
+  // Strict boolean: only the literal `true` value enables signalsOnly mode.
+  const rawSignalsOnly = (req.body ?? {}).signalsOnly;
+  const signalsOnly    = rawSignalsOnly === true;
+  const zipPath        = typeof (req.body ?? {}).zipPath === "string"
+    ? String((req.body as { zipPath: string }).zipPath)
+    : null;
+
+  Object.assign(import990Job, {
+    status: "running",
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    signalsOnly,
+    zipPath,
+    result: null,
+    error: null,
+  });
+
+  res.status(202).json({
+    ok: true,
+    message: "IRS 990 import started in background",
+    signalsOnly,
+    zipPath,
+    statusUrl: "/api/admin/990-import/status",
+  });
+
+  runImport990({ signalsOnly, zipPath: zipPath ?? undefined }).then((result) => {
+    Object.assign(import990Job, {
+      status: "done",
+      finishedAt: new Date().toISOString(),
+      result,
+      error: null,
+    });
+    console.log(
+      `[run-990-import] Completed: ${result.signals.total} signals, ` +
+      `${result.directMatched + result.trgmMatched} facilities matched, ` +
+      `${(result.elapsedMs / 1000).toFixed(1)}s elapsed`,
+    );
+  }).catch((err: unknown) => {
+    Object.assign(import990Job, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      error: String(err),
+    });
+    console.error("[run-990-import] Pipeline failed:", String(err));
+  });
+});
+
+router.get("/admin/990-import/status", (req, res) => {
+  if (!requireInternalAdminKey(req, res)) return;
+  res.json(import990Job);
 });
 
 // POST /admin/seed-account-facilities
