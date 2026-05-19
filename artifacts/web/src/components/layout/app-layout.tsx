@@ -18,6 +18,7 @@ import {
   Database,
   Monitor,
   Crosshair,
+  Compass,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +58,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     {
       label: "Intelligence",
       items: [
+        { name: "Territories", href: "/territories", icon: Compass },
         { name: "Facilities", href: "/facilities", icon: Building2 },
         { name: "Signals", href: "/signals", icon: Radio },
         { name: "CON Monitor", href: "/con-monitor", icon: Monitor },

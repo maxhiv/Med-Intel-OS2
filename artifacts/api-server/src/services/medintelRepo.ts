@@ -34,6 +34,7 @@ import {
   medintelDimCmmiModel,
   medintelBridgeNpiEnrollment,
   medintelBridgeFacilityAddress,
+  medintelRefCcnHospId,
   type MedintelDimFacility,
   type MedintelDimOwner,
   type MedintelFactOwnership,
@@ -244,13 +245,26 @@ async function loadServiceArea(ccns: string[]): Promise<MedintelFactServiceArea[
 }
 
 async function loadPsi11(ccns: string[]): Promise<MedintelFactPsi11[]> {
-  // PSI-11 keys on hosp_id (an HCUP-assigned numeric id, NOT a CCN). The
-  // current data drop ships the file orphaned of a CCN crosswalk — so until
-  // that lookup is loaded, we degrade gracefully to "no rows".
+  // PSI-11 keys on hosp_id (an HCUP-assigned numeric id, NOT a CCN). We
+  // prefer the medintel.ref_ccn_hosp_id crosswalk when populated, and fall
+  // back to a best-effort numeric-CCN match when it isn't.
   if (ccns.length === 0) return [];
-  // Best-effort numeric CCN match — many cost reports record the hosp_id
-  // directly in the numeric portion of the CCN; this lights up rows when the
-  // alignment happens to match, and stays empty when it doesn't.
+
+  // ── Path A: load via crosswalk (preferred, accurate)
+  const crosswalk = await db
+    .select({ hospId: medintelRefCcnHospId.hospId })
+    .from(medintelRefCcnHospId)
+    .where(inArray(medintelRefCcnHospId.ccn, ccns));
+  if (crosswalk.length > 0) {
+    return await db
+      .select()
+      .from(medintelFactPsi11)
+      .where(inArray(medintelFactPsi11.hospId, crosswalk.map((c) => c.hospId)))
+      .orderBy(desc(medintelFactPsi11.startDate))
+      .limit(20);
+  }
+
+  // ── Path B: numeric-CCN best-effort fallback
   const numericIds = ccns
     .map((c) => Number(c.replace(/\D/g, "")))
     .filter((n) => Number.isFinite(n) && n > 0);
@@ -265,43 +279,69 @@ async function loadPsi11(ccns: string[]): Promise<MedintelFactPsi11[]> {
 
 async function loadAcoParticipation(
   npis: number[],
+  ein: string | null,
 ): Promise<FacilityIntelligence["acoParticipation"]> {
-  if (npis.length === 0) return [];
+  // Match strategy, in priority order:
+  //   1) EIN ↔ dim_aco.tin (exact, requires medintel_os_extensions.sql roster)
+  //   2) NPI → ASM roster organization_legal_name → fuzzy ACO name match
+  // Either path's hits are unioned.
+  const acoIds = new Set<string>();
+  const acoById = new Map<string, MedintelDimAco>();
 
-  // No direct facility ↔ ACO link in PECOS; instead we surface ACOs whose
-  // ASM participant list (CY27 cohort) includes any of this facility's NPIs.
-  const asmRows = await db
-    .select()
-    .from(medintelFactAsmParticipant)
-    .where(inArray(medintelFactAsmParticipant.npi, npis));
-  const acoNamesFromAsm = new Set(
-    asmRows.map((r) => r.organizationLegalName).filter((v): v is string => Boolean(v)),
-  );
-  if (acoNamesFromAsm.size === 0) return [];
+  // ── Path 1: EIN/TIN crosswalk
+  if (ein && /^\d{9}$/.test(ein)) {
+    const tinAcos = await db
+      .select()
+      .from(medintelDimAco)
+      .where(eq(medintelDimAco.tin, ein));
+    for (const a of tinAcos) {
+      acoIds.add(a.acoId);
+      acoById.set(a.acoId, a);
+    }
+  }
 
-  // Match ACO by name (best-effort case-insensitive).
-  const acos = await db
-    .select()
-    .from(medintelDimAco)
-    .where(
-      sql`LOWER(${medintelDimAco.acoName}) IN (${sql.join(
-        Array.from(acoNamesFromAsm).map((n) => sql`${n.toLowerCase()}`),
-        sql`, `,
-      )})`,
+  // ── Path 2: ASM roster name match (fallback)
+  if (npis.length > 0) {
+    const asmRows = await db
+      .select()
+      .from(medintelFactAsmParticipant)
+      .where(inArray(medintelFactAsmParticipant.npi, npis));
+    const acoNamesFromAsm = new Set(
+      asmRows.map((r) => r.organizationLegalName).filter((v): v is string => Boolean(v)),
     );
-  if (acos.length === 0) return [];
+    if (acoNamesFromAsm.size > 0) {
+      const nameAcos = await db
+        .select()
+        .from(medintelDimAco)
+        .where(
+          sql`LOWER(${medintelDimAco.acoName}) IN (${sql.join(
+            Array.from(acoNamesFromAsm).map((n) => sql`${n.toLowerCase()}`),
+            sql`, `,
+          )})`,
+        );
+      for (const a of nameAcos) {
+        if (!acoIds.has(a.acoId)) {
+          acoIds.add(a.acoId);
+          acoById.set(a.acoId, a);
+        }
+      }
+    }
+  }
 
-  const acoIds = acos.map((a) => a.acoId);
+  if (acoIds.size === 0) return [];
+  const acos = Array.from(acoById.values());
+
+  const acoIdList = Array.from(acoIds);
   const [perf, aip] = await Promise.all([
     db
       .select()
       .from(medintelFactAcoPerformance)
-      .where(inArray(medintelFactAcoPerformance.acoId, acoIds))
+      .where(inArray(medintelFactAcoPerformance.acoId, acoIdList))
       .orderBy(desc(medintelFactAcoPerformance.performanceYear)),
     db
       .select()
       .from(medintelFactAipSpending)
-      .where(inArray(medintelFactAipSpending.acoId, acoIds)),
+      .where(inArray(medintelFactAipSpending.acoId, acoIdList)),
   ]);
 
   const perfByAco = new Map<string, MedintelFactAcoPerformance>();
@@ -392,7 +432,7 @@ async function loadChainSummary(
  * or a zeroed-out result with `matched: false` if no warehouse match exists.
  */
 export async function getFacilityIntelligence(
-  facility: Pick<Facility, "id" | "cmsId" | "npi" | "state">,
+  facility: Pick<Facility, "id" | "cmsId" | "npi" | "state" | "ein">,
 ): Promise<FacilityIntelligence> {
   const enrollmentIds = await findEnrollmentIdsForFacility(facility);
   if (enrollmentIds.length === 0) {
@@ -445,7 +485,7 @@ export async function getFacilityIntelligence(
     loadCostReport(ccns),
     loadServiceArea(ccns),
     loadPsi11(ccns),
-    loadAcoParticipation(npiNumbers),
+    loadAcoParticipation(npiNumbers, facility.ein ?? null),
     loadAsmRows(npiNumbers),
     loadCmmiForState(identity?.state ?? facility.state ?? null),
     loadChainSummary(owners),

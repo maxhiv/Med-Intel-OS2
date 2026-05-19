@@ -214,6 +214,17 @@ export const medintelDimAco = medintelSchema.table("dim_aco", {
   riskModel: text("risk_model"),
   assignType: text("assign_type"),
   snfWaiver: boolean("snf_waiver"),
+  // Added by medintel_os_extensions.sql — NULL until the ACO TIN roster file is loaded.
+  tin: varchar("tin", { length: 9 }),
+  parentOrganization: text("parent_organization"),
+});
+
+// ── ref_ccn_hosp_id (CCN ↔ HCUP hosp_id crosswalk) ───────────────────────────
+export const medintelRefCcnHospId = medintelSchema.table("ref_ccn_hosp_id", {
+  ccn: text("ccn").primaryKey(),
+  hospId: integer("hosp_id").notNull(),
+  source: text("source"),
+  loadedAt: timestamp("loaded_at", { withTimezone: true }),
 });
 
 // ── fact_aco_performance ─────────────────────────────────────────────────────
@@ -320,3 +331,4 @@ export type MedintelFactAsmParticipant = typeof medintelFactAsmParticipant.$infe
 export type MedintelDimCmmiModel = typeof medintelDimCmmiModel.$inferSelect;
 export type MedintelBridgeNpiEnrollment = typeof medintelBridgeNpiEnrollment.$inferSelect;
 export type MedintelBridgeFacilityAddress = typeof medintelBridgeFacilityAddress.$inferSelect;
+export type MedintelRefCcnHospId = typeof medintelRefCcnHospId.$inferSelect;
