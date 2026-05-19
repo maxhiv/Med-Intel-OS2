@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startCron } from "./cron";
+import { seedSystemEquipmentLineProfiles } from "./services/equipmentLineService";
 
 const rawPort = process.env["PORT"];
 
@@ -24,4 +25,10 @@ app.listen(port, (err) => {
 
   logger.info({ port }, "Server listening");
   startCron();
+
+  // Idempotent seed of system equipment-line rubrics so per-line scoring
+  // works out of the box for every deployment.
+  seedSystemEquipmentLineProfiles()
+    .then((r) => logger.info(r, "equipment-line profiles seeded"))
+    .catch((err) => logger.error({ err }, "equipment-line seed failed"));
 });

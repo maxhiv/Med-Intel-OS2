@@ -408,6 +408,7 @@ router.get("/facilities/:id/intelligence", requireAccount, async (req, res) => {
       cmsId: f.cmsId,
       npi: f.npi,
       state: f.state,
+      ein: f.ein,
     });
     res.json(intel);
   } catch (err) {

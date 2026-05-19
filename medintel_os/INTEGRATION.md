@@ -105,22 +105,122 @@ surfaces are suppressed. Reports stay accessible under their own group.
 The API server routes for those features are untouched. Disabling the
 flag instantly restores the original LeadStack-style UX.
 
+## Territory planner
+
+`/territories` (web) lets a rep build a filtered list of qualified
+prospects, save it as a named territory, and re-run it quarterly against
+fresh CMS data.
+
+- **Filters:** states · ZIP codes · facility types · ownership (PE / REIT /
+  chain / holding / for-profit) · financial size (min beds / assets / net
+  patient revenue) · buying-cycle (recent CHOW, AIP infra spend, CMMI in
+  state, PSI-11 outlier) · service mix (outpatient revenue, discharges) ·
+  min composite score · free-text name search.
+- **Views:** table (sortable by score / name / beds / revenue) and map
+  (MapLibre, OSM tiles, pins colored by score, popup with key signals).
+- **CSV export** of any saved territory's evaluation.
+- **Sell-side variant:** flipping a saved territory to `view_kind=sell_side`
+  auto-applies distress filters and surfaces the seller-side CHOW, net
+  income YoY decline, cash YoY decline, and active-acquisition-market
+  signals. A facility must hit at least one distress signal to surface.
+
+Persistence lives in two new tables (Drizzle schema in
+[`lib/db/src/schema/app.ts`](../lib/db/src/schema/app.ts)):
+- `territories(id, account_id, view_kind, name, filter JSONB,
+   equipment_line_slug, is_shared, …)`
+- `equipment_line_profiles(id, slug, name, account_id NULL, is_system,
+   rubric JSONB)`
+
+API endpoints (in
+[`routes/territories.ts`](../artifacts/api-server/src/routes/territories.ts)
+and [`routes/equipmentLines.ts`](../artifacts/api-server/src/routes/equipmentLines.ts)):
+
+| Method | Path | Description |
+|---|---|---|
+| GET    | `/api/territories[?viewKind=…]` | List the account's saved territories |
+| POST   | `/api/territories`              | Create a territory |
+| GET    | `/api/territories/:id`          | Get a saved territory |
+| PUT    | `/api/territories/:id`          | Update name/filter/lens |
+| DELETE | `/api/territories/:id`          | Delete |
+| GET    | `/api/territories/:id/facilities` | Evaluate, with `?equipmentLine=&sortBy=&limit=&offset=` overrides |
+| POST   | `/api/territories/preview`      | Evaluate without saving |
+| GET    | `/api/equipment-lines`          | List system + account-customized profiles |
+| GET    | `/api/equipment-lines/:slug`    | Get a single profile |
+| PUT    | `/api/equipment-lines/:slug`    | Create/update an account override |
+| DELETE | `/api/equipment-lines/:slug`    | Delete an account override (system profiles are immutable) |
+
+## Equipment-line profiles
+
+Six system profiles are seeded at server startup
+([`equipmentLineService.ts → seedSystemEquipmentLineProfiles`](../artifacts/api-server/src/services/equipmentLineService.ts)):
+
+| Slug | Best fit |
+|---|---|
+| `imaging` | Outpatient-heavy hospitals + imaging centers with discharge volume |
+| `surgical` | Hospitals + ASCs with strong surgical case volume |
+| `monitoring` | Acute hospitals with ICU intensity; PSI-11 outliers light up |
+| `sterilization` | Larger acute facilities + ASCs |
+| `endoscopy` | Outpatient-heavy mix; ASCs win this lane |
+| `lab` | Hospitals + community clinics with patient volume + ACO/CMMI |
+
+Each rubric weights facility type, HCRIS metrics (beds, revenue,
+discharges), and signal flags (chow_recent, pe_takeover, …). Account
+admins can override any slug via `PUT /api/equipment-lines/:slug`.
+
+## MapLibre map
+
+[`components/territory-map.tsx`](../artifacts/web/src/components/territory-map.tsx)
+renders pins at `facilities.lat,lng` using OSM raster tiles (no API key).
+Pins are colored by activation score:
+
+- **Red** ≥ 70 (hot)
+- **Orange** 50–69 (warm)
+- **Amber** 30–49 (qualified)
+- **Slate** < 30
+
+For higher-volume use, swap the style to a vector source (MapTiler / Stadia)
+with your own token in the `OSM_STYLE` constant.
+
+## Crosswalks
+
+[`medintel_os_extensions.sql`](./medintel_os_extensions.sql) is an additive
+extension to `medintel_os_schema.sql`. Run it whenever you receive these
+optional crosswalk files:
+
+- **ACO Provider TIN roster.** Adds `dim_aco.tin` + `parent_organization`,
+  and a `stage_aco_tin_roster` staging surface. Once loaded, the
+  intelligence endpoint matches ACO participation via EIN ↔ TIN first,
+  falling back to fuzzy ASM-roster name match.
+- **CCN ↔ HCUP `hosp_id` crosswalk** (e.g. from the AHA Annual Survey).
+  Adds `ref_ccn_hosp_id`. When populated, both the intelligence endpoint
+  and the daily signal scorer use it for PSI-11; when empty, both fall
+  back gracefully to the previous numeric-CCN best-effort path.
+
+Load example (replace `your_*.csv` with your file):
+
+```sql
+\copy medintel.stage_aco_tin_roster FROM 'your_aco_tin_roster.csv' WITH (FORMAT csv, HEADER true)
+-- The UPDATE inside medintel_os_extensions.sql copies these into dim_aco.tin.
+
+\copy medintel.ref_ccn_hosp_id (ccn, hosp_id, source) FROM 'your_ccn_hospid.csv' WITH (FORMAT csv, HEADER true)
+```
+
 ## What this PR does NOT do (yet)
 
-The Medintel OS brief calls for several capabilities still on the roadmap:
-
-- Territory planning UI (state / metro / ZIP / drive-time filters with
-  saved-list persistence).
-- Equipment-line targeting profiles (imaging / surgical / monitoring /
-  sterilization / endoscopy / lab) with per-line scoring.
-- Sell-side prospecting view (declining HCRIS trend + seller-side CHOW).
-- MapLibre territory map.
-- OpenAPI codegen for the new intelligence endpoint (the hook talks to the
-  endpoint directly for now via `customFetch`).
-- ASM-to-ACO matching is currently a fuzzy name match on the participant's
-  `organization_legal_name`; a proper TIN/EIN crosswalk would tighten it.
-- PSI-11 keys on HCUP `hosp_id`, not CCN; the rule does a best-effort
-  numeric match. A CCN ↔ hosp_id crosswalk is needed for full coverage.
+- **OpenAPI codegen for the intelligence + territory endpoints.** The
+  committed `lib/api-client-react/src/generated/` was produced by a
+  pre-8.5.2 orval that emitted `Omit<UseQueryOptions, 'queryKey'>`; orval
+  8.5.2 now emits the full `UseQueryOptions`, which breaks ~15 existing
+  call sites (`useGetDashboardSummary({ refetchInterval: ... })` etc.).
+  Untangling that is a pre-existing maintenance gap unrelated to this PR;
+  until it's done, the new endpoints are reached via manual `customFetch`
+  hooks in `hooks/use-facility-intelligence.ts` and `hooks/use-territory.ts`.
+- **Drive-time radius filter.** The filter shape reserves a slot for it;
+  the planner UI currently only supports state + ZIP geography. Hooking
+  in OSRM or Mapbox Directions is a follow-up.
+- **`@tanstack/react-table`.** The territory tables are vanilla `<table>`
+  elements with sortable column headers in `useState`; swapping in
+  TanStack Table is a cosmetic upgrade with no API surface change.
 
 ## Operational notes
 

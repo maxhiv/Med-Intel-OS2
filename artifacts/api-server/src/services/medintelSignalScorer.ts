@@ -32,6 +32,7 @@ import {
   medintelDimFacility,
   medintelBridgeNpiEnrollment,
   medintelFactPsi11,
+  medintelRefCcnHospId,
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { listLinkableFacilities } from "./medintelRepo";
@@ -513,7 +514,27 @@ async function emitCmmiStateLaunch(idx: FacilityIndex): Promise<number> {
 // ─── Rule: psi11_outlier ─────────────────────────────────────────────────────
 
 async function emitPsi11Outlier(idx: FacilityIndex): Promise<number> {
-  const hospIds = Array.from(idx.byHospIdNumeric.keys());
+  // Prefer the populated crosswalk; if empty, fall back to numeric-CCN coincidence.
+  let hospIdToFacilityIds = new Map<number, string[]>();
+  const ccns = Array.from(idx.byCcn.keys());
+  if (ccns.length > 0) {
+    const cross = await db
+      .select({ ccn: medintelRefCcnHospId.ccn, hospId: medintelRefCcnHospId.hospId })
+      .from(medintelRefCcnHospId)
+      .where(inArray(medintelRefCcnHospId.ccn, ccns));
+    for (const r of cross) {
+      const fids = idx.byCcn.get(r.ccn) ?? [];
+      const arr = hospIdToFacilityIds.get(r.hospId) ?? [];
+      for (const fid of fids) if (!arr.includes(fid)) arr.push(fid);
+      hospIdToFacilityIds.set(r.hospId, arr);
+    }
+  }
+  // If the crosswalk hasn't been loaded yet, use the legacy numeric path.
+  if (hospIdToFacilityIds.size === 0) {
+    hospIdToFacilityIds = idx.byHospIdNumeric;
+  }
+
+  const hospIds = Array.from(hospIdToFacilityIds.keys());
   if (hospIds.length === 0) return 0;
 
   // National-average rate for the most recent reporting period.
@@ -535,7 +556,7 @@ async function emitPsi11Outlier(idx: FacilityIndex): Promise<number> {
 
   const inserts: Array<InsertSignal & { signalValue: string }> = [];
   for (const r of rows) {
-    const fids = idx.byHospIdNumeric.get(r.hospId) ?? [];
+    const fids = hospIdToFacilityIds.get(r.hospId) ?? [];
     for (const facilityId of fids) {
       inserts.push({
         facilityId,

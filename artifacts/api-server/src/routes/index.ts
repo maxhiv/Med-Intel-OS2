@@ -17,6 +17,8 @@ import adminRouter from "./admin";
 import oauthRouter from "./oauth";
 import streamRouter from "./stream";
 import leadsRouter from "./leads";
+import territoriesRouter from "./territories";
+import equipmentLinesRouter from "./equipmentLines";
 
 const router: IRouter = Router();
 
@@ -51,6 +53,8 @@ router.use(draftsRouter);
 router.use(batchesRouter);
 router.use(reportsRouter);
 router.use(leadsRouter);
+router.use(territoriesRouter);
+router.use(equipmentLinesRouter);
 router.use(adminRouter);
 router.use(oauthRouter);
 
