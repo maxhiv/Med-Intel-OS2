@@ -47,6 +47,15 @@ export const signalTypeEnum = pgEnum("signal_type", [
   "capital_investment",
   "workforce_expansion",
   "hospital_operator",
+  // ── Medintel warehouse signals ──────────────────────────────────────────
+  // Emitted by services/medintelSignalScorer.ts from the medintel.* warehouse.
+  "chow_recent",         // Hospital/SNF change-of-ownership in the last 18 months
+  "pe_takeover",         // Private-equity ownership recorded in PECOS
+  "reit_takeover",       // REIT ownership recorded in PECOS
+  "aip_infra_spend",     // ACO has Advance Investment Payment dollars earmarked for infrastructure
+  "cmmi_state_launch",   // A CMMI Innovation Center model is active in the facility's state
+  "psi11_outlier",       // AHRQ PSI-11 rate above national average
+  "chain_acquisition",   // Owner flagged as chain-home-office controls multiple facilities
 ]);
 
 export const contactStatusEnum = pgEnum("contact_status", [

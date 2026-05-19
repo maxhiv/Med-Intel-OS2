@@ -40,6 +40,14 @@ export function AppLayout({ children }: AppLayoutProps) {
   const [location] = useLocation();
   const { data: me, isLoading } = useGetMe();
 
+  // When `VITE_MEDINTEL_OS_MODE=true` we run in prospect-intelligence mode
+  // per the Medintel OS brief — outbound-marketing surfaces (contacts,
+  // campaigns, sequences, drafts, batches) are hidden because the product
+  // explicitly does not do automated outreach. The routes still resolve
+  // for any direct deep-links the back-office team needs.
+  const medintelMode =
+    String(import.meta.env.VITE_MEDINTEL_OS_MODE ?? "").toLowerCase() === "true";
+
   const topItems: NavItem[] = [
     { name: "Lead Cards", href: "/leads", icon: Crosshair },
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -56,17 +64,29 @@ export function AppLayout({ children }: AppLayoutProps) {
         { name: "Data Sources", href: "/data-sources", icon: Database },
       ],
     },
-    {
-      label: "Outreach",
-      items: [
-        { name: "Contacts", href: "/contacts", icon: Users },
-        { name: "Campaigns", href: "/campaigns", icon: Target },
-        { name: "Sequences", href: "/sequences", icon: Layers },
-        { name: "Drafts", href: "/drafts", icon: FileSignature },
-        { name: "Batches", href: "/batches", icon: CheckCircle2 },
-        { name: "Reports", href: "/reports", icon: FileText },
-      ],
-    },
+    ...(medintelMode
+      ? []
+      : [
+          {
+            label: "Outreach",
+            items: [
+              { name: "Contacts", href: "/contacts", icon: Users },
+              { name: "Campaigns", href: "/campaigns", icon: Target },
+              { name: "Sequences", href: "/sequences", icon: Layers },
+              { name: "Drafts", href: "/drafts", icon: FileSignature },
+              { name: "Batches", href: "/batches", icon: CheckCircle2 },
+              { name: "Reports", href: "/reports", icon: FileText },
+            ],
+          },
+        ]),
+    ...(medintelMode
+      ? [
+          {
+            label: "Reports",
+            items: [{ name: "Reports", href: "/reports", icon: FileText }],
+          },
+        ]
+      : []),
     {
       label: "System",
       items: [
