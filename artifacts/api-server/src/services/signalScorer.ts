@@ -19,6 +19,11 @@ const TIER1_SIGNALS = new Set([
   "bond_issued",
   "rfp_posted",
   "hcris_depreciation_spike",
+  // Medintel warehouse signals — ownership change drives capital cycles
+  "chow_recent",
+  "pe_takeover",
+  "reit_takeover",
+  "aip_infra_spend",
 ]);
 
 // Tier 2 — supporting context
@@ -27,6 +32,8 @@ const TIER2_SIGNALS = new Set([
   "high_utilization",
   "grant_awarded",
   "clinical_trial",
+  "chain_acquisition",
+  "psi11_outlier",
 ]);
 
 // Tier 3 — enrichment
@@ -85,6 +92,14 @@ const WEIGHTS: Record<string, number> = {
   capital_investment: 18,
   workforce_expansion: 6,
   hospital_operator: 10,
+  // Medintel
+  chow_recent: 35,
+  pe_takeover: 30,
+  reit_takeover: 28,
+  aip_infra_spend: 25,
+  chain_acquisition: 12,
+  psi11_outlier: 15,
+  cmmi_state_launch: 5,
 };
 
 // ─── Engagement constants ─────────────────────────────────────────────────────

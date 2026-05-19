@@ -45,6 +45,7 @@ import { ingestUsda } from "../services/usdaIngestor";
 import { ingestMedicareUtil } from "../services/medicareUtilIngestor";
 import { propagateSystemSignals } from "../services/systemSignalPropagator";
 import { startNationalIngest } from "../services/nationalIngest";
+import { scanMedintelSignals } from "../services/medintelSignalScorer";
 
 let started = false;
 const locks = new Set<string>();
@@ -83,6 +84,18 @@ export function startCron(): void {
     guarded("dailyBatch", async () => {
       const r = await runAllAccounts();
       logger.info(r, "daily batch run complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:45 daily — scan the medintel.* warehouse for CHOW, PE/REIT, chain,
+  // AIP infra, CMMI launch, and PSI-11 signals; emit purchase_signals rows
+  // before the 03:00 composite score recompute picks them up.
+  cron.schedule(
+    "45 2 * * *",
+    guarded("medintelScan", async () => {
+      const r = await scanMedintelSignals();
+      logger.info(r, "medintel signal scan complete");
     }),
     { timezone: tz },
   );

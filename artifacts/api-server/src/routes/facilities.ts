@@ -26,6 +26,7 @@ import { requireAccount } from "../middlewares/auth";
 import { validateBody } from "../middlewares/validate";
 import { syncFacilityFromNpi } from "../services/npiSync";
 import { recomputeOne, computeSignalBreakdown, type SignalBreakdown } from "../services/signalScorer";
+import { getFacilityIntelligence } from "../services/medintelRepo";
 import { CreateFacilityFromNpiBody, UpdateFacilityBody } from "@workspace/api-zod";
 
 const router: IRouter = Router();
@@ -69,9 +70,11 @@ async function batchSignalBreakdowns(
 
   const TIER1 = new Set([
     "con_filed", "con_approved", "bond_issued", "rfp_posted", "hcris_depreciation_spike",
+    "chow_recent", "pe_takeover", "reit_takeover", "aip_infra_spend",
   ]);
   const TIER2 = new Set([
     "equipment_age_7yr", "high_utilization", "grant_awarded", "clinical_trial",
+    "chain_acquisition", "psi11_outlier",
   ]);
 
   const WEIGHTS: Record<string, number> = {
@@ -79,6 +82,8 @@ async function batchSignalBreakdowns(
     hcris_depreciation_spike: 25, equipment_age_7yr: 20, high_utilization: 15,
     grant_awarded: 25, clinical_trial: 15, adverse_event_spike: 10, sec_capex_flag: 18,
     depreciation_flag: 12, eol_equipment: 12,
+    chow_recent: 35, pe_takeover: 30, reit_takeover: 28, aip_infra_spend: 25,
+    chain_acquisition: 12, psi11_outlier: 15, cmmi_state_launch: 5,
   };
 
   const grouped = new Map<string, typeof sigs>();
@@ -383,6 +388,32 @@ router.get("/facilities/:id/equipment", requireAccount, async (req, res) => {
     .from(equipmentRecords)
     .where(eq(equipmentRecords.facilityId, id));
   res.json(rows);
+});
+
+router.get("/facilities/:id/intelligence", requireAccount, async (req, res) => {
+  const accountId = req.currentAccount!.id;
+  const id = String(req.params.id);
+  if (!(await assertAccountOwnsFacility(accountId, id))) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const [f] = await db.select().from(facilities).where(eq(facilities.id, id));
+  if (!f) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  try {
+    const intel = await getFacilityIntelligence({
+      id: f.id,
+      cmsId: f.cmsId,
+      npi: f.npi,
+      state: f.state,
+    });
+    res.json(intel);
+  } catch (err) {
+    req.log?.error({ err, facilityId: id }, "facility intelligence assembly failed");
+    res.status(500).json({ error: "intelligence_unavailable" });
+  }
 });
 
 router.post(

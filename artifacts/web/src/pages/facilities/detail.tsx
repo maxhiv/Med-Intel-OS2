@@ -8,6 +8,7 @@ import {
 } from "@workspace/api-client-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { FacilityIntelligenceTab } from "./intelligence-tab";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -393,8 +394,9 @@ export default function FacilityDetailPage() {
 
         {/* Main tabs */}
         <div className="md:col-span-3">
-          <Tabs defaultValue="signals" className="w-full">
-            <TabsList className="grid w-full grid-cols-4">
+          <Tabs defaultValue="intelligence" className="w-full">
+            <TabsList className="grid w-full grid-cols-5">
+              <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
               <TabsTrigger value="signals">
                 Signals
                 {signals.length > 0 && (
@@ -405,6 +407,11 @@ export default function FacilityDetailPage() {
               <TabsTrigger value="contacts">Contacts</TabsTrigger>
               <TabsTrigger value="equipment">Equipment</TabsTrigger>
             </TabsList>
+
+            {/* Intelligence (medintel warehouse) tab */}
+            <TabsContent value="intelligence" className="mt-4">
+              <FacilityIntelligenceTab facilityId={id} />
+            </TabsContent>
 
             {/* Signals tab */}
             <TabsContent value="signals" className="mt-4 space-y-4">
