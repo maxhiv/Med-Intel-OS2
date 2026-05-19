@@ -1,26 +1,26 @@
 /**
  * IRS EO 990 Complete Extract Importer  (Task #103)
  *
- * Phase 1 — CSV import   : Streams the 247MB ZIP, upserts all 246 columns
- *                          into irs_990_raw in 500-row batches.
- *                          Progress logged every 10k rows.
- * Phase 2 — EIN match    : Direct JOIN on facilities.ein (backfilled from
- *                          prior propublica signals). Updates facility_id,
- *                          match_score=1.000, matched_at on irs_990_raw.
- * Phase 3 — Trgm match   : Two-pass pg_trgm (0.45 general / 0.35 hospital)
- *                          over all irs_990_raw rows where org_name IS NOT NULL.
- *                          Pre-materialised frozen EIN list (no mutable OFFSET).
- *                          Each batch uses ROW_NUMBER() OVER (PARTITION BY ein
- *                          ORDER BY sim DESC) for deterministic top-1 selection.
- *                          On match: updates irs_990_raw AND facilities.ein.
- *                          org_name is populated by Task #104 BMF import; until
- *                          then the WHERE guard short-circuits with 0 matches.
- * Phase 4 — Fin docs     : Upsert financial_documents per spec mapping:
- *                          capitalExpenditures = deprcatndepletn,
- *                          operatingIncome = totrevenue - totfuncexpns,
- *                          netPatientRevenue = totprgmrevnue.
- * Phase 5 — Signals      : Emit 4 signal types per spec thresholds.
- * Phase 6 — Score recomp : recomputeAllScores() for all facilities.
+ * Phase 1 — CSV import       : Streams the 247MB ZIP, upserts all 246 columns
+ *                              into irs_990_raw in 500-row batches.
+ *                              Progress logged every 10k rows.
+ * Phase 2 — EIN match        : Direct JOIN on facilities.ein. Updates
+ *                              facility_id, match_score=1.000, matched_at.
+ * Phase 3 — BMF name load    : Reads the three IRS EO Business Master File
+ *                              CSVs (eo1/eo2/eo3) from attached_assets/.
+ *                              Builds an EIN→name map and batch-UPDATEs
+ *                              irs_990_raw.org_name for every unmatched row
+ *                              whose EIN appears in the BMF. No external HTTP
+ *                              calls — all data is local and self-contained.
+ * Phase 4 — Trgm match       : Two-pass pg_trgm (0.45 general / 0.35 hospital)
+ *                              over irs_990_raw rows where org_name IS NOT NULL
+ *                              (populated by Phase 3). Pre-materialised frozen
+ *                              EIN list; ROW_NUMBER() top-1 per EIN; inline
+ *                              similarity() threshold (no session SET).
+ *                              On match: updates irs_990_raw AND facilities.ein.
+ * Phase 5 — Fin docs         : Upsert financial_documents per spec mapping.
+ * Phase 6 — Signals          : Emit 4 signal types per spec thresholds.
+ * Phase 7 — Score recomp     : recomputeAllScores() for all facilities.
  *
  * Usage:
  *   pnpm --filter @workspace/api-server run import-990
@@ -28,7 +28,7 @@
  * Env overrides:
  *   IRS_990_ZIP_PATH      Absolute path to ZIP (default: attached_assets/)
  *   IRS_990_BATCH_SIZE    Rows per DB batch      (default: 500)
- *   IRS_990_SIGNALS_ONLY  "1" → skip CSV import, run phases 2-6 only
+ *   IRS_990_SIGNALS_ONLY  "1" → skip CSV import, run phases 2-7 only
  */
 
 export {};
@@ -51,6 +51,15 @@ const DEFAULT_ZIP  = path.join(
 const ZIP_PATH     = process.env.IRS_990_ZIP_PATH ?? DEFAULT_ZIP;
 const BATCH_SIZE   = Math.max(100, Number(process.env.IRS_990_BATCH_SIZE ?? 500));
 const SIGNALS_ONLY = process.env.IRS_990_SIGNALS_ONLY === "1";
+
+// IRS EO Business Master File CSVs — local files, no HTTP calls.
+// Columns relevant to matching: EIN (col 0), NAME (col 1), STATE (col 5).
+// All three files together cover the full national BMF extract.
+const BMF_FILES = [
+  path.join(REPO_ROOT, "attached_assets/eo1_1779206848043.csv"),
+  path.join(REPO_ROOT, "attached_assets/eo2_1779206844990.csv"),
+  path.join(REPO_ROOT, "attached_assets/eo3_1779206841644.csv"),
+];
 
 // Signal thresholds — exact per task spec
 const FINANCIAL_HEALTH_MIN_REVENUE  = 1_000_000;  // totrevenue > $1M
@@ -526,18 +535,78 @@ async function directEinMatch(): Promise<number> {
   return Number(row.cnt);
 }
 
-// ─── Phase 3: pg_trgm name match ─────────────────────────────────────────────
+// ─── Phase 3: BMF name population ────────────────────────────────────────────
 
 /**
- * Phase 3 — pg_trgm name-similarity match.
+ * Phase 3 — Populate irs_990_raw.org_name from the IRS EO Business Master File.
  *
- * Two passes over irs_990_raw rows where org_name IS NOT NULL:
+ * The 990 extract CSV has no name column. The BMF CSVs (eo1/eo2/eo3) ship
+ * EIN, NAME, STATE for every exempt organisation. This function:
+ *   1. Streams all three BMF files through csv-parse (no shell, no HTTP).
+ *   2. Builds a Map<ein, name> (~1.26 M entries, de-duplicated by first-seen).
+ *   3. Batch-UPDATEs irs_990_raw.org_name via VALUES lists (500 rows/batch),
+ *      touching only rows whose org_name IS NULL (idempotent re-runs).
+ *
+ * After this phase, every 990 row whose EIN appears in the BMF has an org_name
+ * populated and is eligible for pg_trgm matching in Phase 4.
+ */
+async function populateBmfNames(): Promise<number> {
+  const BMF_BATCH = 500;
+
+  // Stream all BMF files and build EIN→name lookup (first-seen wins per EIN)
+  const einToName = new Map<string, string>();
+  for (const filePath of BMF_FILES) {
+    await new Promise<void>((resolve, reject) => {
+      const parser = parse({
+        columns: true,
+        skip_empty_lines: true,
+        trim: true,
+        relax_column_count: true,   // skip truncated/malformed rows at EOF
+      });
+      createReadStream(filePath)
+        .on("error", reject)
+        .pipe(parser);
+      parser.on("data", (row: Record<string, string>) => {
+        const ein  = (row["EIN"]  ?? "").trim();
+        const name = (row["NAME"] ?? "").trim();
+        if (ein && name && !einToName.has(ein)) einToName.set(ein, name);
+      });
+      parser.on("end",   resolve);
+      parser.on("error", reject);
+    });
+    console.log(`    BMF loaded: ${path.basename(filePath)} (running total: ${fmt(einToName.size)} EINs)`);
+  }
+
+  // Batch-UPDATE irs_990_raw.org_name via SQL VALUES list
+  const entries = [...einToName.entries()];
+  let updated = 0;
+  for (let i = 0; i < entries.length; i += BMF_BATCH) {
+    const batch = entries.slice(i, i + BMF_BATCH);
+    const values = batch
+      .map(([ein, name]) => `('${ein.replace(/'/g, "''")}','${name.replace(/'/g, "''")}')`)
+      .join(",");
+    const res = await db.execute<{ ein: string }>(sql.raw(`
+      UPDATE irs_990_raw r
+      SET org_name = v.name
+      FROM (VALUES ${values}) AS v(ein, name)
+      WHERE r.ein = v.ein
+        AND r.org_name IS NULL
+      RETURNING r.ein
+    `));
+    updated += res.rows.length;
+  }
+  return updated;
+}
+
+// ─── Phase 4: pg_trgm name match ─────────────────────────────────────────────
+
+/**
+ * Phase 4 — pg_trgm name-similarity match.
+ *
+ * Two passes over irs_990_raw rows where org_name IS NOT NULL (populated by
+ * Phase 3 BMF load):
  *   Pass A (general)  — similarity >= 0.45, all unmatched rows with a name.
  *   Pass B (hospital) — similarity >= 0.35, restricted to operatehosptlcd='Y'.
- *
- * org_name is populated by the IRS EO BMF import (Task #104). The IRS 990
- * extract has no name column; until BMF runs, org_name IS NULL everywhere and
- * both passes complete immediately with 0 matches.
  *
  * Keyset batching: candidate EINs are pre-materialised into a frozen array
  * before the loop. Slicing that array avoids OFFSET drift on a mutable table.
@@ -546,12 +615,13 @@ async function directEinMatch(): Promise<number> {
  * (ROW_NUMBER() OVER (PARTITION BY r.ein ORDER BY sim DESC)) so exactly one
  * facility — the highest-similarity match — is chosen per EIN.
  *
- * On match: irs_990_raw.facility_id and facilities.ein are both persisted
- * in a single statement via chained CTEs.
+ * Threshold: inline similarity() >= constant in the JOIN ON clause.
+ * Avoids session-level SET pg_trgm.similarity_threshold (unsafe on pooled
+ * connections). The GIN index on facilities.name (gin_trgm_ops) supports
+ * similarity(...) >= constant predicates.
  *
- * State filtering: the 990 extract contains no state column. When Task #104
- * adds a state field to irs_990_raw, the JOIN can be restricted with
- * AND r.state = f.state without changing the batching or ranking logic.
+ * On match: irs_990_raw.facility_id and facilities.ein are both persisted
+ * in a single statement via chained CTEs (upd_990 → upd_fac).
  */
 async function trgmMatch(): Promise<number> {
   const TRGM_BATCH = 200;
@@ -859,11 +929,11 @@ const t0 = Date.now();
 
 // Phase 1
 if (!SIGNALS_ONLY) {
-  console.log("  [1/6] Streaming CSV into irs_990_raw...");
+  console.log("  [1/7] Streaming CSV into irs_990_raw...");
   const { rowsProcessed, rowsSkipped } = await importCsv();
   console.log(`  Done: ${fmt(rowsProcessed)} rows ingested, ${fmt(rowsSkipped)} skipped.\n`);
 } else {
-  console.log("  [1/6] Skipping CSV import (SIGNALS_ONLY=1).\n");
+  console.log("  [1/7] Skipping CSV import (SIGNALS_ONLY=1).\n");
 }
 
 // Phase 2 stats
@@ -873,25 +943,30 @@ const [raw] = (await db.execute<{ total: string; hospitals: string }>(sql.raw(`
     COUNT(*) FILTER (WHERE operatehosptlcd='Y')::text AS hospitals
   FROM irs_990_raw
 `))).rows;
-console.log(`  [2/6] irs_990_raw: ${fmt(Number(raw.total))} rows, ${fmt(Number(raw.hospitals))} hospitals`);
+console.log(`  [2/7] irs_990_raw: ${fmt(Number(raw.total))} rows, ${fmt(Number(raw.hospitals))} hospitals`);
 
 // Phase 3: direct EIN match
-console.log("\n  [3/6] Direct EIN match (facilities.ein → irs_990_raw.ein)...");
+console.log("\n  [3/7] Direct EIN match (facilities.ein → irs_990_raw.ein)...");
 const totalMatched = await directEinMatch();
 console.log(`  Total matched: ${fmt(totalMatched)} rows linked to a facility.`);
 
-// Phase 4: trgm pass
-console.log("\n  [4/6] pg_trgm name match pass...");
+// Phase 4: BMF name population (local CSV files, no HTTP)
+console.log("\n  [4/7] Populating org_name from IRS EO Business Master File (eo1/eo2/eo3)...");
+const bmfNamed = await populateBmfNames();
+console.log(`  BMF: org_name populated for ${fmt(bmfNamed)} irs_990_raw rows.`);
+
+// Phase 5: trgm pass (now has real org names from Phase 4)
+console.log("\n  [5/7] pg_trgm name match pass...");
 const trgmMatched = await trgmMatch();
 console.log(`  trgm matched: ${fmt(trgmMatched)} additional facilities.`);
 
-// Phase 5: financial_documents
-console.log("\n  [5/6] Upserting financial_documents...");
+// Phase 6: financial_documents
+console.log("\n  [6/7] Upserting financial_documents...");
 const fdCount = await upsertFinancialDocs();
 console.log(`  Upserted ${fmt(fdCount)} financial_documents rows.`);
 
-// Phase 6: signals
-console.log("\n  [6/6] Emitting purchase signals...");
+// Phase 7: signals
+console.log("\n  [7/7] Emitting purchase signals...");
 const { total: signalTotal } = await emitSignals();
 console.log(`\n  Total signals emitted: ${fmt(signalTotal)}`);
 
