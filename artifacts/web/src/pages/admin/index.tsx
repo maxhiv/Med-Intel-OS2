@@ -121,11 +121,27 @@ interface IngestJob {
   errorMessage?: string;
 }
 
+interface IngestRun {
+  id: string;
+  jobId: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  status: string;
+  signalsInserted: number;
+  facilitiesScanned: number;
+  errors: number;
+  states: string[];
+  limitPerSource: number;
+  errorMessage: string | null;
+}
+
 interface IngestStatus {
   job: IngestJob;
   bySource: { source: string; count: number }[];
   byState: { state: string; totalFacilities: number; facilitiesWithSignals: number; totalSignals: number }[];
   top20States: string[];
+  recentRuns: IngestRun[];
 }
 
 function jobStatusBadge(status: IngestJob["status"]) {
@@ -332,6 +348,73 @@ function NationalIngestPanel() {
                 </tbody>
               </table>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Nightly run history */}
+      {data && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Run History</CardTitle>
+            <CardDescription>
+              {data.recentRuns && data.recentRuns.length > 0
+                ? `Last ${data.recentRuns.length} completed ingest runs`
+                : "Completed runs will appear here after the first nightly ingest"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.recentRuns && data.recentRuns.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-muted-foreground text-left">
+                      <th className="pb-2 font-medium">Started</th>
+                      <th className="pb-2 font-medium">Duration</th>
+                      <th className="pb-2 font-medium text-center">Status</th>
+                      <th className="pb-2 font-medium text-right">Signals</th>
+                      <th className="pb-2 font-medium text-right">Facilities</th>
+                      <th className="pb-2 font-medium text-right">Errors</th>
+                      <th className="pb-2 font-medium text-right">States</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.recentRuns.map((run) => {
+                      const startedDate = new Date(run.startedAt);
+                      const durationSec = Math.round(run.durationMs / 1000);
+                      const durationLabel =
+                        durationSec >= 3600
+                          ? `${Math.floor(durationSec / 3600)}h ${Math.floor((durationSec % 3600) / 60)}m`
+                          : durationSec >= 60
+                          ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s`
+                          : `${durationSec}s`;
+                      return (
+                        <tr key={run.id} className="border-b last:border-0" title={run.errorMessage ?? undefined}>
+                          <td className="py-1.5 font-mono text-xs">
+                            <div>{startedDate.toLocaleDateString()}</div>
+                            <div className="text-muted-foreground">{startedDate.toLocaleTimeString()}</div>
+                          </td>
+                          <td className="py-1.5 text-muted-foreground">{durationLabel}</td>
+                          <td className="py-1.5 text-center">
+                            {run.status === "done"
+                              ? <Badge className="bg-green-600 text-white text-xs">Done</Badge>
+                              : <Badge variant="destructive" className="text-xs">Error</Badge>}
+                          </td>
+                          <td className="py-1.5 text-right font-medium text-primary">+{run.signalsInserted.toLocaleString()}</td>
+                          <td className="py-1.5 text-right text-muted-foreground">{run.facilitiesScanned.toLocaleString()}</td>
+                          <td className={`py-1.5 text-right ${run.errors > 0 ? "text-destructive font-medium" : "text-muted-foreground"}`}>
+                            {run.errors}
+                          </td>
+                          <td className="py-1.5 text-right text-muted-foreground">{Array.isArray(run.states) ? run.states.length : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground py-2">No runs recorded yet. Trigger a national ingest above to see history here.</p>
+            )}
           </CardContent>
         </Card>
       )}

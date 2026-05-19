@@ -393,3 +393,30 @@ export const conAlertNotifications = pgTable(
 );
 
 export type ConAlertNotification = typeof conAlertNotifications.$inferSelect;
+
+/**
+ * Persisted record of each completed national ingest run.
+ * Written by the nationalIngest service when a job reaches "done" or "error".
+ * Powers the run-history table on the admin dashboard.
+ */
+export const nationalIngestRuns = pgTable(
+  "national_ingest_runs",
+  {
+    id: uuid("id").primaryKey().default(sql`uuid_generate_v4()`),
+    jobId: text("job_id").notNull().unique(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }).notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    status: text("status").notNull(),
+    signalsInserted: integer("signals_inserted").notNull().default(0),
+    facilitiesScanned: integer("facilities_scanned").notNull().default(0),
+    errors: integer("errors").notNull().default(0),
+    states: jsonb("states").notNull().default(sql`'[]'::jsonb`),
+    limitPerSource: integer("limit_per_source").notNull().default(0),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [index("idx_national_ingest_runs_started").on(t.startedAt)],
+);
+
+export type NationalIngestRun = typeof nationalIngestRuns.$inferSelect;

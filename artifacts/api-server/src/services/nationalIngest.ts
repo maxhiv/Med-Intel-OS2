@@ -28,6 +28,7 @@ import { ingestMedicareUtil }       from "./medicareUtilIngestor";
 import { ingestConFilings }         from "./conFilingsIngestor";
 import { recomputeAllScores }       from "./signalScorer";
 import { logger }                   from "../lib/logger";
+import { db, nationalIngestRuns }   from "@workspace/db";
 
 export const TOP_20_STATES = [
   "CA", "TX", "FL", "IL", "NY", "MD", "PA", "OH", "AZ", "NC",
@@ -179,16 +180,47 @@ export function startNationalIngest(opts: {
       }
       job.status = "done";
       job.finishedAt = new Date();
+      const durationMs = job.finishedAt.getTime() - job.startedAt.getTime();
       logger.info(
-        { signals: job.signalsInserted, errors: job.errors, durationMs: job.finishedAt.getTime() - job.startedAt.getTime() },
+        { signals: job.signalsInserted, errors: job.errors, durationMs },
         "national ingest complete",
       );
+      db.insert(nationalIngestRuns).values({
+        jobId: job.jobId,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        durationMs,
+        status: "done",
+        signalsInserted: job.signalsInserted,
+        facilitiesScanned: job.facilitiesScanned,
+        errors: job.errors,
+        states: job.states,
+        limitPerSource: job.limit,
+      }).catch((e: unknown) => {
+        logger.warn({ err: e }, "failed to persist national ingest run");
+      });
     })
     .catch((err: unknown) => {
       job.status = "error";
       job.finishedAt = new Date();
       job.errorMessage = String(err);
       logger.error({ err }, "national ingest failed");
+      const durationMs = job.finishedAt.getTime() - job.startedAt.getTime();
+      db.insert(nationalIngestRuns).values({
+        jobId: job.jobId,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        durationMs,
+        status: "error",
+        signalsInserted: job.signalsInserted,
+        facilitiesScanned: job.facilitiesScanned,
+        errors: job.errors,
+        states: job.states,
+        limitPerSource: job.limit,
+        errorMessage: job.errorMessage,
+      }).catch((e: unknown) => {
+        logger.warn({ err: e }, "failed to persist national ingest run (error path)");
+      });
     });
 
   return { started: true, job };

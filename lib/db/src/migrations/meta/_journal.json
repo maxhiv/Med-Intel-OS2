@@ -36,6 +36,13 @@
       "when": 1778868652466,
       "tag": "0004_puzzling_wrecking_crew",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1779214574824,
+      "tag": "0005_natural_dreaming_celestial",
+      "breakpoints": true
     }
   ]
 }

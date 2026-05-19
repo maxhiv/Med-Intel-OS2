@@ -50,6 +50,7 @@ import {
   TOP_20_STATES,
   ALL_50_STATES,
 } from "../services/nationalIngest";
+import { nationalIngestRuns } from "@workspace/db";
 
 const SUPPORTED_WEBHOOK_CRMS = ["ghl", "hubspot", "salesforce"] as const;
 type WebhookCrm = (typeof SUPPORTED_WEBHOOK_CRMS)[number];
@@ -1573,9 +1574,17 @@ router.get(
       ORDER BY total_signals DESC
     `));
 
+    // Last 20 completed nightly runs (newest first)
+    const recentRuns = await db
+      .select()
+      .from(nationalIngestRuns)
+      .orderBy(desc(nationalIngestRuns.startedAt))
+      .limit(20);
+
     res.json({
       job: nationalIngestJob,
       top20States: TOP_20_STATES,
+      recentRuns,
       bySource: (bySource.rows as { source: string; count: string }[]).map((r) => ({
         source: r.source,
         count: Number(r.count),
