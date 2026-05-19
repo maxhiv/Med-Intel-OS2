@@ -1,10 +1,11 @@
 import { ClerkProvider } from "@clerk/react";
 import { publishableKeyFromHost } from "@clerk/react/internal";
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, QueryCache, MutationCache } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { dark } from "@clerk/themes";
+import { ApiError } from "@workspace/api-client-react";
 
 import { AppLayout } from "@/components/layout/app-layout";
 import { ProtectedRoute } from "@/components/auth/protected-route";
@@ -32,8 +33,6 @@ import SettingsPage from "@/pages/settings";
 import LeadsPage from "@/pages/leads";
 import NotFound from "@/pages/not-found";
 
-const queryClient = new QueryClient();
-
 // publishableKeyFromHost derives the correct key for the current domain.
 // VITE_CLERK_PUBLISHABLE_KEY is the test key in dev and is automatically
 // swapped to the live key by Replit at publish time — do not edit manually.
@@ -45,6 +44,43 @@ const clerkPubKey = publishableKeyFromHost(
 // publish time to https://<app-domain>/api/__clerk — do not set manually.
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+function isAuthError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
+}
+
+function handleAuthExpiry(): void {
+  queryClient.clear();
+  const signInUrl = `${basePath}/sign-in`;
+  if (!window.location.pathname.startsWith(`${basePath}/sign-in`)) {
+    window.location.replace(signInUrl);
+  }
+}
+
+const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error) => {
+      if (isAuthError(error)) handleAuthExpiry();
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (error) => {
+      if (isAuthError(error)) handleAuthExpiry();
+    },
+  }),
+  defaultOptions: {
+    queries: {
+      retry: (failureCount, error) => {
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          return false;
+        }
+        return failureCount < 2;
+      },
+      staleTime: 30_000,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 function stripBase(path: string): string {
   return basePath && path.startsWith(basePath)
