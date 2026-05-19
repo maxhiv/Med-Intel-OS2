@@ -1535,7 +1535,9 @@ router.post(
       recomputeScores: body.recomputeScores !== false,
     });
 
-    res.status(started ? 202 : 409).json({ started, job });
+    // One-round batch mode: runs every ingestor once across the target states.
+    // Re-trigger from the UI (or schedule via cron) to continue coverage.
+    res.status(started ? 202 : 409).json({ started, job, roundMode: "single" });
   },
 );
 
@@ -1552,7 +1554,7 @@ router.get(
       ORDER BY count DESC
     `));
 
-    // Signal coverage by state (top 30)
+    // Signal coverage by state — all states, no LIMIT so national visibility is complete.
     const byState = await db.execute<{
       state: string;
       total_facilities: string;
@@ -1569,7 +1571,6 @@ router.get(
         ON ps.facility_id = f.id AND ps.is_active = true
       GROUP BY f.state
       ORDER BY total_signals DESC
-      LIMIT 30
     `));
 
     res.json({
