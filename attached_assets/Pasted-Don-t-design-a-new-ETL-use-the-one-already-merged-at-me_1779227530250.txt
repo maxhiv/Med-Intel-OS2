@@ -1,0 +1,40 @@
+Don't design a new ETL — use the one already merged at medintel_os/.
+
+There are 21 CSVs from the CMS April–May 2026 drop. The schema (medintel_os/medintel_os_schema.sql) and load script (medintel_os/medintel_os_load.sql) already define every staging table, transform, and target. You just need to:
+
+Put all 21 CSVs in one directory inside the Replit container (e.g. /home/runner/cms/).
+Run:
+psql "$DATABASE_URL" \
+  -v data_path=/home/runner/cms \
+  -v ON_ERROR_STOP=1 \
+  -f medintel_os/medintel_os_schema.sql \
+  -f medintel_os/medintel_os_load.sql
+Files, encodings, and row counts (must match exactly — the \copy commands reference these filenames):
+
+#	File	Enc	Rows	Cols	What it is
+1	FQHC_Enrollments_2026.04.01.csv	WIN1252	11,063	21	PECOS enrollments for Federally Qualified Health Centers
+2	RHC_Enrollments_2026.04.01.csv	WIN1252	5,530	21	PECOS enrollments for Rural Health Clinics
+3	Hospital_All_Owners_2026.05.01.csv	WIN1252	147,332	38	PECOS ownership records — hospitals (PE/REIT flags as Y/N)
+4	FQHC_All_Owners_2026.04.01.csv	WIN1252	148,919	38	PECOS ownership records — FQHCs (PE/REIT flags as 1.0/0.0)
+5	RHC_All_Owners_2026.04.01.csv	WIN1252	65,551	38	PECOS ownership records — RHCs
+6	FQHC_Additional_NPIs_2026.04.01.csv	UTF-8	261	2	Secondary NPIs tied to FQHC enrollments
+7	RHC_Additional_NPIs_2026.04.01.csv	UTF-8	132	2	Secondary NPIs tied to RHC enrollments
+8	Hospital_CHOW_NPIs_2026.04.01.csv	UTF-8	460	2	NPIs attached to hospital Change-of-Ownership events
+9	SNF_CHOW_NPIs_2026.04.01.csv	UTF-8	34	2	NPIs attached to SNF Change-of-Ownership events
+10	FQHC_Additional_Addresses_2026.04.01.csv	UTF-8	7	7	Additional practice addresses — FQHC
+11	RHC_Additional_Addresses_2026.04.01.csv	UTF-8	47	7	Additional practice addresses — RHC
+12	Hospital_CHOW_2026.04.01.csv	WIN1252	755	23	Hospital Change-of-Ownership transactions (buyer/seller pairs + effective date)
+13	CostReport_2023_Final.csv	UTF-8	6,103	117	HCRIS hospital cost reports — beds, revenue, charity care, etc.
+14	Hospital_Service_Area_2024.csv	UTF-8	~ millions	4–6	Hospital service area (CCN × ZIP × discharges/days/charges). Provisional schema — inspect header first.
+15	ProviderLevel_Measure_Rates_for_AHRQ_Patient_Safety_Indicator_11__PSI11____2016.csv	UTF-8	3,319	9	PSI-11 post-op respiratory failure rates by hospital
+16	mup_dme_ry25_p05_v10_dy23_geor.csv	UTF-8	38,675	18	Medicare DME utilization by geography × HCPCS
+17	PY 2024 ACO Results PUF_Rerun_20250925.csv	UTF-8	476	189	Medicare Shared Savings Program ACO performance results
+18	Advance_Investment_Payment_Spend_Plan_2026.csv	UTF-8	272	12	AIP ACO spending plans 2024–2026
+19	CY27_Prelim_ASMParticipants_Public.csv	UTF-8	6,637	16	Preliminary ASM participant list CY27–CY31
+20	WDDSEModelSummaryGUIDE051926.csv	WIN1252	105	15	CMMI Innovation Center model directory
+Hospital Enrollments file is NOT in this drop — the load script has its \copy commented out (Section B.1). Hospital ownership/CHOW NPI rows will skip the parent-row check until you receive it.
+
+One pre-run step: head -1 Hospital_Service_Area_2024.csv and confirm column order matches stage_service_area in Section A.7. If not, adjust that one CREATE TABLE before running.
+
+After the load, Section D at the bottom of medintel_os_load.sql prints row counts vs. expected — that's your green/red signal that everything landed.
+
