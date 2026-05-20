@@ -362,39 +362,52 @@ async function runFdaTransform(endpoint: EndpointKey): Promise<number> {
 }
 
 async function transformRecall(): Promise<number> {
-  // Emit `adverse_event_spike` signals for facilities whose system_name or
-  // doing_business_as token-overlaps the recalling firm. Conservative: only
-  // for recalls in the last 24 months.
-  const res = await db.execute<{ count: string }>(sql`
+  // Emit `adverse_event_spike` signals for facilities whose name/dba/system
+  // token-overlaps the recalling firm. Conservative: only recalls in the
+  // last 24 months. Dedup via NOT EXISTS — purchase_signals has no unique
+  // constraint, the live ingestors do the same client-side filter.
+  const res = await db.execute<{ id: string }>(sql`
+    WITH cand AS (
+      SELECT r.recall_number,
+             r.recalling_firm,
+             r.product_description,
+             r.classification,
+             r.reason_for_recall,
+             'fda_recall:' || r.recall_number AS sval
+        FROM fda_recall_raw r
+       WHERE r.recall_initiation_date > now() - interval '24 months'
+         AND r.recalling_firm IS NOT NULL
+         AND length(r.recalling_firm) > 8
+    )
     INSERT INTO purchase_signals (
-      facility_id, signal_type, signal_value, signal_date,
-      source_name, confidence_score, payload, status
+      facility_id, signal_type, signal_value, confidence, source, metadata, is_active
     )
     SELECT f.id,
            'adverse_event_spike'::signal_type,
-           'fda_recall:' || r.recall_number,
-           r.recall_initiation_date,
-           'fda_recall',
+           c.sval,
            60,
+           'fda_recall',
            jsonb_build_object(
-             'recall_number', r.recall_number,
-             'recalling_firm', r.recalling_firm,
-             'product_description', r.product_description,
-             'classification', r.classification,
-             'reason_for_recall', r.reason_for_recall
+             'recall_number', c.recall_number,
+             'recalling_firm', c.recalling_firm,
+             'product_description', c.product_description,
+             'classification', c.classification,
+             'reason_for_recall', c.reason_for_recall
            ),
-           'active'
-      FROM fda_recall_raw r
+           true
+      FROM cand c
       JOIN facilities f
         ON (
-          (f.doing_business_as ILIKE '%' || LEFT(r.recalling_firm, 40) || '%')
-          OR (f.system_name ILIKE '%' || LEFT(r.recalling_firm, 40) || '%')
-          OR (f.name ILIKE '%' || LEFT(r.recalling_firm, 40) || '%')
+          (f.doing_business_as ILIKE '%' || LEFT(c.recalling_firm, 40) || '%')
+          OR (f.system_name ILIKE '%' || LEFT(c.recalling_firm, 40) || '%')
+          OR (f.name ILIKE '%' || LEFT(c.recalling_firm, 40) || '%')
         )
-     WHERE r.recall_initiation_date > now() - interval '24 months'
-       AND r.recalling_firm IS NOT NULL
-       AND length(r.recalling_firm) > 8
-    ON CONFLICT (facility_id, signal_type, signal_value) DO NOTHING
+     WHERE NOT EXISTS (
+       SELECT 1 FROM purchase_signals ps
+        WHERE ps.facility_id = f.id
+          AND ps.signal_type = 'adverse_event_spike'
+          AND ps.signal_value = c.sval
+     )
     RETURNING id
   `);
   return res.rows.length;
@@ -405,11 +418,12 @@ async function transformMaude(): Promise<number> {
   // manufacturer + product, not the operating site). For seeding we just
   // record manufacturer-level event counts as facility signals when the
   // facility's name fuzzy-matches the manufacturer.
-  const res = await db.execute<{ count: string }>(sql`
+  const res = await db.execute<{ id: string }>(sql`
     WITH agg AS (
       SELECT manufacturer_name,
              COUNT(*) AS events,
-             MAX(date_received) AS latest_date
+             MAX(date_received) AS latest_date,
+             'fda_maude:' || manufacturer_name AS sval
         FROM fda_maude_raw
        WHERE date_received > now() - interval '12 months'
          AND manufacturer_name IS NOT NULL
@@ -417,24 +431,28 @@ async function transformMaude(): Promise<number> {
        HAVING COUNT(*) >= 3
     )
     INSERT INTO purchase_signals (
-      facility_id, signal_type, signal_value, signal_date,
-      source_name, confidence_score, payload, status
+      facility_id, signal_type, signal_value, confidence, source, metadata, is_active
     )
     SELECT f.id,
            'adverse_event_spike'::signal_type,
-           'fda_maude:' || agg.manufacturer_name,
-           agg.latest_date,
-           'fda_maude',
+           agg.sval,
            50,
+           'fda_maude',
            jsonb_build_object(
              'manufacturer_name', agg.manufacturer_name,
-             'events_12mo', agg.events
+             'events_12mo', agg.events,
+             'latest_date', agg.latest_date
            ),
-           'active'
+           true
       FROM agg
       JOIN facilities f
         ON f.name ILIKE '%' || LEFT(agg.manufacturer_name, 40) || '%'
-    ON CONFLICT (facility_id, signal_type, signal_value) DO NOTHING
+     WHERE NOT EXISTS (
+       SELECT 1 FROM purchase_signals ps
+        WHERE ps.facility_id = f.id
+          AND ps.signal_type = 'adverse_event_spike'
+          AND ps.signal_value = agg.sval
+     )
     RETURNING id
   `);
   return res.rows.length;

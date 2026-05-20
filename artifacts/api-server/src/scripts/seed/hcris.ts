@@ -249,9 +249,11 @@ async function transformHcris(): Promise<{ facilitiesUpdated: number; signalsIns
   `);
 
   // 2. Depreciation spike: latest depreciation > (1 + SPIKE_PCT) × prior year.
-  //    Emits hcris_depreciation_spike signals into purchase_signals (idempotent
-  //    via (facility_id, signal_type, signal_value) unique constraint).
-  const sig = await db.execute<{ count: string }>(sql`
+  //    Emits hcris_depreciation_spike signals into purchase_signals. Dedup is
+  //    via NOT EXISTS — purchase_signals has no unique constraint on
+  //    (facility_id, signal_type, signal_value); the live ingestors do the
+  //    same client-side filter.
+  const sig = await db.execute<{ id: string }>(sql`
     WITH ranked AS (
       SELECT provider_ccn, fy_end_dt, depreciation,
              LAG(depreciation) OVER (PARTITION BY provider_ccn ORDER BY fy_end_dt) AS prior_dep
@@ -259,32 +261,36 @@ async function transformHcris(): Promise<{ facilitiesUpdated: number; signalsIns
        WHERE depreciation IS NOT NULL
     ),
     spikes AS (
-      SELECT provider_ccn, fy_end_dt, depreciation, prior_dep
+      SELECT provider_ccn, fy_end_dt, depreciation, prior_dep,
+             'hcris:' || provider_ccn || ':' || EXTRACT(YEAR FROM fy_end_dt)::text AS sval
         FROM ranked
        WHERE prior_dep IS NOT NULL
          AND prior_dep > 0
          AND depreciation > prior_dep * ${1 + SPIKE_PCT}
     )
     INSERT INTO purchase_signals (
-      facility_id, signal_type, signal_value, signal_date,
-      source_name, confidence_score, payload, status
+      facility_id, signal_type, signal_value, confidence, source, metadata, is_active
     )
     SELECT f.id,
            'hcris_depreciation_spike'::signal_type,
-           'hcris:' || s.provider_ccn || ':' || EXTRACT(YEAR FROM s.fy_end_dt)::text,
-           s.fy_end_dt,
-           'hcris',
+           s.sval,
            75,
+           'hcris',
            jsonb_build_object(
              'fy_end_dt', s.fy_end_dt,
              'depreciation', s.depreciation,
              'prior_year_depreciation', s.prior_dep,
              'yoy_pct', ROUND(((s.depreciation - s.prior_dep) / s.prior_dep)::numeric, 4)
            ),
-           'active'
+           true
       FROM spikes s
       JOIN facilities f ON f.cms_id = s.provider_ccn
-    ON CONFLICT (facility_id, signal_type, signal_value) DO NOTHING
+     WHERE NOT EXISTS (
+       SELECT 1 FROM purchase_signals ps
+        WHERE ps.facility_id = f.id
+          AND ps.signal_type = 'hcris_depreciation_spike'
+          AND ps.signal_value = s.sval
+     )
     RETURNING id
   `);
 

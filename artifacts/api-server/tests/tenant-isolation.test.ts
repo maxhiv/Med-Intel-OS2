@@ -19,14 +19,26 @@ afterAll(async () => {
 });
 
 describe("tenant isolation: account A cannot read account B's data", () => {
-  it("/facilities returns only A's facilities", async () => {
+  it("/facilities exposes the global facility universe with per-account `tracked` flag", async () => {
+    // The facilities table is the global CMS-derived universe (NPI, name,
+    // beds, address — all public data). Per-account "tracking" lives in
+    // `account_facilities`, surfaced via the `tracked` flag on each row.
+    // The list endpoint intentionally returns the full universe; tenant-
+    // sensitive data (contacts, drafts, signals) lives on RLS-protected
+    // tables tested below.
     const res = await request(app)
       .get("/facilities")
       .set(asUser(world.tenantA.userId))
       .expect(200);
-    const ids = res.body.data.map((f: { id: string }) => f.id);
-    expect(ids).toContain(world.tenantA.facilityId);
-    expect(ids).not.toContain(world.tenantB.facilityId);
+    const byId = new Map(
+      (res.body.data as Array<{ id: string; tracked: boolean }>).map((f) => [f.id, f.tracked]),
+    );
+    // Both facilities are visible — it's a global universe.
+    expect(byId.has(world.tenantA.facilityId)).toBe(true);
+    expect(byId.has(world.tenantB.facilityId)).toBe(true);
+    // …but only the caller's facility shows tracked=true.
+    expect(byId.get(world.tenantA.facilityId)).toBe(true);
+    expect(byId.get(world.tenantB.facilityId)).toBe(false);
   });
 
   it("GET /facilities/:id of B as A → 404", async () => {

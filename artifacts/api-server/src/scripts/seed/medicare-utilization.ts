@@ -162,31 +162,35 @@ async function transformMedicare(): Promise<number> {
        HAVING COUNT(*) >= 50
     ),
     high AS (
-      SELECT m.npi, m.hcpcs_cd, m.tot_benes, m.tot_srvcs
+      SELECT m.npi, m.hcpcs_cd, m.tot_benes, m.tot_srvcs,
+             'medicare:' || m.npi || ':' || m.hcpcs_cd AS sval
         FROM medicare_utilization_raw m
         JOIN pct p ON p.hcpcs_cd = m.hcpcs_cd
        WHERE m.tot_benes >= p.p80
     )
     INSERT INTO purchase_signals (
-      facility_id, signal_type, signal_value, signal_date,
-      source_name, confidence_score, payload, status
+      facility_id, signal_type, signal_value, confidence, source, metadata, is_active
     )
     SELECT f.id,
            'high_utilization'::signal_type,
-           'medicare:' || h.npi || ':' || h.hcpcs_cd,
-           now()::date,
-           'medicare_utilization',
+           h.sval,
            65,
+           'medicare_utilization',
            jsonb_build_object(
              'npi', h.npi,
              'hcpcs', h.hcpcs_cd,
              'beneficiaries', h.tot_benes,
              'services', h.tot_srvcs
            ),
-           'active'
+           true
       FROM high h
       JOIN facilities f ON f.npi = h.npi
-    ON CONFLICT (facility_id, signal_type, signal_value) DO NOTHING
+     WHERE NOT EXISTS (
+       SELECT 1 FROM purchase_signals ps
+        WHERE ps.facility_id = f.id
+          AND ps.signal_type = 'high_utilization'
+          AND ps.signal_value = h.sval
+     )
     RETURNING id
   `);
   return res.rows.length;

@@ -44,6 +44,13 @@ afterAll(async () => {
 
 describe("classifyPendingReplies", () => {
   it("classifies the reply even when many newer non-reply events are pending", async () => {
+    // seedWorld() creates one `reply_received` event per seeded tenant for
+    // unrelated test coverage. classifyPendingReplies scans every account's
+    // reply-shaped events, so those baseline rows would otherwise inflate
+    // `result.examined`. Clear them up front so the assertions below only
+    // count this test's inserts.
+    await db.delete(replyEvents).where(eq(replyEvents.eventType, "reply_received"));
+
     // 50 newer non-reply rows (opens/bounces/task-completes/errors) all with
     // null classification. A naive "ORDER BY received_at DESC LIMIT N" query
     // would never reach the older reply row.
