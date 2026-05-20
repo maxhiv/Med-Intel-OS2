@@ -9,6 +9,7 @@ import { ApiError } from "@workspace/api-client-react";
 
 import { AppLayout } from "@/components/layout/app-layout";
 import { ProtectedRoute } from "@/components/auth/protected-route";
+import { RouteErrorBoundary } from "@/components/route-error-boundary";
 
 import LandingPage from "@/pages/landing";
 import SignInPage from "@/pages/auth/sign-in";
@@ -139,31 +140,33 @@ function Router() {
       <Route path="/:rest*">
         <ProtectedRoute>
           <AppLayout>
-            <Switch>
-              <Route path="/leads" component={LeadsPage} />
-              <Route path="/dashboard" component={DashboardPage} />
-              <Route path="/facilities" component={FacilitiesPage} />
-              <Route path="/facilities/:id" component={FacilityDetailPage} />
-              <Route path="/territories" component={TerritoriesPage} />
-              <Route path="/territories/:id" component={TerritoryDetailPage} />
-              <Route path="/opportunities" component={OpportunityInboxPage} />
-              <Route path="/opportunities/:id" component={OpportunityDetailPage} />
-              <Route path="/signals" component={SignalsPage} />
-              <Route path="/con-filings" component={ConFilingsPage} />
-              <Route path="/con-monitor" component={ConMonitorPage} />
-              <Route path="/con-states" component={ConStatesPage} />
-              <Route path="/data-sources" component={DataSourcesPage} />
-              <Route path="/contacts" component={ContactsPage} />
-              <Route path="/campaigns" component={CampaignsPage} />
-              <Route path="/campaigns/:id" component={CampaignDetailPage} />
-              <Route path="/sequences" component={SequencesPage} />
-              <Route path="/drafts" component={DraftsPage} />
-              <Route path="/batches" component={BatchesPage} />
-              <Route path="/reports" component={ReportsPage} />
-              <Route path="/admin/*?" component={AdminPage} />
-              <Route path="/settings" component={SettingsPage} />
-              <Route component={NotFound} />
-            </Switch>
+            <RouteErrorBoundary>
+              <Switch>
+                <Route path="/leads" component={LeadsPage} />
+                <Route path="/dashboard" component={DashboardPage} />
+                <Route path="/facilities" component={FacilitiesPage} />
+                <Route path="/facilities/:id" component={FacilityDetailPage} />
+                <Route path="/territories" component={TerritoriesPage} />
+                <Route path="/territories/:id" component={TerritoryDetailPage} />
+                <Route path="/opportunities" component={OpportunityInboxPage} />
+                <Route path="/opportunities/:id" component={OpportunityDetailPage} />
+                <Route path="/signals" component={SignalsPage} />
+                <Route path="/con-filings" component={ConFilingsPage} />
+                <Route path="/con-monitor" component={ConMonitorPage} />
+                <Route path="/con-states" component={ConStatesPage} />
+                <Route path="/data-sources" component={DataSourcesPage} />
+                <Route path="/contacts" component={ContactsPage} />
+                <Route path="/campaigns" component={CampaignsPage} />
+                <Route path="/campaigns/:id" component={CampaignDetailPage} />
+                <Route path="/sequences" component={SequencesPage} />
+                <Route path="/drafts" component={DraftsPage} />
+                <Route path="/batches" component={BatchesPage} />
+                <Route path="/reports" component={ReportsPage} />
+                <Route path="/admin/*?" component={AdminPage} />
+                <Route path="/settings" component={SettingsPage} />
+                <Route component={NotFound} />
+              </Switch>
+            </RouteErrorBoundary>
           </AppLayout>
         </ProtectedRoute>
       </Route>
