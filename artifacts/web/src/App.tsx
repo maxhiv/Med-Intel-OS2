@@ -58,8 +58,10 @@ let _authCheckScheduled = false;
 
 /**
  * Called when any API request returns 401.
- * Schedules a 3-second delayed verification against /api/me before redirecting.
- * This prevents redirect loops during Clerk's automatic JWT refresh window.
+ * Checks Clerk's own client-side session state first — if Clerk still has an
+ * active session the user is authenticated and the 401 was transient (e.g. JWT
+ * mid-refresh or a proxy-forwarding gap). Only redirects when Clerk itself
+ * reports no active session, meaning the user is truly signed out.
  */
 function scheduleAuthCheck(): void {
   if (_authCheckScheduled) return;
@@ -67,22 +69,25 @@ function scheduleAuthCheck(): void {
 
   setTimeout(() => {
     _authCheckScheduled = false;
-    const apiBase = basePath || "";
-    fetch(`${apiBase}/api/me`, { credentials: "include" })
-      .then((r) => {
-        if (r.status === 401) {
-          // Session is truly expired — clear cache and redirect once.
-          queryClient.clear();
-          const signInUrl = `${basePath}/sign-in`;
-          if (!window.location.pathname.startsWith(`${basePath}/sign-in`)) {
-            window.location.replace(signInUrl);
-          }
-        }
-        // If status is 200/304, the Clerk JWT refreshed; nothing to do.
-      })
-      .catch(() => {
-        // Network error — don't redirect, may recover.
-      });
+
+    // Access Clerk's global singleton to check client-side session state.
+    // If Clerk has an active session the JWT is still valid — don't redirect.
+    type ClerkGlobal = { session?: unknown };
+    const clerkGlobal = (window as unknown as { Clerk?: ClerkGlobal }).Clerk;
+    if (clerkGlobal?.session) {
+      // Clerk says we're signed in — the 401s are an API-side issue (e.g. JWT
+      // not yet forwarded by the proxy). Clear stale cache so queries retry,
+      // but do not redirect.
+      queryClient.invalidateQueries();
+      return;
+    }
+
+    // Clerk has no session — user is truly unauthenticated. Redirect once.
+    queryClient.clear();
+    const signInUrl = `${basePath}/sign-in`;
+    if (!window.location.pathname.startsWith(`${basePath}/sign-in`)) {
+      window.location.replace(signInUrl);
+    }
   }, 3000);
 }
 
