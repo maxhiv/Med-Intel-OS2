@@ -26,6 +26,7 @@
  */
 
 import { createReadStream } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "csv-parse";
 import { sql } from "drizzle-orm";
@@ -46,6 +47,33 @@ const DEFAULT_URL =
   "https://data.cms.gov/sites/default/files/2024-09/Hospital_Provider_Cost_Report.csv";
 const SOURCE_NAME = "hcris";
 const SPIKE_PCT = 0.25; // 25% YoY depreciation jump → emit spike signal
+
+// Operators frequently drop the latest CMS bulk CSV into `attached_assets/`
+// (same convention used by import990Runner.ts + importEoBmf.ts). If a file
+// matching the CostReport pattern is present, prefer it over the network
+// URL — same file the medintel warehouse loader consumes from
+// medintel_os_load.sql, so the two paths stay in sync.
+const REPO_ROOT = path.resolve(import.meta.dirname, "../../../../../");
+const ATTACHED_ASSETS_DIR = path.join(REPO_ROOT, "attached_assets");
+
+async function findAttachedHcrisFile(): Promise<string | null> {
+  try {
+    const entries = await readdir(ATTACHED_ASSETS_DIR);
+    // Pattern `CostReport_<year>_Final*.csv` matches the file shape the
+    // medintel warehouse load expects (see MEDINTEL_OS_DATA_ROUTING.md).
+    // Sorted reverse so newest fiscal year wins.
+    const matches = entries
+      .filter((f) => /^CostReport_\d{4}_Final/i.test(f) && f.endsWith(".csv"))
+      .sort()
+      .reverse();
+    if (matches.length === 0) return null;
+    const candidate = path.join(ATTACHED_ASSETS_DIR, matches[0]);
+    const st = await stat(candidate);
+    return st.size > 0 ? candidate : null;
+  } catch {
+    return null;
+  }
+}
 
 function num(v: string | undefined): number | null {
   if (v === undefined || v === null || v === "") return null;
@@ -84,10 +112,26 @@ export async function runHcrisSeed(opts: {
   limit?: number;
   force?: boolean;
 } = {}): Promise<{ rowsStaged: number; rowsUpserted: number; signalsInserted: number }> {
-  const url = opts.url ?? DEFAULT_URL;
+  // Resolution order:
+  //   1. Explicit --url from the caller.
+  //   2. Local file under `attached_assets/CostReport_<year>_Final*.csv`
+  //      (operator-dropped, matches medintel warehouse convention).
+  //   3. DEFAULT_URL (network).
+  let url = opts.url;
+  if (!url) {
+    const local = await findAttachedHcrisFile();
+    if (local) {
+      url = `file://${local}`;
+      logger.info({ local }, "hcris: using attached_assets local file");
+    } else {
+      url = DEFAULT_URL;
+    }
+  }
   const filename = path.basename(new URL(url).pathname) || "hcris.csv";
 
-  // Download (or reuse cached).
+  // Download (or reuse cached). `downloadFile` accepts file:// URLs and will
+  // copy the local file into the seed cache so the sha256 audit row is
+  // populated consistently.
   const dl = await downloadFile({
     url,
     subdir: "hcris",
