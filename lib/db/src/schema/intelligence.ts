@@ -25,6 +25,7 @@ import {
   signalTypeEnum,
   contactStatusEnum,
   enrichmentSourceEnum,
+  buyerRoleEnum,
 } from "./enums";
 
 export const facilities = pgTable(
@@ -295,12 +296,22 @@ export const facilityContacts = pgTable(
     buyingAuthorityScore: smallint("buying_authority_score").default(0),
     dataSource: text("data_source"),
     lastEnrichedAt: timestamp("last_enriched_at", { withTimezone: true }),
+    // ── v2.0 decision-maker graph extensions (handoff migration 011) ────
+    buyerRole: buyerRoleEnum("buyer_role"),
+    /** Which modalities this contact has authority over (CT, MRI, …). */
+    modalityAuthority: text("modality_authority").array().default(sql`'{}'`),
+    yearsInRole: smallint("years_in_role"),
+    startedRoleAt: date("started_role_at"),
+    /** verified | unverified | stale | bounced — see contact_verification_log */
+    verificationStatus: text("verification_status").default("unverified"),
+    lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [
     index("idx_contacts_facility").on(t.facilityId),
     index("idx_contacts_confidence").on(t.confidenceScore),
+    index("idx_contacts_buyer_role").on(t.facilityId, t.buyerRole),
   ],
 );
 

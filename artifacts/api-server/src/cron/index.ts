@@ -52,6 +52,7 @@ import { classifyAllUnassigned } from "../services/verticals/verticalOrchestrato
 import { runInference } from "../services/equipmentAge/equipmentAgeInferenceOrchestrator";
 import { ingestStateRadiationRegistry } from "../services/equipmentAge/stateRegistries/stateRegistryRadiationAdapter";
 import { watchAccreditationExpiries } from "../services/triggers/accreditationExpiryWatcher";
+import { generateOpportunities } from "../services/opportunity/opportunityGenerator";
 
 let started = false;
 const locks = new Set<string>();
@@ -183,6 +184,18 @@ export function startCron(): void {
     guarded("recomputeSignals", async () => {
       const r = await recomputeAllScores();
       logger.info(r, "signal recompute complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 03:15 daily — regenerate the Opportunity Inbox after the composite
+  // recompute has run, so opportunity scores reflect the freshest signal
+  // state across the warehouse + medintel + EOL + accreditation pipeline.
+  cron.schedule(
+    "15 3 * * *",
+    guarded("generateOpportunities", async () => {
+      const r = await generateOpportunities();
+      logger.info(r, "opportunity generation complete");
     }),
     { timezone: tz },
   );

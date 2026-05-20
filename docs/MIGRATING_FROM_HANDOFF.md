@@ -371,6 +371,111 @@ deferred.
 - FDA 510(k) clearance-date adapter writing lower-bound evidence
   ("model couldn't have been installed before clearance year"). Follow-up.
 
-### Phase E — Opportunity Inbox · _pending_
+### Phase E — Opportunity Inbox · 2026-05-20
 
-### Phase E — Opportunity Inbox · _pending_
+#### Added (Drizzle schema)
+- `lib/db/src/schema/enums.ts` — new pgEnums: `buyerRoleEnum`,
+  `opportunityStatusEnum`, `opportunityActionTypeEnum`.
+- `lib/db/src/schema/opportunity.ts` (new module):
+  * `opportunities` — RLS-scoped table with composite readiness_score
+    (0..1), score_breakdown JSONB for the "why this score" panel,
+    estimated_dollar_low/high, top_trigger_ids[], three decision-maker
+    contact FKs (champion / economic_buyer / gatekeeper),
+    snoozed_until + crm_pushed_at + notes. A partial unique index
+    prevents duplicate live rows for the same
+    (account_id, facility_id, modality) tuple while any non-terminal
+    status is set.
+  * `opportunity_actions` — audit trail keyed on opportunity_id,
+    action_type enum, performed_by, notes, metadata.
+  * `job_postings` — modality-tagged hiring velocity surface (consumed
+    in a Phase E follow-up Adzuna ingestor).
+- `lib/db/src/schema/intelligence.ts` — `facility_contacts` extended
+  with `buyer_role`, `modality_authority[]`, `years_in_role`,
+  `started_role_at`, `verification_status`, `last_verified_at`.
+
+#### Added (SQL companion, `lib/db/src/scripts/v2_opportunity_rls.sql`)
+- `ENABLE ROW LEVEL SECURITY` on opportunities + opportunity_actions.
+- Tenant-isolation policies filtering by
+  `current_setting('app.account_id')` — same pattern as the rest of the
+  RLS surface.
+- Explicit GRANTs to `app_rls` on the new tables + sequence.
+
+#### Added (services, `artifacts/api-server/src/services/opportunity/`)
+- `opportunityScorer.ts` — strategic plan §7 formula:
+  `0.40·readiness + 0.20·recency + 0.15·contact + 0.15·vertical_fit +
+  0.10·territory`. Includes `estimateDollarRange()` (per-modality
+  capital bands scaled by facility bed count [0.4×–1.6×]),
+  `findContactForRole()` (best-confidence pick per buyer_role), and
+  `contactConfidenceFromRow()` (verified contacts floor to 0.85;
+  stale/bounced cap at 0.30).
+- `opportunityGenerator.ts` — daily generator. Pulls every facility
+  with ≥1 active signal, joins to each account's covered states (read
+  from saved `territories.filter.states`), fans out across vertical
+  primary modalities (or a fallback set when no vertical assignment),
+  and upserts opportunities scoring above 0.35. Idempotent — updates
+  existing live rows; the partial unique index hard-blocks duplicates.
+
+#### Added (API, `artifacts/api-server/src/routes/opportunities.ts`)
+- `GET    /api/opportunities[?status=&limit=&offset=]` — ranked inbox.
+- `GET    /api/opportunities/:id` — full detail with triggers,
+  decision-maker triangle resolved to contact rows, and action history.
+- `POST   /api/opportunities/:id/actions` — record rep action
+  (`pursue / skip / snooze / note / push_to_ghl / qualify /
+  disqualify / won / lost`). State transitions applied per action;
+  audit row written first so refused state changes still log.
+- `POST   /api/opportunities/regenerate` — manual rep-triggered run of
+  the daily generator (useful after loading new data).
+
+#### Added (cron, `artifacts/api-server/src/cron/index.ts`)
+- 03:15 daily — `generateOpportunities` runs immediately after the
+  03:00 composite recompute so opportunity scores see the freshest
+  signal state.
+
+#### Added (web, `artifacts/web/src/`)
+- `pages/opportunities/index.tsx` — Opportunity Inbox card grid with
+  score chip (red ≥70 / orange ≥50 / amber ≥35), modality + vertical
+  badges, confidence dots, decision-maker-triangle status indicator,
+  Pursue / Skip / Snooze inline actions, Regenerate button, status
+  filter chips (live / detected / reviewed / qualified / bid_submitted
+  / won).
+- `pages/opportunities/detail.tsx` — drill-down with full score
+  breakdown panel, decision-maker triangle cards, active triggers
+  list with confidence, action history. All nine action types wired.
+- `hooks/use-opportunities.ts` — TanStack Query hooks
+  (useListOpportunities, useGetOpportunity, useRecordAction,
+  useRegenerateOpportunities).
+- `App.tsx` — `/opportunities` and `/opportunities/:id` routes.
+- `components/layout/app-layout.tsx` — `Opportunities` lifted into the
+  top nav (above Dashboard) as the headline workflow.
+
+#### Verified
+- `pnpm run typecheck` — clean across all 4 workspaces.
+- `pnpm --filter @workspace/api-server run build` — clean.
+- `pnpm --filter @workspace/web run build` — clean.
+- Existing 19-test vitest suite remains green.
+
+#### Operator steps to enable
+1. `pnpm --filter @workspace/db run push` — applies the new tables +
+   enum additions.
+2. `psql "$DATABASE_URL" -f lib/db/src/scripts/v2_opportunity_rls.sql`
+   — enables RLS + grants on the new surface.
+3. Restart the API. Server log should show:
+   - `equipment-line profiles seeded`
+   - `vertical modules seeded`
+   And on the next 03:15 cron tick, or after `POST /api/opportunities/regenerate`:
+   - `opportunity generation complete { accountsProcessed, opportunitiesCreated, opportunitiesUpdated }`
+4. Visit `/opportunities` in the web app.
+
+#### Deferred (explicit follow-ups, all on separate non-blocking PRs)
+- Adzuna / Jooble / USAJobs `job_postings` ingestor — the table is in
+  place; the ingestor itself is the next ingest task.
+- Bid-draft generator using Anthropic Claude — opportunity detail page
+  has the "Push to GHL" action wired through the existing
+  `outreach_drafts` flow, but no AI-generated body is composed yet.
+  Per the NEPQ templates in `docs/medintel/verticals/`.
+- WeeklyDigestJob enforcing the 15-per-rep-per-week inbox cap — the
+  daily generator currently writes unlimited rows above the 0.35
+  floor; the Monday-morning cap pass is a small follow-up.
+- Per-vertical outreach sequence linking — `vertical_modules.outreach_sequence_id`
+  populated and surfaced in the detail page's "Suggested sequence"
+  panel.

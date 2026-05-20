@@ -5,3 +5,4 @@ export * from "./outreach";
 export * from "./medintel";
 export * from "./app";
 export * from "./confidence";
+export * from "./opportunity";
