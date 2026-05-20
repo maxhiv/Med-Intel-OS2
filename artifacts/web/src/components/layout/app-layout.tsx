@@ -19,6 +19,7 @@ import {
   Monitor,
   Crosshair,
   Compass,
+  Inbox,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -50,6 +51,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     String(import.meta.env.VITE_MEDINTEL_OS_MODE ?? "").toLowerCase() === "true";
 
   const topItems: NavItem[] = [
+    { name: "Opportunities", href: "/opportunities", icon: Inbox },
     { name: "Lead Cards", href: "/leads", icon: Crosshair },
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   ];

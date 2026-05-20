@@ -18,6 +18,8 @@ import FacilitiesPage from "@/pages/facilities/index";
 import FacilityDetailPage from "@/pages/facilities/detail";
 import TerritoriesPage from "@/pages/territories/index";
 import TerritoryDetailPage from "@/pages/territories/detail";
+import OpportunityInboxPage from "@/pages/opportunities/index";
+import OpportunityDetailPage from "@/pages/opportunities/detail";
 import SignalsPage from "@/pages/signals";
 import ConFilingsPage from "@/pages/con-filings";
 import ConMonitorPage from "@/pages/con-monitor";
@@ -139,6 +141,8 @@ function Router() {
               <Route path="/facilities/:id" component={FacilityDetailPage} />
               <Route path="/territories" component={TerritoriesPage} />
               <Route path="/territories/:id" component={TerritoryDetailPage} />
+              <Route path="/opportunities" component={OpportunityInboxPage} />
+              <Route path="/opportunities/:id" component={OpportunityDetailPage} />
               <Route path="/signals" component={SignalsPage} />
               <Route path="/con-filings" component={ConFilingsPage} />
               <Route path="/con-monitor" component={ConMonitorPage} />

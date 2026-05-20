@@ -2,6 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { startCron } from "./cron";
 import { seedSystemEquipmentLineProfiles } from "./services/equipmentLineService";
+import { seedSystemVerticals } from "./services/verticals/verticalOrchestrator";
 
 const rawPort = process.env["PORT"];
 
@@ -31,4 +32,10 @@ app.listen(port, (err) => {
   seedSystemEquipmentLineProfiles()
     .then((r) => logger.info(r, "equipment-line profiles seeded"))
     .catch((err) => logger.error({ err }, "equipment-line seed failed"));
+
+  // Idempotent seed of the five v2.0 system verticals (imaging_center,
+  // orthopedic, asc, rural_hospital, veterinary).
+  seedSystemVerticals()
+    .then((r) => logger.info(r, "vertical modules seeded"))
+    .catch((err) => logger.error({ err }, "vertical seed failed"));
 });

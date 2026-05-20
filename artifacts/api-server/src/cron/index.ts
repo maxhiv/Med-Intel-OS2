@@ -46,6 +46,13 @@ import { ingestMedicareUtil } from "../services/medicareUtilIngestor";
 import { propagateSystemSignals } from "../services/systemSignalPropagator";
 import { startNationalIngest } from "../services/nationalIngest";
 import { scanMedintelSignals } from "../services/medintelSignalScorer";
+import { detectContradictions } from "../services/confidence/contradictionDetector";
+import { matchManufacturerEol } from "../services/equipmentAge/manufacturerEolMatcher";
+import { classifyAllUnassigned } from "../services/verticals/verticalOrchestrator";
+import { runInference } from "../services/equipmentAge/equipmentAgeInferenceOrchestrator";
+import { ingestStateRadiationRegistry } from "../services/equipmentAge/stateRegistries/stateRegistryRadiationAdapter";
+import { watchAccreditationExpiries } from "../services/triggers/accreditationExpiryWatcher";
+import { generateOpportunities } from "../services/opportunity/opportunityGenerator";
 
 let started = false;
 const locks = new Set<string>();
@@ -88,6 +95,77 @@ export function startCron(): void {
     { timezone: tz },
   );
 
+  // 02:15 daily — classify newly-ingested facilities into customer
+  // verticals (imaging_center, asc, rural_hospital, …) so the scorer can
+  // apply per-vertical signal weight overrides on the next pass.
+  cron.schedule(
+    "15 2 * * *",
+    guarded("classifyVerticals", async () => {
+      const r = await classifyAllUnassigned();
+      logger.info(r, "vertical classification complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:18 daily — absorb any newly-staged state radiation-registry rows
+  // into equipment_age_evidence + equipment_records.
+  cron.schedule(
+    "18 2 * * *",
+    guarded("stateRadiationRegistry", async () => {
+      const r = await ingestStateRadiationRegistry();
+      if (r.stagedRowsScanned > 0) {
+        logger.info(r, "state radiation registry ingest complete");
+      }
+    }),
+    { timezone: tz },
+  );
+
+  // 02:20 daily — match newly-ingested equipment_records against the
+  // manufacturer_eol_catalog and emit eol_equipment signals.
+  cron.schedule(
+    "20 2 * * *",
+    guarded("manufacturerEol", async () => {
+      const r = await matchManufacturerEol();
+      logger.info(r, "manufacturer EOL match complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:22 daily — equipment-age inference engine consolidates evidence
+  // from v_equipment_age_inferred and writes the verified install year
+  // back to equipment_records (>=0.6 confidence, >=2 distinct sources).
+  cron.schedule(
+    "22 2 * * *",
+    guarded("equipmentAgeInference", async () => {
+      const r = await runInference();
+      logger.info(r, "equipment-age inference complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:25 daily — accreditation expiry watcher emits accreditation_renewal
+  // signals 12 months out from any ACR / JC / MQSA renewal target.
+  cron.schedule(
+    "25 2 * * *",
+    guarded("accreditationExpiryWatcher", async () => {
+      const r = await watchAccreditationExpiries();
+      logger.info(r, "accreditation expiry watcher complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:30 daily — sweep intelligence_claims for contradictions so the
+  // confidence scorer doesn't double-count discredited observations on
+  // the next read. Runs ahead of the medintel scan + composite recompute.
+  cron.schedule(
+    "30 2 * * *",
+    guarded("detectContradictions", async () => {
+      const r = await detectContradictions();
+      logger.info(r, "contradiction sweep complete");
+    }),
+    { timezone: tz },
+  );
+
   // 02:45 daily — scan the medintel.* warehouse for CHOW, PE/REIT, chain,
   // AIP infra, CMMI launch, and PSI-11 signals; emit purchase_signals rows
   // before the 03:00 composite score recompute picks them up.
@@ -106,6 +184,18 @@ export function startCron(): void {
     guarded("recomputeSignals", async () => {
       const r = await recomputeAllScores();
       logger.info(r, "signal recompute complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 03:15 daily — regenerate the Opportunity Inbox after the composite
+  // recompute has run, so opportunity scores reflect the freshest signal
+  // state across the warehouse + medintel + EOL + accreditation pipeline.
+  cron.schedule(
+    "15 3 * * *",
+    guarded("generateOpportunities", async () => {
+      const r = await generateOpportunities();
+      logger.info(r, "opportunity generation complete");
     }),
     { timezone: tz },
   );

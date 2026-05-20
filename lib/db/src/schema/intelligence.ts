@@ -25,6 +25,7 @@ import {
   signalTypeEnum,
   contactStatusEnum,
   enrichmentSourceEnum,
+  buyerRoleEnum,
 } from "./enums";
 
 export const facilities = pgTable(
@@ -153,6 +154,16 @@ export const equipmentRecords = pgTable(
     registrationExpiry: date("registration_expiry"),
     sourceDocId: uuid("source_doc_id").references(() => financialDocuments.id),
     sourceType: text("source_type"),
+    // ── v2.0 confidence + EOL extensions (handoff migration 007) ──────────
+    confidenceScore: numeric("confidence_score", { precision: 3, scale: 2 }).default("0.00"),
+    sourceCount: integer("source_count").default(1),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow(),
+    lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }).defaultNow(),
+    contradicted: boolean("contradicted").default(false),
+    stateRegistryId: text("state_registry_id"),
+    fdaListingNumber: text("fda_listing_number"),
+    manufacturerEolDate: date("manufacturer_eol_date"),
+    manufacturerSupportEnded: boolean("manufacturer_support_ended").default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -160,6 +171,9 @@ export const equipmentRecords = pgTable(
     index("idx_equip_facility").on(t.facilityId),
     index("idx_equip_modality").on(t.modality),
     index("idx_equip_urgency").on(t.urgencyTier),
+    index("idx_equip_facility_modality").on(t.facilityId, t.modality),
+    index("idx_equip_install_year").on(t.installYear),
+    index("idx_equip_eol_date").on(t.manufacturerEolDate),
   ],
 );
 
@@ -282,12 +296,22 @@ export const facilityContacts = pgTable(
     buyingAuthorityScore: smallint("buying_authority_score").default(0),
     dataSource: text("data_source"),
     lastEnrichedAt: timestamp("last_enriched_at", { withTimezone: true }),
+    // ── v2.0 decision-maker graph extensions (handoff migration 011) ────
+    buyerRole: buyerRoleEnum("buyer_role"),
+    /** Which modalities this contact has authority over (CT, MRI, …). */
+    modalityAuthority: text("modality_authority").array().default(sql`'{}'`),
+    yearsInRole: smallint("years_in_role"),
+    startedRoleAt: date("started_role_at"),
+    /** verified | unverified | stale | bounced — see contact_verification_log */
+    verificationStatus: text("verification_status").default("unverified"),
+    lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [
     index("idx_contacts_facility").on(t.facilityId),
     index("idx_contacts_confidence").on(t.confidenceScore),
+    index("idx_contacts_buyer_role").on(t.facilityId, t.buyerRole),
   ],
 );
 
