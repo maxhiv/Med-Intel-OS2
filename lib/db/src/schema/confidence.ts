@@ -29,6 +29,7 @@ import {
   date,
   boolean,
   bigserial,
+  jsonb,
   timestamp,
   uniqueIndex,
   index,
@@ -160,6 +161,84 @@ export const equipmentSourceCitations = pgTable(
 );
 
 export type EquipmentSourceCitation = typeof equipmentSourceCitations.$inferSelect;
+
+// ── equipment_age_evidence ─────────────────────────────────────────────────
+// Multi-source triangulation of equipment install year. One row per
+// (facility, modality, observation). The orchestrator consolidates rows
+// into a weighted-average inferred_install_year via the v_equipment_age_
+// inferred view (installed by lib/db/src/scripts/v2_equipment_age.sql).
+export const equipmentAgeEvidence = pgTable(
+  "equipment_age_evidence",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    facilityId: uuid("facility_id").notNull(),
+    modality: text("modality").notNull(),
+    manufacturer: text("manufacturer"),
+    model: text("model"),
+    /** state_registry, hcris_a7_age_distribution, fda_510k_clearance_date,
+     *  manufacturer_eol_announcement, 990_acquisition_year, permit_application_date,
+     *  photo_metadata, rep_field_report */
+    evidenceType: text("evidence_type").notNull(),
+    /** Raw payload — registry URL, extracted snippets, etc. */
+    evidenceValue: jsonb("evidence_value").notNull().default({}),
+    inferredInstallYear: smallint("inferred_install_year"),
+    evidenceWeight: numeric("evidence_weight", { precision: 3, scale: 2 }).notNull(),
+    sourceUrl: text("source_url"),
+    observedAt: timestamp("observed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("idx_age_evidence_facility_modality").on(t.facilityId, t.modality),
+    index("idx_age_evidence_year").on(t.inferredInstallYear),
+    index("idx_age_evidence_type").on(t.evidenceType),
+    check("age_evidence_weight_range", sql`${t.evidenceWeight} BETWEEN 0 AND 1`),
+  ],
+);
+
+export const insertEquipmentAgeEvidenceSchema = createInsertSchema(equipmentAgeEvidence).omit({
+  id: true,
+  observedAt: true,
+});
+export type EquipmentAgeEvidence = typeof equipmentAgeEvidence.$inferSelect;
+export type InsertEquipmentAgeEvidence = z.infer<typeof insertEquipmentAgeEvidenceSchema>;
+
+// ── stage_state_registry_radiation ──────────────────────────────────────────
+// Staging surface for state radiation-registry CSV files. Reps drop in
+// extracts from Texas DSHS, Florida DOH, California DPH, Illinois IEMA,
+// New York DOH; the equipment-age orchestrator reads from here and writes
+// equipment_age_evidence rows + corresponding equipment_records updates.
+//
+// Loaded via psql \copy from a registry CSV (state, facility_npi,
+// facility_name, manufacturer, model, serial_number, install_year,
+// registration_number, registration_date, last_inspection_date,
+// registration_expiry, source_file). The orchestrator then resolves
+// facility_npi → facilities.id and writes equipment_age_evidence rows.
+export const stageStateRegistryRadiation = pgTable(
+  "stage_state_registry_radiation",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    state: text("state").notNull(),
+    facilityNpi: text("facility_npi"),
+    facilityName: text("facility_name"),
+    manufacturer: text("manufacturer"),
+    model: text("model"),
+    serialNumber: text("serial_number"),
+    installYear: smallint("install_year"),
+    registrationNumber: text("registration_number"),
+    registrationDate: date("registration_date"),
+    lastInspectionDate: date("last_inspection_date"),
+    registrationExpiry: date("registration_expiry"),
+    sourceFile: text("source_file"),
+    importedAt: timestamp("imported_at", { withTimezone: true }).defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("idx_stage_radiation_state").on(t.state),
+    index("idx_stage_radiation_npi").on(t.facilityNpi),
+    index("idx_stage_radiation_unprocessed").on(t.processedAt),
+  ],
+);
+
+export type StageStateRegistryRadiation = typeof stageStateRegistryRadiation.$inferSelect;
 
 // Note on FK to equipment_records:
 //   `equipment_records.id` lives in intelligence.ts; declaring the FK there

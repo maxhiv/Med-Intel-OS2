@@ -49,6 +49,9 @@ import { scanMedintelSignals } from "../services/medintelSignalScorer";
 import { detectContradictions } from "../services/confidence/contradictionDetector";
 import { matchManufacturerEol } from "../services/equipmentAge/manufacturerEolMatcher";
 import { classifyAllUnassigned } from "../services/verticals/verticalOrchestrator";
+import { runInference } from "../services/equipmentAge/equipmentAgeInferenceOrchestrator";
+import { ingestStateRadiationRegistry } from "../services/equipmentAge/stateRegistries/stateRegistryRadiationAdapter";
+import { watchAccreditationExpiries } from "../services/triggers/accreditationExpiryWatcher";
 
 let started = false;
 const locks = new Set<string>();
@@ -103,6 +106,19 @@ export function startCron(): void {
     { timezone: tz },
   );
 
+  // 02:18 daily — absorb any newly-staged state radiation-registry rows
+  // into equipment_age_evidence + equipment_records.
+  cron.schedule(
+    "18 2 * * *",
+    guarded("stateRadiationRegistry", async () => {
+      const r = await ingestStateRadiationRegistry();
+      if (r.stagedRowsScanned > 0) {
+        logger.info(r, "state radiation registry ingest complete");
+      }
+    }),
+    { timezone: tz },
+  );
+
   // 02:20 daily — match newly-ingested equipment_records against the
   // manufacturer_eol_catalog and emit eol_equipment signals.
   cron.schedule(
@@ -110,6 +126,29 @@ export function startCron(): void {
     guarded("manufacturerEol", async () => {
       const r = await matchManufacturerEol();
       logger.info(r, "manufacturer EOL match complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:22 daily — equipment-age inference engine consolidates evidence
+  // from v_equipment_age_inferred and writes the verified install year
+  // back to equipment_records (>=0.6 confidence, >=2 distinct sources).
+  cron.schedule(
+    "22 2 * * *",
+    guarded("equipmentAgeInference", async () => {
+      const r = await runInference();
+      logger.info(r, "equipment-age inference complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:25 daily — accreditation expiry watcher emits accreditation_renewal
+  // signals 12 months out from any ACR / JC / MQSA renewal target.
+  cron.schedule(
+    "25 2 * * *",
+    guarded("accreditationExpiryWatcher", async () => {
+      const r = await watchAccreditationExpiries();
+      logger.info(r, "accreditation expiry watcher complete");
     }),
     { timezone: tz },
   );

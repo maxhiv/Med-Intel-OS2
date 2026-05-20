@@ -313,8 +313,64 @@ deferred.
 - Per-vertical report templates (`vertical_modules.report_template`).
   Same Phase E milestone.
 
-### Phase D — Equipment-age inference engine · _pending_
+### Phase D — Equipment-age inference engine · 2026-05-20
 
-### Phase D — Equipment-age inference engine · _pending_
+#### Added (Drizzle schema, `lib/db/src/schema/confidence.ts`)
+- `equipment_age_evidence` — per-(facility, modality, manufacturer)
+  observations from state registries, HCRIS, EOL catalog, FDA 510(k),
+  990 Schedule D, permits, and rep field reports. Each row carries an
+  `evidence_weight` and the verbatim payload as JSONB.
+- `stage_state_registry_radiation` — staging surface for state
+  radiation-registry CSV extracts (TX DSHS, FL DOH, CA DPH, IL IEMA,
+  NY DOH). Operator-driven `\copy` ingestion, no live scraping per
+  the strategic plan §10 risk register.
+
+#### Added (one-time SQL companion, `lib/db/src/scripts/v2_equipment_age.sql`)
+- `v_equipment_age_inferred` view — weighted-average install year per
+  (facility, modality, manufacturer); `age_confidence` rises with
+  total evidence weight (capped at 0.6 contribution) and distinct
+  source count (capped at 0.4 contribution).
+
+#### Added (services)
+- `services/equipmentAge/equipmentAgeInferenceOrchestrator.ts` —
+  consolidates the view rows; writes back to `equipment_records` when
+  age_confidence ≥ 0.6 AND at least 2 distinct source types agree;
+  skips when the new estimate differs from the current value by ≤1
+  year (no churn). Records a verified `install_year` claim per match.
+- `services/equipmentAge/stateRegistries/stateRegistryRadiationAdapter.ts`
+  — generic adapter that pulls unprocessed
+  `stage_state_registry_radiation` rows, resolves
+  `facility_npi → facilities.id`, writes `equipment_age_evidence` +
+  seeds `equipment_records` skeletons, then marks rows processed.
+  Per-state weight overrides (TX 0.95, FL 0.92, CA 0.90, IL/NY 0.88,
+  default 0.85) per the source_weights catalog.
+- `services/triggers/accreditationExpiryWatcher.ts` — emits
+  `accreditation_renewal` signals 12 months out from any ACR / JC /
+  MQSA renewal target on the existing `facility_accreditation` table.
+  Idempotent via `signal_value=accred:<body>:<target>`. AAAHC / AAAASF /
+  IAC / AAHA will light up automatically once those columns exist on
+  facility_accreditation.
+
+#### Added (cron, `artifacts/api-server/src/cron/index.ts`)
+- 02:18 daily — `stateRadiationRegistry` (skips log when staging empty).
+- 02:22 daily — `equipmentAgeInference`.
+- 02:25 daily — `accreditationExpiryWatcher`.
+
+#### Verified
+- `pnpm run typecheck` — clean across all 4 workspaces.
+- Existing `vitest run` suite (Phase B + C, 19 tests) remains green.
+
+#### Deferred
+- Per-state HTTP scrapers for the 5 pilot radiation registries. Live
+  scraping was de-scoped per the strategic plan's risk register (state
+  portal layout changes break scrapers; Outscraper / Playwright
+  fallback is a follow-up). Until then, operators drop registry CSVs
+  into `stage_state_registry_radiation` and call the adapter.
+- HCRIS A-7 age-distribution parser writing `equipment_age_evidence`
+  rows for asset-class movable equipment. Follow-up.
+- FDA 510(k) clearance-date adapter writing lower-bound evidence
+  ("model couldn't have been installed before clearance year"). Follow-up.
+
+### Phase E — Opportunity Inbox · _pending_
 
 ### Phase E — Opportunity Inbox · _pending_
