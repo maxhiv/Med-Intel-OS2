@@ -90,6 +90,31 @@ Three layers of storage hold seed state. Operators only manage layer 1.
      the latest "Full Replacement Monthly NPI File" from
      <https://download.cms.gov/nppes/NPI_Files.html> and drop it there.
 
+### Operator-dropped files in `attached_assets/`
+
+Several seeds **auto-discover** their input from `attached_assets/` before
+falling back to the network URL — same convention `import990Runner.ts` and
+`importEoBmf.ts` already use. This keeps the bulk-seed framework in sync
+with files the operator has already loaded for the medintel warehouse
+(`medintel_os/medintel_os_load.sql`).
+
+| Seed | Picked up from `attached_assets/` | Pattern |
+|---|---|---|
+| `seed:hcris` | CMS Hospital Provider Cost Report | `CostReport_<year>_Final*.csv` |
+| `import-990` | IRS 990 ZIP | `24eoextract990_*.zip` (already wired) |
+| `import-eo-bmf` | IRS BMF | `eo1_*.csv`, `eo2_*.csv`, `eo3_*.csv` (already wired) |
+
+The seed records the local `file://` URL + sha256 in `source_seed_runs`
+exactly as if it had downloaded the file, so the audit trail stays
+identical. `file://` URLs are detected and copied (not fetched) — Node's
+fetch does not support `file://` natively.
+
+`file://` URLs can also be passed explicitly via `--url`:
+```bash
+pnpm --filter @workspace/api-server seed:hcris \
+  --url file:///home/runner/workspace/attached_assets/CostReport_2023_Final.csv
+```
+
 ## Running the seed
 
 ### Full bootstrap (4–8 hours, mostly bound by download speed)

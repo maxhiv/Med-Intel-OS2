@@ -25,8 +25,9 @@
 
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
+import { copyFile, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { sql } from "drizzle-orm";
 import { db, sourceSeedRuns } from "@workspace/db";
@@ -96,6 +97,19 @@ export async function downloadFile(opts: {
     }
   } catch {
     // No file yet — fall through to download.
+  }
+
+  // Special-case file:// URLs — Node's fetch does not implement them
+  // ("fetch failed: not implemented... yet..."). Local-file seeds (operator
+  // dropped a CSV into attached_assets/ or pre-populated SEED_DATA_DIR) go
+  // through this path so they don't need the network at all.
+  if (opts.url.startsWith("file://")) {
+    const src = fileURLToPath(opts.url);
+    logger.info({ src, dest }, "seed: copying local file");
+    await copyFile(src, dest);
+    const st = await stat(dest);
+    const sha256 = await fileSha256(dest);
+    return { path: dest, sha256, bytes: st.size, fromCache: false };
   }
 
   logger.info({ url: opts.url, dest }, "seed: downloading");
