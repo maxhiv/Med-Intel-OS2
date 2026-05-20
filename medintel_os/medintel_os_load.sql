@@ -43,6 +43,7 @@ SET client_min_messages = WARNING;
 -- ---- A.1 PECOS Enrollments (Hospital/FQHC/RHC) — 21 cols ----
 DROP TABLE IF EXISTS stage_pecos_enrollments;
 CREATE TABLE stage_pecos_enrollments (
+    -- Columns 1-20: shared between FQHC/RHC and Hospital enrollment files.
     enrollment_id              TEXT,
     enrollment_state           TEXT,
     provider_type_code         TEXT,
@@ -63,7 +64,32 @@ CREATE TABLE stage_pecos_enrollments (
     city                       TEXT,
     state                      TEXT,
     zip_code                   TEXT,
+    -- Column 21 differs by file: FQHC/RHC has TELEPHONE NUMBER, the May 2026
+    -- Hospital release does NOT (CMS dropped it from the hospital file). The
+    -- column is loaded via the per-file \copy column lists below; on hospital
+    -- rows it'll just be NULL.
     telephone_number           TEXT,
+    -- Hospital-only columns 21-39 (from Hospital_Enrollments_2026.05.01.csv).
+    -- All nullable; FQHC/RHC rows simply skip them in their \copy column list.
+    practice_location_type     TEXT,
+    location_other_type_text   TEXT,
+    subgroup_general           TEXT,
+    subgroup_acute_care        TEXT,
+    subgroup_alcohol_drug      TEXT,
+    subgroup_childrens         TEXT,
+    subgroup_long_term         TEXT,
+    subgroup_psychiatric       TEXT,
+    subgroup_rehabilitation    TEXT,
+    subgroup_short_term        TEXT,
+    subgroup_swing_bed         TEXT,
+    subgroup_psychiatric_unit  TEXT,
+    subgroup_rehab_unit        TEXT,
+    subgroup_specialty_hosp    TEXT,
+    subgroup_other             TEXT,
+    subgroup_other_text        TEXT,
+    reh_conversion_flag        TEXT,
+    reh_conversion_date        TEXT,
+    cah_or_hospital_ccn        TEXT,
     source_vertical            TEXT,   -- 'HOSPITAL' | 'FQHC' | 'RHC' — set by loader
     source_file                TEXT
 );
@@ -284,19 +310,21 @@ CREATE TABLE stage_cost_report (
     chip_charges               TEXT
 );
 
--- ---- A.7 Hospital Service Area 2024 — schema is PROVISIONAL ----
--- Verify the actual CSV header before \copy; adjust columns as needed.
+-- ---- A.7 Hospital Service Area 2024 — 5-column schema (CMS dropped `year`) ----
+-- Verified against Hospital_Service_Area_2024.csv header (May 2026 drop):
+--   MEDICARE_PROV_NUM, ZIP_CD_OF_RESIDENCE, TOTAL_DAYS_OF_CARE,
+--   TOTAL_CHARGES, TOTAL_CASES
+-- The earlier version of this schema included a `year` column; CMS no longer
+-- publishes it, since the year is encoded in the filename. The loader pulls
+-- the year from the source_file metadata downstream.
 DROP TABLE IF EXISTS stage_service_area;
 CREATE TABLE stage_service_area (
     medicare_prov_num          TEXT,
     zip_cd_of_residence        TEXT,
     total_days_of_care         TEXT,
     total_charges              TEXT,
-    total_cases                TEXT,
-    year                       TEXT
+    total_cases                TEXT
 );
-COMMENT ON TABLE stage_service_area IS
-    'Column order may need adjustment after inspecting actual CSV header.';
 
 -- ---- A.8 PSI-11 — 9 cols ----
 DROP TABLE IF EXISTS stage_psi11;
@@ -534,8 +562,10 @@ UPDATE stage_pecos_enrollments SET source_vertical = 'FQHC', source_file = 'FQHC
 \copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM 'RHC_Enrollments_2026.04.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 UPDATE stage_pecos_enrollments SET source_vertical = 'RHC', source_file = 'RHC_Enrollments_2026.04.01' WHERE source_vertical IS NULL;
 
--- Hospital Enrollments — now in scope (May 2026 drop).
-\copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM 'Hospital_Enrollments_2026.05.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+-- Hospital Enrollments (May 2026 drop) — 39-column file, no telephone_number;
+-- adds practice_location_type / location_other_type_text / 14 subgroup flags /
+-- reh_conversion_flag / reh_conversion_date / cah_or_hospital_ccn.
+\copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, practice_location_type, location_other_type_text, subgroup_general, subgroup_acute_care, subgroup_alcohol_drug, subgroup_childrens, subgroup_long_term, subgroup_psychiatric, subgroup_rehabilitation, subgroup_short_term, subgroup_swing_bed, subgroup_psychiatric_unit, subgroup_rehab_unit, subgroup_specialty_hosp, subgroup_other, subgroup_other_text, reh_conversion_flag, reh_conversion_date, cah_or_hospital_ccn) FROM 'Hospital_Enrollments_2026.05.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 UPDATE stage_pecos_enrollments SET source_vertical = 'HOSPITAL', source_file = 'Hospital_Enrollments_2026.05.01' WHERE source_vertical IS NULL;
 
 
@@ -606,7 +636,7 @@ TRUNCATE stage_dme_geo;
 
 -- ---- B.10 PY 2024 ACO Results (UTF-8) ----
 TRUNCATE stage_aco_results;
-\copy stage_aco_results FROM 'PY 2024 ACO Results PUF_Rerun_20250925.csv' WITH (FORMAT csv, HEADER true, NULL '')
+\copy stage_aco_results FROM 'PY_2024_ACO_Results_PUF_Rerun_20250925.csv' WITH (FORMAT csv, HEADER true, NULL '')
 
 
 -- ---- B.11 AIP Spend Plan 2026 (UTF-8) ----
@@ -1003,11 +1033,15 @@ ON CONFLICT (rpt_rec_num) DO NOTHING;
 
 
 -- ---- C.8 fact_service_area ← stage_service_area ----
+-- The 2024 Hospital_Service_Area drop doesn't include a `year` column;
+-- the calendar year is encoded in the filename. Hard-code 2024 for now;
+-- if a future drop ships e.g. Hospital_Service_Area_2025.csv, bump this
+-- literal (or re-add the column to the staging table if CMS brings it back).
 INSERT INTO fact_service_area (ccn, zip_code, calendar_year, total_discharges, total_days, total_charges)
 SELECT
     NULLIF(s.medicare_prov_num,''),
     LEFT(NULLIF(s.zip_cd_of_residence,''),5),
-    COALESCE(NULLIF(s.year,'')::SMALLINT, 2024),
+    2024::SMALLINT,
     safe_num(s.total_cases),
     safe_num(s.total_days_of_care),
     safe_num(s.total_charges)
