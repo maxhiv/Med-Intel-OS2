@@ -77,15 +77,23 @@ function splitName(fullName: string): { firstName: string; lastName: string } {
   };
 }
 
+// ProPublica's filing record exposes principalname0..principalname9 +
+// principaltitle0..principaltitle9 — a hard cap of 10 officers. Large health
+// systems file 20+ principals; we surface a warning so an operator knows
+// the data is being truncated rather than silently losing rows.
+const PRINCIPAL_CAP = 10;
+
 async function upsertOfficerContacts(
   facilityId: string,
   filing: PpFiling,
 ): Promise<number> {
   let upserted = 0;
-  for (let i = 0; i < 10; i++) {
+  let principalsSeen = 0;
+  for (let i = 0; i < PRINCIPAL_CAP; i++) {
     const name  = (filing as Record<string, unknown>)[`principalname${i}`] as string | undefined;
     const title = (filing as Record<string, unknown>)[`principaltitle${i}`] as string | undefined;
     if (!name || !title) continue;
+    principalsSeen++;
 
     const score = buyingScoreForTitle(title);
     if (!score) continue;
@@ -129,6 +137,15 @@ async function upsertOfficerContacts(
       });
       upserted++;
     }
+  }
+  // If every visible slot was used, the filing may have additional
+  // principals ProPublica truncated. Surface this so an analyst can
+  // backfill from the source 990 PDF if it matters for a deal.
+  if (principalsSeen === PRINCIPAL_CAP) {
+    logger.warn(
+      { facilityId, principalsSeen, cap: PRINCIPAL_CAP },
+      "ProPublica 990 filing exposed the maximum 10 principals — additional principals may be missing",
+    );
   }
   return upserted;
 }

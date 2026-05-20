@@ -74,6 +74,9 @@ export interface GenerationResult {
 
 /** Resolve each account's covered states from saved territories (v1 surface). */
 async function loadAccountTerritories(): Promise<AccountTerritory[]> {
+  // `territories.filter` is JSONB; the `states` key inside it is a JSON array
+  // of 2-char strings. `jsonb_array_elements_text` iterates a JSONB array
+  // safely — `UNNEST(jsonb)` is not a valid Postgres operation.
   const rows = await db.execute<{ account_id: string; states: string[] }>(sql`
     SELECT a.id AS account_id,
            COALESCE(
@@ -82,7 +85,9 @@ async function loadAccountTerritories(): Promise<AccountTerritory[]> {
            ) AS states
       FROM accounts a
  LEFT JOIN LATERAL (
-        SELECT UNNEST(COALESCE((t.filter->'states')::jsonb, '[]'::jsonb))::text AS s
+        SELECT jsonb_array_elements_text(
+                 COALESCE(t.filter->'states', '[]'::jsonb)
+               ) AS s
           FROM territories t
          WHERE t.account_id = a.id
       ) s ON TRUE

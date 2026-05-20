@@ -125,6 +125,19 @@ app.use(
   }),
 );
 
+// Very tight limit on the expensive opportunity regenerator — it walks
+// up to 5,000 facilities × N accounts × N modalities per call. Two runs
+// per 15-minute window is generous; anything more is operator abuse.
+app.use(
+  "/api/opportunities/regenerate",
+  rateLimit({
+    windowMs: 15 * 60_000,
+    limit: 2,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+  }),
+);
+
 app.use("/api", router);
 app.use(errorHandler);
 

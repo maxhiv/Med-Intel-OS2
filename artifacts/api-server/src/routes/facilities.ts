@@ -81,7 +81,7 @@ async function batchSignalBreakdowns(
     con_filed: 35, con_approved: 40, bond_issued: 35, rfp_posted: 40,
     hcris_depreciation_spike: 25, equipment_age_7yr: 20, high_utilization: 15,
     grant_awarded: 25, clinical_trial: 15, adverse_event_spike: 10, sec_capex_flag: 18,
-    depreciation_flag: 12, eol_equipment: 12,
+    depreciation_flag: 12, eol_equipment: 25,
     chow_recent: 35, pe_takeover: 30, reit_takeover: 28, aip_infra_spend: 25,
     chain_acquisition: 12, psi11_outlier: 15, cmmi_state_launch: 5,
   };

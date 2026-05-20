@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { Link, useParams } from "wouter";
 import {
   useGetTerritory,
@@ -11,8 +11,12 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Map as MapIcon, Table as TableIcon, Trash2, ArrowLeft, Download } from "lucide-react";
-import { TerritoryMap } from "@/components/territory-map";
 import { useToast } from "@/hooks/use-toast";
+
+// Lazy MapLibre — saves ~600 KB on initial load. Detail-page tables stay fast.
+const TerritoryMap = lazy(() =>
+  import("@/components/territory-map").then((m) => ({ default: m.TerritoryMap })),
+);
 
 function fmtMoney(value: string | number | null | undefined): string {
   if (value == null) return "—";
@@ -198,7 +202,9 @@ export default function TerritoryDetailPage() {
             <Skeleton className="h-96 w-full" />
           ) : displayMode === "map" ? (
             <div className="h-[600px]">
-              <TerritoryMap facilities={rows} className="w-full h-full rounded-md border border-border" />
+              <Suspense fallback={<Skeleton className="w-full h-full rounded-md" />}>
+                <TerritoryMap facilities={rows} className="w-full h-full rounded-md border border-border" />
+              </Suspense>
             </div>
           ) : (
             <div className="overflow-x-auto rounded-md border border-border">

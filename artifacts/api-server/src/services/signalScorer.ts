@@ -76,7 +76,12 @@ const WEIGHTS: Record<string, number> = {
   sec_capex_flag: 18,
   // Legacy / kept for backward compat
   depreciation_flag: 12,
-  eol_equipment: 12,
+  // EOL is now actively emitted by the manufacturerEolMatcher (Phase C)
+  // with confidence 90 (support ended) / 70 (in support). The previous
+  // weight of 12 was set when this was a stub signal; bumped to 25 to
+  // reflect that an OEM-confirmed support-end is a Tier-1-ish buying
+  // trigger.
+  eol_equipment: 25,
   bond_issuance: 8,
   construction_permit: 8,
   leadership_change: 6,
