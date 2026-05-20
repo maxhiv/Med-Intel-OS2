@@ -112,8 +112,16 @@ export async function ingestSecEdgar(
   for (const f of targets) {
     result.facilitiesScanned += 1;
     try {
-      // Search by facility's own name.
-      const facilityTerm = f.name.split(/[,\-]/)[0].trim().replace(/'/g, "").slice(0, 50);
+      // Search by facility's own name. Trim to the first comma/dash segment,
+      // strip apostrophes, then cap at 50 chars — but on a WORD boundary so
+      // multi-token names like "Medical University of South Carolina
+      // Healthcare System" don't get cut mid-token ("...Healthcare " is far
+      // worse than "Medical University of South Carolina Healthcare").
+      const facilityTermRaw = f.name.split(/[,\-]/)[0].trim().replace(/'/g, "");
+      const facilityTerm =
+        facilityTermRaw.length <= 50
+          ? facilityTermRaw
+          : facilityTermRaw.slice(0, 50).replace(/\s+\S*$/, "").trim() || facilityTermRaw.slice(0, 50);
       const { accessions: directList, httpError: directErr } = await searchEdgar(facilityTerm, 5);
       if (directErr) result.errors += 1;
       const directAccessions = new Set(directList);

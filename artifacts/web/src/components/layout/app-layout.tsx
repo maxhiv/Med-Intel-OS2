@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useGetMe } from "@workspace/api-client-react";
 import { UserButton } from "@clerk/react";
@@ -20,8 +21,11 @@ import {
   Crosshair,
   Compass,
   Inbox,
+  Menu,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -41,6 +45,13 @@ interface NavGroup {
 export function AppLayout({ children }: AppLayoutProps) {
   const [location] = useLocation();
   const { data: me, isLoading } = useGetMe();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Close the mobile drawer whenever the route changes so a tap on a nav
+  // link doesn't leave the overlay hanging.
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location]);
 
   // When `VITE_MEDINTEL_OS_MODE=true` we run in prospect-intelligence mode
   // per the Medintel OS brief — outbound-marketing surfaces (contacts,
@@ -120,44 +131,80 @@ export function AppLayout({ children }: AppLayoutProps) {
     );
   }
 
+  function NavBody() {
+    return (
+      <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+        {topItems.map((item) => (
+          <NavLink key={item.href} item={item} />
+        ))}
+        {groups.map((group) => (
+          <div key={group.label} className="pt-3">
+            <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+              {group.label}
+            </div>
+            <div className="space-y-0.5">
+              {group.items.map((item) => (
+                <NavLink key={item.href} item={item} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </nav>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background flex flex-col md:flex-row">
-      <div className="w-full md:w-64 bg-sidebar border-r border-sidebar-border flex flex-col hidden md:flex">
+      {/* Desktop sidebar */}
+      <aside className="w-64 bg-sidebar border-r border-sidebar-border flex-col hidden md:flex">
         <div className="h-14 flex items-center px-4 border-b border-sidebar-border">
           <Link href="/dashboard" className="flex items-center gap-2 font-bold text-primary">
             <Activity className="h-5 w-5" />
             <span>MedIntel OS</span>
           </Link>
         </div>
-        <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-          {topItems.map((item) => (
-            <NavLink key={item.href} item={item} />
-          ))}
-
-          {groups.map((group) => (
-            <div key={group.label} className="pt-3">
-              <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-                {group.label}
-              </div>
-              <div className="space-y-0.5">
-                {group.items.map((item) => (
-                  <NavLink key={item.href} item={item} />
-                ))}
-              </div>
-            </div>
-          ))}
-        </nav>
-      </div>
+        <NavBody />
+      </aside>
 
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 border-b border-border bg-card flex items-center justify-between px-4 lg:px-6">
-          <div className="flex items-center md:hidden">
-            <Link href="/dashboard" className="flex items-center gap-2 font-bold text-primary">
+        <header className="h-14 border-b border-border bg-card flex items-center justify-between px-3 sm:px-4 lg:px-6">
+          {/* Mobile: hamburger that opens the drawer with the same nav contents */}
+          <div className="flex items-center gap-2 md:hidden">
+            <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+              <SheetTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Open navigation"
+                  className="-ml-1"
+                >
+                  <Menu className="h-5 w-5" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left" className="w-72 p-0 bg-sidebar">
+                <SheetTitle className="sr-only">Navigation</SheetTitle>
+                <div className="h-14 flex items-center px-4 border-b border-sidebar-border">
+                  <Link
+                    href="/dashboard"
+                    className="flex items-center gap-2 font-bold text-primary"
+                  >
+                    <Activity className="h-5 w-5" />
+                    <span>MedIntel OS</span>
+                  </Link>
+                </div>
+                <NavBody />
+              </SheetContent>
+            </Sheet>
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2 font-bold text-primary"
+            >
               <Activity className="h-5 w-5" />
-              <span>MedIntel OS</span>
+              <span className="text-sm">MedIntel OS</span>
             </Link>
           </div>
-          <div className="ml-auto flex items-center gap-4">
+
+          <div className="ml-auto flex items-center gap-3 sm:gap-4">
             {!isLoading && me?.account ? (
               <span className="text-sm text-muted-foreground hidden sm:inline-block">
                 {me.account.name}

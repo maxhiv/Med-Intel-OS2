@@ -237,8 +237,33 @@ router.post("/opportunities/:id/actions", requireAccount, async (req, res) => {
 
 // ─── Manual regeneration (rep-triggered) ────────────────────────────────────
 // Useful when a rep wants to force a fresh inbox after loading new data.
-router.post("/opportunities/regenerate", requireAccount, async (_req, res) => {
-  const result = await generateOpportunities({ facilityLimit: 5000 });
+//
+// Rate-limited to 2 calls / 15min / IP via app-level middleware
+// (`/api/opportunities/regenerate`). Per-account caps:
+//   - Default reps:           ?limit up to 1000.
+//   - Platform admins only:   ?limit up to 5000.
+router.post("/opportunities/regenerate", requireAccount, async (req, res) => {
+  const isAdmin = Boolean(req.isPlatformAdmin);
+  const REGULAR_CAP = 1000;
+  const ADMIN_CAP = 5000;
+
+  const requested = Number(req.query.limit ?? req.body?.limit ?? REGULAR_CAP);
+  if (!Number.isFinite(requested) || requested <= 0) {
+    res.status(400).json({ error: "limit_must_be_positive_integer" });
+    return;
+  }
+  const cap = isAdmin ? ADMIN_CAP : REGULAR_CAP;
+  if (requested > cap) {
+    res.status(403).json({
+      error: "limit_exceeds_role_cap",
+      requested,
+      cap,
+      role: isAdmin ? "platform_admin" : "rep",
+    });
+    return;
+  }
+
+  const result = await generateOpportunities({ facilityLimit: Math.min(requested, cap) });
   res.json(result);
 });
 

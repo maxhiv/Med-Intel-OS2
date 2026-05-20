@@ -16,6 +16,7 @@ import { parse } from "csv-parse";
 import { getTableColumns, sql } from "drizzle-orm";
 import { db, irs990Raw } from "@workspace/db";
 import { recomputeAllScores } from "./signalScorer";
+import { logger } from "../lib/logger";
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -377,7 +378,7 @@ async function importCsv(
   zipPath: string,
   batchSize: number,
 ): Promise<{ rowsProcessed: number; rowsSkipped: number }> {
-  console.log(`  Streaming inner CSV from ZIP (no temp file)...`);
+  logger.info(`  Streaming inner CSV from ZIP (no temp file)...`);
 
   return new Promise((resolve, reject) => {
     let rowsProcessed = 0;
@@ -416,7 +417,7 @@ async function importCsv(
           flushChain = flushChain.then(() => flushBatch(toFlush));
         }
         if (rowsProcessed - lastLogCount >= 10_000) {
-          console.log(`    ... ${fmt(rowsProcessed)} rows processed`);
+          logger.info(`    ... ${fmt(rowsProcessed)} rows processed`);
           lastLogCount = rowsProcessed;
         }
       }
@@ -439,7 +440,7 @@ async function importCsv(
     zipStream.on("entry", (entry: unzipper.Entry) => {
       if (!csvFound && entry.path.endsWith(".csv")) {
         csvFound = true;
-        console.log(`  Found CSV entry: ${entry.path} — streaming into parser...`);
+        logger.info(`  Found CSV entry: ${entry.path} — streaming into parser...`);
         entry.pipe(parser);
       } else {
         entry.autodrain();
@@ -495,7 +496,7 @@ async function populateBmfNames(): Promise<number> {
       parser.on("end",   resolve);
       parser.on("error", reject);
     });
-    console.log(`    BMF loaded: ${path.basename(filePath)} (running total: ${fmt(einToName.size)} EINs)`);
+    logger.info(`    BMF loaded: ${path.basename(filePath)} (running total: ${fmt(einToName.size)} EINs)`);
   }
 
   const entries = [...einToName.entries()];
@@ -526,7 +527,7 @@ async function trgmMatch(): Promise<number> {
   const [unmatchedRow] = (await db.execute<{ cnt: string }>(sql.raw(
     `SELECT COUNT(*)::text AS cnt FROM irs_990_raw WHERE facility_id IS NULL`,
   ))).rows;
-  console.log(`  Phase 4 trgm: ${fmt(Number(unmatchedRow.cnt))} rows unmatched after EIN join...`);
+  logger.info(`  Phase 4 trgm: ${fmt(Number(unmatchedRow.cnt))} rows unmatched after EIN join...`);
 
   async function runPass(threshold: number, hospitalOnly: boolean): Promise<number> {
     const allEins = (await db.execute<{ ein: string }>(sql.raw(`
@@ -588,7 +589,7 @@ async function trgmMatch(): Promise<number> {
 
   const generalMatched  = await runPass(TRGM_THRESHOLD_GENERAL,  false);
   const hospitalMatched = await runPass(TRGM_THRESHOLD_HOSPITAL, true);
-  console.log(`  trgm: ${fmt(generalMatched)} general + ${fmt(hospitalMatched)} hospital = ${fmt(generalMatched + hospitalMatched)} total.`);
+  logger.info(`  trgm: ${fmt(generalMatched)} general + ${fmt(hospitalMatched)} hospital = ${fmt(generalMatched + hospitalMatched)} total.`);
   return generalMatched + hospitalMatched;
 }
 
@@ -667,7 +668,7 @@ async function emitSignals(): Promise<{ total: number; byType: Record<string, nu
     ON CONFLICT DO NOTHING RETURNING id
   `));
   counts["hospital_operator"] = hospRes.rows.length;
-  console.log(`    hospital_operator  : ${fmt(hospRes.rows.length)}`);
+  logger.info(`    hospital_operator  : ${fmt(hospRes.rows.length)}`);
 
   const capRes = await db.execute<{ id: string }>(sql.raw(`
     INSERT INTO purchase_signals
@@ -681,7 +682,7 @@ async function emitSignals(): Promise<{ total: number; byType: Record<string, nu
     ON CONFLICT DO NOTHING RETURNING id
   `));
   counts["capital_investment"] = capRes.rows.length;
-  console.log(`    capital_investment : ${fmt(capRes.rows.length)}`);
+  logger.info(`    capital_investment : ${fmt(capRes.rows.length)}`);
 
   const workRes = await db.execute<{ id: string }>(sql.raw(`
     INSERT INTO purchase_signals
@@ -697,7 +698,7 @@ async function emitSignals(): Promise<{ total: number; byType: Record<string, nu
     ON CONFLICT DO NOTHING RETURNING id
   `));
   counts["workforce_expansion"] = workRes.rows.length;
-  console.log(`    workforce_expansion: ${fmt(workRes.rows.length)}`);
+  logger.info(`    workforce_expansion: ${fmt(workRes.rows.length)}`);
 
   const healthRows = await db.execute<{
     facility_id: string;
@@ -734,7 +735,7 @@ async function emitSignals(): Promise<{ total: number; byType: Record<string, nu
     healthCount += res.rows.length;
   }
   counts["financial_health"] = healthCount;
-  console.log(`    financial_health   : ${fmt(healthCount)}`);
+  logger.info(`    financial_health   : ${fmt(healthCount)}`);
 
   const total = Object.values(counts).reduce((s, n) => s + n, 0);
   return { total, byType: counts };
@@ -767,23 +768,23 @@ export async function runImport990(opts: Import990Options = {}): Promise<Import9
   const batchSize = opts.batchSize ?? Math.max(100, Number(process.env.IRS_990_BATCH_SIZE ?? DEFAULT_BATCH_SIZE));
   const signalsOnly = opts.signalsOnly ?? process.env.IRS_990_SIGNALS_ONLY === "1";
 
-  console.log("\n" + "═".repeat(68));
-  console.log("  MedIntel OS — IRS 990 Import Runner");
-  console.log(`  ZIP        : ${zipPath}`);
-  console.log(`  Batch size : ${fmt(batchSize)}`);
-  console.log(`  Mode       : ${signalsOnly ? "SIGNALS_ONLY (skip CSV import)" : "FULL"}`);
-  console.log("═".repeat(68) + "\n");
+  logger.info("\n" + "═".repeat(68));
+  logger.info("  MedIntel OS — IRS 990 Import Runner");
+  logger.info(`  ZIP        : ${zipPath}`);
+  logger.info(`  Batch size : ${fmt(batchSize)}`);
+  logger.info(`  Mode       : ${signalsOnly ? "SIGNALS_ONLY (skip CSV import)" : "FULL"}`);
+  logger.info("═".repeat(68) + "\n");
 
   const t0 = Date.now();
   let rowsProcessed = 0;
   let rowsSkipped   = 0;
 
   if (!signalsOnly) {
-    console.log("  [1/7] Streaming CSV into irs_990_raw...");
+    logger.info("  [1/7] Streaming CSV into irs_990_raw...");
     ({ rowsProcessed, rowsSkipped } = await importCsv(zipPath, batchSize));
-    console.log(`  Done: ${fmt(rowsProcessed)} rows ingested, ${fmt(rowsSkipped)} skipped.\n`);
+    logger.info(`  Done: ${fmt(rowsProcessed)} rows ingested, ${fmt(rowsSkipped)} skipped.\n`);
   } else {
-    console.log("  [1/7] Skipping CSV import (signalsOnly=true).\n");
+    logger.info("  [1/7] Skipping CSV import (signalsOnly=true).\n");
   }
 
   const [raw] = (await db.execute<{ total: string; hospitals: string }>(sql.raw(`
@@ -792,29 +793,29 @@ export async function runImport990(opts: Import990Options = {}): Promise<Import9
       COUNT(*) FILTER (WHERE operatehosptlcd='Y')::text AS hospitals
     FROM irs_990_raw
   `))).rows;
-  console.log(`  [2/7] irs_990_raw: ${fmt(Number(raw.total))} rows, ${fmt(Number(raw.hospitals))} hospitals`);
+  logger.info(`  [2/7] irs_990_raw: ${fmt(Number(raw.total))} rows, ${fmt(Number(raw.hospitals))} hospitals`);
 
-  console.log("\n  [3/7] Direct EIN match...");
+  logger.info("\n  [3/7] Direct EIN match...");
   const directMatched = await directEinMatch();
-  console.log(`  Total matched: ${fmt(directMatched)} rows linked to a facility.`);
+  logger.info(`  Total matched: ${fmt(directMatched)} rows linked to a facility.`);
 
-  console.log("\n  [4/7] Populating org_name from BMF (eo1/eo2/eo3)...");
+  logger.info("\n  [4/7] Populating org_name from BMF (eo1/eo2/eo3)...");
   const bmfNamed = await populateBmfNames();
-  console.log(`  BMF: org_name populated for ${fmt(bmfNamed)} rows.`);
+  logger.info(`  BMF: org_name populated for ${fmt(bmfNamed)} rows.`);
 
-  console.log("\n  [5/7] pg_trgm name match pass...");
+  logger.info("\n  [5/7] pg_trgm name match pass...");
   const trgmMatched = await trgmMatch();
-  console.log(`  trgm matched: ${fmt(trgmMatched)} additional facilities.`);
+  logger.info(`  trgm matched: ${fmt(trgmMatched)} additional facilities.`);
 
-  console.log("\n  [6/7] Upserting financial_documents...");
+  logger.info("\n  [6/7] Upserting financial_documents...");
   const financialDocs = await upsertFinancialDocs();
-  console.log(`  Upserted ${fmt(financialDocs)} financial_documents rows.`);
+  logger.info(`  Upserted ${fmt(financialDocs)} financial_documents rows.`);
 
-  console.log("\n  [7/7] Emitting purchase signals...");
+  logger.info("\n  [7/7] Emitting purchase signals...");
   const signals = await emitSignals();
-  console.log(`\n  Total signals emitted: ${fmt(signals.total)}`);
+  logger.info(`\n  Total signals emitted: ${fmt(signals.total)}`);
 
-  console.log("\n  Persisting hospital flag on matched facilities...");
+  logger.info("\n  Persisting hospital flag on matched facilities...");
   const hospFlagRes = await db.execute<{ cnt: string }>(sql.raw(`
     WITH updated AS (
       UPDATE facilities f
@@ -827,22 +828,22 @@ export async function runImport990(opts: Import990Options = {}): Promise<Import9
     )
     SELECT COUNT(*)::text AS cnt FROM updated
   `));
-  console.log(`  operates_hospital set on ${fmt(Number(hospFlagRes.rows[0]?.cnt ?? 0))} facilities.`);
+  logger.info(`  operates_hospital set on ${fmt(Number(hospFlagRes.rows[0]?.cnt ?? 0))} facilities.`);
 
-  console.log("\n  Recomputing scores for all facilities...");
+  logger.info("\n  Recomputing scores for all facilities...");
   const { updated: scoresUpdated } = await recomputeAllScores();
-  console.log(`  Scores updated for ${fmt(scoresUpdated)} facilities.`);
+  logger.info(`  Scores updated for ${fmt(scoresUpdated)} facilities.`);
 
   const elapsedMs = Date.now() - t0;
-  console.log("\n" + "═".repeat(68));
-  console.log("  Final metrics:");
-  console.log(`    Rows processed  : ${fmt(Number(raw.total))}`);
-  console.log(`    EINs from BMF   : ${fmt(bmfNamed)}`);
-  console.log(`    Matched direct  : ${fmt(directMatched)}`);
-  console.log(`    Matched trgm    : ${fmt(trgmMatched)}`);
-  console.log(`    Signals emitted : ${fmt(signals.total)}`);
-  console.log(`    Elapsed         : ${(elapsedMs / 1000).toFixed(1)}s`);
-  console.log("═".repeat(68) + "\n");
+  logger.info("\n" + "═".repeat(68));
+  logger.info("  Final metrics:");
+  logger.info(`    Rows processed  : ${fmt(Number(raw.total))}`);
+  logger.info(`    EINs from BMF   : ${fmt(bmfNamed)}`);
+  logger.info(`    Matched direct  : ${fmt(directMatched)}`);
+  logger.info(`    Matched trgm    : ${fmt(trgmMatched)}`);
+  logger.info(`    Signals emitted : ${fmt(signals.total)}`);
+  logger.info(`    Elapsed         : ${(elapsedMs / 1000).toFixed(1)}s`);
+  logger.info("═".repeat(68) + "\n");
 
   return { rowsProcessed, rowsSkipped, bmfNamed, directMatched, trgmMatched, financialDocs, signals, scoresUpdated, elapsedMs };
 }

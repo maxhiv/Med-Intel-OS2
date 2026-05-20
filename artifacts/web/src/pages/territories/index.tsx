@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import {
   useListTerritories,
@@ -27,7 +27,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Trash2, Save, Eye, Map as MapIcon, Table as TableIcon, Plus, Loader2 } from "lucide-react";
 import { TerritoryFilterPanel } from "@/components/territory-filter-panel";
-import { TerritoryMap } from "@/components/territory-map";
+
+// MapLibre is ~600 KB minified; lazy so the territory planner's first paint
+// stays fast and reps who only use the table view never pay for the map.
+const TerritoryMap = lazy(() =>
+  import("@/components/territory-map").then((m) => ({ default: m.TerritoryMap })),
+);
 import { useToast } from "@/hooks/use-toast";
 
 const DEFAULT_FILTER: TerritoryFilter = {
@@ -326,7 +331,9 @@ export default function TerritoriesPage() {
               <CardContent>
                 {displayMode === "map" ? (
                   <div className="h-[600px]">
-                    <TerritoryMap facilities={results} className="w-full h-full rounded-md border border-border" />
+                    <Suspense fallback={<Skeleton className="w-full h-full rounded-md" />}>
+                      <TerritoryMap facilities={results} className="w-full h-full rounded-md border border-border" />
+                    </Suspense>
                   </div>
                 ) : (
                   <TerritoryTable rows={results} />
