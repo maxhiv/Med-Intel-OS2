@@ -47,6 +47,8 @@ import { propagateSystemSignals } from "../services/systemSignalPropagator";
 import { startNationalIngest } from "../services/nationalIngest";
 import { scanMedintelSignals } from "../services/medintelSignalScorer";
 import { detectContradictions } from "../services/confidence/contradictionDetector";
+import { matchManufacturerEol } from "../services/equipmentAge/manufacturerEolMatcher";
+import { classifyAllUnassigned } from "../services/verticals/verticalOrchestrator";
 
 let started = false;
 const locks = new Set<string>();
@@ -85,6 +87,29 @@ export function startCron(): void {
     guarded("dailyBatch", async () => {
       const r = await runAllAccounts();
       logger.info(r, "daily batch run complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:15 daily — classify newly-ingested facilities into customer
+  // verticals (imaging_center, asc, rural_hospital, …) so the scorer can
+  // apply per-vertical signal weight overrides on the next pass.
+  cron.schedule(
+    "15 2 * * *",
+    guarded("classifyVerticals", async () => {
+      const r = await classifyAllUnassigned();
+      logger.info(r, "vertical classification complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:20 daily — match newly-ingested equipment_records against the
+  // manufacturer_eol_catalog and emit eol_equipment signals.
+  cron.schedule(
+    "20 2 * * *",
+    guarded("manufacturerEol", async () => {
+      const r = await matchManufacturerEol();
+      logger.info(r, "manufacturer EOL match complete");
     }),
     { timezone: tz },
   );

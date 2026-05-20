@@ -259,9 +259,61 @@ deferred.
   follow-up where the Opportunity Inbox starts consuming
   ConfidenceScorer.assess() for every claim it surfaces.
 
-### Phase C — Verticals + manufacturer EOL matcher · _pending_
+### Phase C — Verticals + manufacturer EOL matcher · 2026-05-20
 
-### Phase C — Verticals + manufacturer EOL matcher · _pending_
+#### Added (Drizzle schema, `lib/db/src/schema/app.ts`)
+- `vertical_modules` — five system verticals (imaging_center, orthopedic,
+  asc, rural_hospital, veterinary) with signal-weight overrides as JSONB.
+- `facility_vertical_map` — composite (facility_id, vertical_id) PK;
+  unique partial index enforces "at most one is_primary per facility".
+- `equipment_line_profiles.vertical_slug` — bridge field tying our
+  product-facing equipment lines to the brief's customer-facing verticals.
+
+#### Added (services)
+- `services/verticals/verticalOrchestrator.ts` — seeds the 5 system
+  verticals at startup (idempotent), assigns facilities by
+  `facility_type` plus CAH / FQHC overrides, exposes
+  `getVerticalWeightsForFacility()` for the OpportunityScorer (Phase E).
+  Includes `normaliseSignalWeights()` that maps the handoff's
+  natural-language keys (`manufacturer_eol`, `acr_iac_expiry`,
+  `cms_procedure_volume_growth`, …) to our `signalTypeEnum` values via a
+  16-row alias table.
+- `services/equipmentAge/manufacturerEolMatcher.ts` — joins
+  `equipment_records` to the Phase B `manufacturer_eol_catalog`, sets
+  `manufacturer_eol_date` and `manufacturer_support_ended` on each
+  match, emits `eol_equipment` `purchase_signals` rows (confidence 90 if
+  support has ended, 70 otherwise), and records an
+  `intelligence_claim` per match with the `manufacturer_eol_bulletin`
+  source weight.
+
+#### Added (startup, `artifacts/api-server/src/index.ts`)
+- `seedSystemVerticals()` runs after `seedSystemEquipmentLineProfiles()`
+  so the catalog is ready before the first cron tick.
+
+#### Added (cron, `artifacts/api-server/src/cron/index.ts`)
+- 02:15 daily — `classifyVerticals` runs `classifyAllUnassigned()` to
+  bucket newly-ingested facilities.
+- 02:20 daily — `manufacturerEol` runs the EOL matcher. New
+  `eol_equipment` signals feed the 03:00 composite recompute.
+
+#### Added (tests)
+- `artifacts/api-server/tests/vertical-orchestrator.test.ts` — 10 vitest
+  cases covering facility-type matching, CAH/FQHC overrides, the
+  alias-table collapse (multiple `*_expiry` aliases →
+  `accreditation_renewal`), and unknown facility types.
+
+#### Verified
+- `pnpm run typecheck` — clean across all 4 workspaces.
+- `vitest run` — 19/19 pass (Phase B 9 + Phase C 10).
+
+#### Deferred
+- Per-vertical outreach sequences (`vertical_modules.outreach_sequence_id`
+  populated). Phase E will wire bid-draft templates per vertical via the
+  NEPQ hook templates documented under `docs/medintel/verticals/`.
+- Per-vertical report templates (`vertical_modules.report_template`).
+  Same Phase E milestone.
+
+### Phase D — Equipment-age inference engine · _pending_
 
 ### Phase D — Equipment-age inference engine · _pending_
 
