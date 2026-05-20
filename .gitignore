@@ -52,3 +52,7 @@ Thumbs.db
 # Default destination for `pnpm seed:all`. Files here can be 10+ GB
 # (NPPES, ClinicalTrials.gov, USA Spending) and are never committed.
 .seed-data/
+
+# Symlink directory created by medintel_os/prepare_data_dir.sh — points at
+# attached_assets/, never commit.
+/medintel_data/
