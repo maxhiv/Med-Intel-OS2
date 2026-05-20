@@ -34,7 +34,7 @@
 export {};
 
 import path from "node:path";
-import { createReadStream } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import unzipper from "unzipper";
 import { parse } from "csv-parse";
 import { getTableColumns, sql } from "drizzle-orm";
@@ -493,9 +493,38 @@ async function importCsv(): Promise<{ rowsProcessed: number; rowsSkipped: number
     // Open ZIP as a stream; find first .csv entry; pipe directly to parser.
     // createReadStream takes a plain fs path — no shell execution or
     // interpolation of ZIP_PATH into any command string.
-    const zipStream = createReadStream(ZIP_PATH).pipe(
-      unzipper.Parse({ forceStream: true }),
-    );
+    // Pre-flight: sanity-check the file exists and is plausibly a real ZIP
+    // before piping. Without this, an empty / LFS-pointer / truncated file
+    // (~133 bytes when Git LFS hasn't fetched it) leaves unzipper.Parse
+    // waiting for header bytes that never arrive — script hangs with no
+    // error until Node 22's "unsettled top-level await" guard fires.
+    let zipBytes = 0;
+    try {
+      zipBytes = statSync(ZIP_PATH).size;
+    } catch (err) {
+      done(new Error(`ZIP not found at ${ZIP_PATH}: ${(err as Error).message}`));
+      return;
+    }
+    // ZIP "End of Central Directory" record is itself 22 bytes minimum, and
+    // any payload-bearing ZIP is comfortably above 1 KB. Anything smaller is
+    // a Git LFS pointer or truncated download.
+    if (zipBytes < 1024) {
+      done(
+        new Error(
+          `ZIP at ${ZIP_PATH} is only ${zipBytes} bytes — looks like a Git LFS pointer or truncated download. Re-fetch the actual IRS 990 extract.`,
+        ),
+      );
+      return;
+    }
+
+    // Use stream.pipeline (not .pipe) so that errors on the file read stream
+    // propagate to the consumer instead of being swallowed. Plain .pipe()
+    // does not forward 'error' events.
+    const fileStream = createReadStream(ZIP_PATH);
+    fileStream.on("error", (err) => done(err));
+
+    const zipStream = unzipper.Parse({ forceStream: true });
+    fileStream.pipe(zipStream);
 
     let csvFound = false;
     zipStream.on("entry", (entry: unzipper.Entry) => {
@@ -509,9 +538,14 @@ async function importCsv(): Promise<{ rowsProcessed: number; rowsSkipped: number
     });
 
     zipStream.on("error", (err) => done(err));
-    zipStream.on("finish", () => {
-      if (!csvFound) done(new Error("No .csv entry found inside ZIP"));
-    });
+    // unzipper.Parse emits BOTH 'finish' (Writable side) and 'end' (its
+    // internal forwarding) — listen for both so we don't depend on the
+    // implementation choice. Whichever fires first settles the promise.
+    const onZipDone = () => {
+      if (!csvFound) done(new Error(`No .csv entry found inside ZIP ${ZIP_PATH}`));
+    };
+    zipStream.on("finish", onZipDone);
+    zipStream.on("end", onZipDone);
   });
 }
 

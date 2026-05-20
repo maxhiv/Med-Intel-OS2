@@ -10,7 +10,7 @@
  */
 
 import path from "node:path";
-import { createReadStream } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import unzipper from "unzipper";
 import { parse } from "csv-parse";
 import { getTableColumns, sql } from "drizzle-orm";
@@ -432,9 +432,32 @@ async function importCsv(
 
     parser.on("error", (err) => done(err));
 
-    const zipStream = createReadStream(zipPath).pipe(
-      unzipper.Parse({ forceStream: true }),
-    );
+    // Pre-flight: same sanity check as the import990.ts script — fail loudly
+    // for empty / Git-LFS-pointer / truncated zips instead of hanging.
+    let zipBytes = 0;
+    try {
+      zipBytes = statSync(zipPath).size;
+    } catch (err) {
+      done(new Error(`ZIP not found at ${zipPath}: ${(err as Error).message}`));
+      return;
+    }
+    if (zipBytes < 1024) {
+      done(
+        new Error(
+          `ZIP at ${zipPath} is only ${zipBytes} bytes — looks like a Git LFS pointer or truncated download. Re-fetch the actual IRS 990 extract.`,
+        ),
+      );
+      return;
+    }
+
+    // Use a discrete fileStream + .pipe so error events on the file read can
+    // be forwarded to `done(err)` — plain .pipe(unzipper.Parse) does not
+    // propagate file-read errors to the consumer.
+    const fileStream = createReadStream(zipPath);
+    fileStream.on("error", (err) => done(err));
+
+    const zipStream = unzipper.Parse({ forceStream: true });
+    fileStream.pipe(zipStream);
 
     let csvFound = false;
     zipStream.on("entry", (entry: unzipper.Entry) => {
@@ -448,9 +471,14 @@ async function importCsv(
     });
 
     zipStream.on("error", (err) => done(err));
-    zipStream.on("finish", () => {
-      if (!csvFound) done(new Error("No .csv entry found inside ZIP"));
-    });
+    // Listen for both 'finish' (Writable contract) and 'end' (Readable side
+    // of the Duplex) so the promise settles no matter which event the
+    // implementation chooses to emit first.
+    const onZipDone = () => {
+      if (!csvFound) done(new Error(`No .csv entry found inside ZIP ${zipPath}`));
+    };
+    zipStream.on("finish", onZipDone);
+    zipStream.on("end", onZipDone);
   });
 }
 
