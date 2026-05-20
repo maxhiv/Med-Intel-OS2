@@ -438,6 +438,34 @@ async function flushBatch(rawBatch: IrsRow[]): Promise<void> {
 async function importCsv(): Promise<{ rowsProcessed: number; rowsSkipped: number }> {
   console.log(`  Streaming inner CSV from ZIP (no temp file)...`);
 
+  // Pre-flight: file exists + plausibly a real ZIP (not a Git LFS pointer).
+  let zipBytes = 0;
+  try {
+    zipBytes = statSync(ZIP_PATH).size;
+  } catch (err) {
+    throw new Error(`ZIP not found at ${ZIP_PATH}: ${(err as Error).message}`);
+  }
+  if (zipBytes < 256) {
+    throw new Error(
+      `ZIP at ${ZIP_PATH} is only ${zipBytes} bytes — looks like a Git LFS pointer or truncated download. Re-fetch the actual IRS 990 extract.`,
+    );
+  }
+
+  // Use unzipper's `Open.file` API instead of `unzipper.Parse({forceStream:true})`.
+  // The Parse-stream API depends on 'entry' / 'finish' / 'end' events firing
+  // in a specific order from a Duplex stream, and in some Node 22 + Replit
+  // env combos those events silently never arrive — the process hangs until
+  // Node's "unsettled top-level await" guard kills it (exit code 13). The
+  // Open.file API reads the ZIP central directory eagerly, returns a plain
+  // list of entries, and lets us stream the one we want with normal Readable
+  // events that always settle. Same pattern already used by fda-bulk.ts.
+  const directory = await unzipper.Open.file(ZIP_PATH);
+  const csvFile = directory.files.find((f) => f.path.endsWith(".csv"));
+  if (!csvFile) {
+    throw new Error(`No .csv entry found inside ZIP ${ZIP_PATH}`);
+  }
+  console.log(`  Found CSV entry: ${csvFile.path} — streaming into parser...`);
+
   return new Promise((resolve, reject) => {
     let rowsProcessed = 0;
     let rowsSkipped   = 0;
@@ -490,62 +518,12 @@ async function importCsv(): Promise<{ rowsProcessed: number; rowsSkipped: number
 
     parser.on("error", (err) => done(err));
 
-    // Open ZIP as a stream; find first .csv entry; pipe directly to parser.
-    // createReadStream takes a plain fs path — no shell execution or
-    // interpolation of ZIP_PATH into any command string.
-    // Pre-flight: sanity-check the file exists and is plausibly a real ZIP
-    // before piping. Without this, an empty / LFS-pointer / truncated file
-    // (~133 bytes when Git LFS hasn't fetched it) leaves unzipper.Parse
-    // waiting for header bytes that never arrive — script hangs with no
-    // error until Node 22's "unsettled top-level await" guard fires.
-    let zipBytes = 0;
-    try {
-      zipBytes = statSync(ZIP_PATH).size;
-    } catch (err) {
-      done(new Error(`ZIP not found at ${ZIP_PATH}: ${(err as Error).message}`));
-      return;
-    }
-    // ZIP "End of Central Directory" record is itself 22 bytes minimum, and
-    // any payload-bearing ZIP is comfortably above 1 KB. Anything smaller is
-    // a Git LFS pointer or truncated download.
-    if (zipBytes < 1024) {
-      done(
-        new Error(
-          `ZIP at ${ZIP_PATH} is only ${zipBytes} bytes — looks like a Git LFS pointer or truncated download. Re-fetch the actual IRS 990 extract.`,
-        ),
-      );
-      return;
-    }
-
-    // Use stream.pipeline (not .pipe) so that errors on the file read stream
-    // propagate to the consumer instead of being swallowed. Plain .pipe()
-    // does not forward 'error' events.
-    const fileStream = createReadStream(ZIP_PATH);
-    fileStream.on("error", (err) => done(err));
-
-    const zipStream = unzipper.Parse({ forceStream: true });
-    fileStream.pipe(zipStream);
-
-    let csvFound = false;
-    zipStream.on("entry", (entry: unzipper.Entry) => {
-      if (!csvFound && entry.path.endsWith(".csv")) {
-        csvFound = true;
-        console.log(`  Found CSV entry: ${entry.path} — streaming into parser...`);
-        entry.pipe(parser);
-      } else {
-        entry.autodrain();
-      }
-    });
-
-    zipStream.on("error", (err) => done(err));
-    // unzipper.Parse emits BOTH 'finish' (Writable side) and 'end' (its
-    // internal forwarding) — listen for both so we don't depend on the
-    // implementation choice. Whichever fires first settles the promise.
-    const onZipDone = () => {
-      if (!csvFound) done(new Error(`No .csv entry found inside ZIP ${ZIP_PATH}`));
-    };
-    zipStream.on("finish", onZipDone);
-    zipStream.on("end", onZipDone);
+    // Stream the chosen CSV entry into the parser. csvFile.stream() returns
+    // a Readable backed by unzipper's internal extraction — its 'error' and
+    // 'end' events do propagate through .pipe() to the parser.
+    const csvStream = csvFile.stream();
+    csvStream.on("error", (err) => done(err));
+    csvStream.pipe(parser);
   });
 }
 

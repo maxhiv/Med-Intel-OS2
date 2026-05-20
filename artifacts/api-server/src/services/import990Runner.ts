@@ -380,6 +380,31 @@ async function importCsv(
 ): Promise<{ rowsProcessed: number; rowsSkipped: number }> {
   logger.info(`  Streaming inner CSV from ZIP (no temp file)...`);
 
+  // Pre-flight: file exists + plausibly a real ZIP (not a Git LFS pointer).
+  let zipBytes = 0;
+  try {
+    zipBytes = statSync(zipPath).size;
+  } catch (err) {
+    throw new Error(`ZIP not found at ${zipPath}: ${(err as Error).message}`);
+  }
+  if (zipBytes < 256) {
+    throw new Error(
+      `ZIP at ${zipPath} is only ${zipBytes} bytes — looks like a Git LFS pointer or truncated download. Re-fetch the actual IRS 990 extract.`,
+    );
+  }
+
+  // Use unzipper's `Open.file` API instead of the Parse-stream API. See the
+  // matching block in scripts/import990.ts for the full rationale: on Node 22
+  // + Replit, the Parse-stream 'entry' / 'finish' / 'end' events sometimes
+  // silently never fire, and the promise hangs until Node's unsettled-await
+  // guard kills the process (exit code 13). Open.file is event-loop-safe.
+  const directory = await unzipper.Open.file(zipPath);
+  const csvFile = directory.files.find((f) => f.path.endsWith(".csv"));
+  if (!csvFile) {
+    throw new Error(`No .csv entry found inside ZIP ${zipPath}`);
+  }
+  logger.info(`  Found CSV entry: ${csvFile.path} — streaming into parser...`);
+
   return new Promise((resolve, reject) => {
     let rowsProcessed = 0;
     let rowsSkipped   = 0;
@@ -432,53 +457,9 @@ async function importCsv(
 
     parser.on("error", (err) => done(err));
 
-    // Pre-flight: same sanity check as the import990.ts script — fail loudly
-    // for empty / Git-LFS-pointer / truncated zips instead of hanging.
-    let zipBytes = 0;
-    try {
-      zipBytes = statSync(zipPath).size;
-    } catch (err) {
-      done(new Error(`ZIP not found at ${zipPath}: ${(err as Error).message}`));
-      return;
-    }
-    if (zipBytes < 1024) {
-      done(
-        new Error(
-          `ZIP at ${zipPath} is only ${zipBytes} bytes — looks like a Git LFS pointer or truncated download. Re-fetch the actual IRS 990 extract.`,
-        ),
-      );
-      return;
-    }
-
-    // Use a discrete fileStream + .pipe so error events on the file read can
-    // be forwarded to `done(err)` — plain .pipe(unzipper.Parse) does not
-    // propagate file-read errors to the consumer.
-    const fileStream = createReadStream(zipPath);
-    fileStream.on("error", (err) => done(err));
-
-    const zipStream = unzipper.Parse({ forceStream: true });
-    fileStream.pipe(zipStream);
-
-    let csvFound = false;
-    zipStream.on("entry", (entry: unzipper.Entry) => {
-      if (!csvFound && entry.path.endsWith(".csv")) {
-        csvFound = true;
-        logger.info(`  Found CSV entry: ${entry.path} — streaming into parser...`);
-        entry.pipe(parser);
-      } else {
-        entry.autodrain();
-      }
-    });
-
-    zipStream.on("error", (err) => done(err));
-    // Listen for both 'finish' (Writable contract) and 'end' (Readable side
-    // of the Duplex) so the promise settles no matter which event the
-    // implementation chooses to emit first.
-    const onZipDone = () => {
-      if (!csvFound) done(new Error(`No .csv entry found inside ZIP ${zipPath}`));
-    };
-    zipStream.on("finish", onZipDone);
-    zipStream.on("end", onZipDone);
+    const csvStream = csvFile.stream();
+    csvStream.on("error", (err) => done(err));
+    csvStream.pipe(parser);
   });
 }
 
