@@ -18,14 +18,21 @@
 --   clause converts in-flight.
 --
 -- PSQL VARIABLE NOTE:
---   \copy is a meta-command and cannot interpolate a path like
---   :'data_path/foo.csv' (psql looks up a variable named literally
---   "data_path/foo.csv"). We build the full path with \set, then reference
---   :'csvfile' on the \copy line — this is the only portable idiom.
+--   \copy is a meta-command and does NOT substitute :varname or :'varname'
+--   in its FROM argument (verified on psql 16). So we \cd :data_path once
+--   near the top of this script and reference each CSV by its bare relative
+--   filename in every \copy below. The medintel_os/prepare_data_dir.sh
+--   helper creates a symlink dir whose contents match these expected names.
 -- =====================================================================
 
 SET search_path TO medintel, public;
 SET client_min_messages = WARNING;
+
+-- Switch psql's CWD to the data dir so the relative filenames
+-- on each \copy line below resolve. psql 16+ does NOT substitute
+-- :'csvfile' inside \copy meta-commands, so we rely on CWD instead.
+\cd :data_path
+
 
 -- ============================================================
 -- SECTION A — STAGING TABLE DDL
@@ -521,121 +528,100 @@ CREATE TABLE stage_cmmi (
 -- ---- B.1 PECOS Enrollments (WIN1252) ----
 TRUNCATE stage_pecos_enrollments;
 
-\set csvfile :data_path '/FQHC_Enrollments_2026.04.01.csv'
-\copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+\copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM 'FQHC_Enrollments_2026.04.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 UPDATE stage_pecos_enrollments SET source_vertical = 'FQHC', source_file = 'FQHC_Enrollments_2026.04.01' WHERE source_vertical IS NULL;
 
-\set csvfile :data_path '/RHC_Enrollments_2026.04.01.csv'
-\copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+\copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM 'RHC_Enrollments_2026.04.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 UPDATE stage_pecos_enrollments SET source_vertical = 'RHC', source_file = 'RHC_Enrollments_2026.04.01' WHERE source_vertical IS NULL;
 
 -- Hospital Enrollments — now in scope (May 2026 drop).
-\set csvfile :data_path '/Hospital_Enrollments_2026.05.01.csv'
-\copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+\copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM 'Hospital_Enrollments_2026.05.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 UPDATE stage_pecos_enrollments SET source_vertical = 'HOSPITAL', source_file = 'Hospital_Enrollments_2026.05.01' WHERE source_vertical IS NULL;
 
 
 -- ---- B.2 PECOS All_Owners (WIN1252) ----
 TRUNCATE stage_pecos_all_owners;
 
-\set csvfile :data_path '/Hospital_All_Owners_2026.05.01.csv'
-\copy stage_pecos_all_owners (enrollment_id, associate_id, organization_name, associate_id_owner, type_owner, role_code_owner, role_text_owner, association_date_owner, first_name_owner, middle_name_owner, last_name_owner, title_owner, organization_name_owner, doing_business_as_name_owner, address_line1_owner, address_line2_owner, city_owner, state_owner, zip_code_owner, percentage_ownership, created_for_acquisition_owner, corporation_owner, llc_owner, medical_provider_supplier_owner, mgmt_services_company_owner, medical_staffing_company_owner, holding_company_owner, investment_firm_owner, financial_institution_owner, consulting_firm_owner, for_profit_owner, non_profit_owner, private_equity_owner, reit_owner, chain_home_office_owner, other_type_owner, other_type_text_owner, owned_by_another_owner) FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+\copy stage_pecos_all_owners (enrollment_id, associate_id, organization_name, associate_id_owner, type_owner, role_code_owner, role_text_owner, association_date_owner, first_name_owner, middle_name_owner, last_name_owner, title_owner, organization_name_owner, doing_business_as_name_owner, address_line1_owner, address_line2_owner, city_owner, state_owner, zip_code_owner, percentage_ownership, created_for_acquisition_owner, corporation_owner, llc_owner, medical_provider_supplier_owner, mgmt_services_company_owner, medical_staffing_company_owner, holding_company_owner, investment_firm_owner, financial_institution_owner, consulting_firm_owner, for_profit_owner, non_profit_owner, private_equity_owner, reit_owner, chain_home_office_owner, other_type_owner, other_type_text_owner, owned_by_another_owner) FROM 'Hospital_All_Owners_2026.05.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 UPDATE stage_pecos_all_owners SET source_vertical = 'HOSPITAL', source_file = 'Hospital_All_Owners_2026.05.01' WHERE source_vertical IS NULL;
 
-\set csvfile :data_path '/FQHC_All_Owners_2026.04.01.csv'
-\copy stage_pecos_all_owners (enrollment_id, associate_id, organization_name, associate_id_owner, type_owner, role_code_owner, role_text_owner, association_date_owner, first_name_owner, middle_name_owner, last_name_owner, title_owner, organization_name_owner, doing_business_as_name_owner, address_line1_owner, address_line2_owner, city_owner, state_owner, zip_code_owner, percentage_ownership, created_for_acquisition_owner, corporation_owner, llc_owner, medical_provider_supplier_owner, mgmt_services_company_owner, medical_staffing_company_owner, holding_company_owner, investment_firm_owner, financial_institution_owner, consulting_firm_owner, for_profit_owner, non_profit_owner, private_equity_owner, reit_owner, chain_home_office_owner, other_type_owner, other_type_text_owner, owned_by_another_owner) FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+\copy stage_pecos_all_owners (enrollment_id, associate_id, organization_name, associate_id_owner, type_owner, role_code_owner, role_text_owner, association_date_owner, first_name_owner, middle_name_owner, last_name_owner, title_owner, organization_name_owner, doing_business_as_name_owner, address_line1_owner, address_line2_owner, city_owner, state_owner, zip_code_owner, percentage_ownership, created_for_acquisition_owner, corporation_owner, llc_owner, medical_provider_supplier_owner, mgmt_services_company_owner, medical_staffing_company_owner, holding_company_owner, investment_firm_owner, financial_institution_owner, consulting_firm_owner, for_profit_owner, non_profit_owner, private_equity_owner, reit_owner, chain_home_office_owner, other_type_owner, other_type_text_owner, owned_by_another_owner) FROM 'FQHC_All_Owners_2026.04.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 UPDATE stage_pecos_all_owners SET source_vertical = 'FQHC', source_file = 'FQHC_All_Owners_2026.04.01' WHERE source_vertical IS NULL;
 
-\set csvfile :data_path '/RHC_All_Owners_2026.04.01.csv'
-\copy stage_pecos_all_owners (enrollment_id, associate_id, organization_name, associate_id_owner, type_owner, role_code_owner, role_text_owner, association_date_owner, first_name_owner, middle_name_owner, last_name_owner, title_owner, organization_name_owner, doing_business_as_name_owner, address_line1_owner, address_line2_owner, city_owner, state_owner, zip_code_owner, percentage_ownership, created_for_acquisition_owner, corporation_owner, llc_owner, medical_provider_supplier_owner, mgmt_services_company_owner, medical_staffing_company_owner, holding_company_owner, investment_firm_owner, financial_institution_owner, consulting_firm_owner, for_profit_owner, non_profit_owner, private_equity_owner, reit_owner, chain_home_office_owner, other_type_owner, other_type_text_owner, owned_by_another_owner) FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+\copy stage_pecos_all_owners (enrollment_id, associate_id, organization_name, associate_id_owner, type_owner, role_code_owner, role_text_owner, association_date_owner, first_name_owner, middle_name_owner, last_name_owner, title_owner, organization_name_owner, doing_business_as_name_owner, address_line1_owner, address_line2_owner, city_owner, state_owner, zip_code_owner, percentage_ownership, created_for_acquisition_owner, corporation_owner, llc_owner, medical_provider_supplier_owner, mgmt_services_company_owner, medical_staffing_company_owner, holding_company_owner, investment_firm_owner, financial_institution_owner, consulting_firm_owner, for_profit_owner, non_profit_owner, private_equity_owner, reit_owner, chain_home_office_owner, other_type_owner, other_type_text_owner, owned_by_another_owner) FROM 'RHC_All_Owners_2026.04.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 UPDATE stage_pecos_all_owners SET source_vertical = 'RHC', source_file = 'RHC_All_Owners_2026.04.01' WHERE source_vertical IS NULL;
 
 
 -- ---- B.3 Additional NPIs (UTF-8) ----
 TRUNCATE stage_pecos_addl_npis;
 
-\set csvfile :data_path '/FQHC_Additional_NPIs_2026.04.01.csv'
-\copy stage_pecos_addl_npis (enrollment_id, npi) FROM :'csvfile' WITH (FORMAT csv, HEADER true)
+\copy stage_pecos_addl_npis (enrollment_id, npi) FROM 'FQHC_Additional_NPIs_2026.04.01.csv' WITH (FORMAT csv, HEADER true)
 UPDATE stage_pecos_addl_npis SET source_file = 'FQHC_AddlNPIs' WHERE source_file IS NULL;
 
-\set csvfile :data_path '/RHC_Additional_NPIs_2026.04.01.csv'
-\copy stage_pecos_addl_npis (enrollment_id, npi) FROM :'csvfile' WITH (FORMAT csv, HEADER true)
+\copy stage_pecos_addl_npis (enrollment_id, npi) FROM 'RHC_Additional_NPIs_2026.04.01.csv' WITH (FORMAT csv, HEADER true)
 UPDATE stage_pecos_addl_npis SET source_file = 'RHC_AddlNPIs' WHERE source_file IS NULL;
 
-\set csvfile :data_path '/Hospital_CHOW_NPIs_2026.04.01.csv'
-\copy stage_pecos_addl_npis (enrollment_id, npi) FROM :'csvfile' WITH (FORMAT csv, HEADER true)
+\copy stage_pecos_addl_npis (enrollment_id, npi) FROM 'Hospital_CHOW_NPIs_2026.04.01.csv' WITH (FORMAT csv, HEADER true)
 UPDATE stage_pecos_addl_npis SET source_file = 'Hospital_CHOW_NPIs' WHERE source_file IS NULL;
 
-\set csvfile :data_path '/SNF_CHOW_NPIs_2026.04.01.csv'
-\copy stage_pecos_addl_npis (enrollment_id, npi) FROM :'csvfile' WITH (FORMAT csv, HEADER true)
+\copy stage_pecos_addl_npis (enrollment_id, npi) FROM 'SNF_CHOW_NPIs_2026.04.01.csv' WITH (FORMAT csv, HEADER true)
 UPDATE stage_pecos_addl_npis SET source_file = 'SNF_CHOW_NPIs' WHERE source_file IS NULL;
 
 
 -- ---- B.4 Additional Addresses (UTF-8) ----
 TRUNCATE stage_pecos_addl_addrs;
 
-\set csvfile :data_path '/FQHC_Additional_Addresses_2026.04.01.csv'
-\copy stage_pecos_addl_addrs (enrollment_id, address_line1, address_line2, city, state, zip_code, telephone_number) FROM :'csvfile' WITH (FORMAT csv, HEADER true)
+\copy stage_pecos_addl_addrs (enrollment_id, address_line1, address_line2, city, state, zip_code, telephone_number) FROM 'FQHC_Additional_Addresses_2026.04.01.csv' WITH (FORMAT csv, HEADER true)
 UPDATE stage_pecos_addl_addrs SET source_file = 'FQHC_AddlAddrs' WHERE source_file IS NULL;
 
-\set csvfile :data_path '/RHC_Additional_Addresses_2026.04.01.csv'
-\copy stage_pecos_addl_addrs (enrollment_id, address_line1, address_line2, city, state, zip_code, telephone_number) FROM :'csvfile' WITH (FORMAT csv, HEADER true)
+\copy stage_pecos_addl_addrs (enrollment_id, address_line1, address_line2, city, state, zip_code, telephone_number) FROM 'RHC_Additional_Addresses_2026.04.01.csv' WITH (FORMAT csv, HEADER true)
 UPDATE stage_pecos_addl_addrs SET source_file = 'RHC_AddlAddrs' WHERE source_file IS NULL;
 
 
 -- ---- B.5 Hospital CHOW Transactions (WIN1252) ----
 TRUNCATE stage_chow;
-\set csvfile :data_path '/Hospital_CHOW_2026.04.01.csv'
-\copy stage_chow FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+\copy stage_chow FROM 'Hospital_CHOW_2026.04.01.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 
 
 -- ---- B.6 HCRIS Cost Report (UTF-8) ----
 TRUNCATE stage_cost_report;
-\set csvfile :data_path '/CostReport_2023_Final.csv'
-\copy stage_cost_report FROM :'csvfile' WITH (FORMAT csv, HEADER true, NULL '')
+\copy stage_cost_report FROM 'CostReport_2023_Final.csv' WITH (FORMAT csv, HEADER true, NULL '')
 
 
 -- ---- B.7 Hospital Service Area 2024 (UTF-8) ----
 -- IMPORTANT: Verify column count + order against the CSV header first.
 TRUNCATE stage_service_area;
-\set csvfile :data_path '/Hospital_Service_Area_2024.csv'
-\copy stage_service_area FROM :'csvfile' WITH (FORMAT csv, HEADER true, NULL '')
+\copy stage_service_area FROM 'Hospital_Service_Area_2024.csv' WITH (FORMAT csv, HEADER true, NULL '')
 
 
 -- ---- B.8 PSI-11 (UTF-8) ----
 TRUNCATE stage_psi11;
-\set csvfile :data_path '/ProviderLevel_Measure_Rates_for_AHRQ_Patient_Safety_Indicator_11__PSI11____2016.csv'
-\copy stage_psi11 FROM :'csvfile' WITH (FORMAT csv, HEADER true, NULL '')
+\copy stage_psi11 FROM 'ProviderLevel_Measure_Rates_for_AHRQ_Patient_Safety_Indicator_11__PSI11____2016.csv' WITH (FORMAT csv, HEADER true, NULL '')
 
 
 -- ---- B.9 DME Geography (UTF-8) ----
 TRUNCATE stage_dme_geo;
-\set csvfile :data_path '/mup_dme_ry25_p05_v10_dy23_geor.csv'
-\copy stage_dme_geo FROM :'csvfile' WITH (FORMAT csv, HEADER true, NULL '')
+\copy stage_dme_geo FROM 'mup_dme_ry25_p05_v10_dy23_geor.csv' WITH (FORMAT csv, HEADER true, NULL '')
 
 
 -- ---- B.10 PY 2024 ACO Results (UTF-8) ----
 TRUNCATE stage_aco_results;
-\set csvfile :data_path '/PY 2024 ACO Results PUF_Rerun_20250925.csv'
-\copy stage_aco_results FROM :'csvfile' WITH (FORMAT csv, HEADER true, NULL '')
+\copy stage_aco_results FROM 'PY 2024 ACO Results PUF_Rerun_20250925.csv' WITH (FORMAT csv, HEADER true, NULL '')
 
 
 -- ---- B.11 AIP Spend Plan 2026 (UTF-8) ----
 TRUNCATE stage_aip_spend;
-\set csvfile :data_path '/Advance_Investment_Payment_Spend_Plan_2026.csv'
-\copy stage_aip_spend FROM :'csvfile' WITH (FORMAT csv, HEADER true, NULL '')
+\copy stage_aip_spend FROM 'Advance_Investment_Payment_Spend_Plan_2026.csv' WITH (FORMAT csv, HEADER true, NULL '')
 
 
 -- ---- B.12 CY27 Prelim ASM Participants (UTF-8) ----
 TRUNCATE stage_asm;
-\set csvfile :data_path '/CY27_Prelim_ASMParticipants_Public.csv'
-\copy stage_asm FROM :'csvfile' WITH (FORMAT csv, HEADER true, NULL '')
+\copy stage_asm FROM 'CY27_Prelim_ASMParticipants_Public.csv' WITH (FORMAT csv, HEADER true, NULL '')
 
 
 -- ---- B.13 WDDSE CMMI Model Summary (WIN1252) ----
 TRUNCATE stage_cmmi;
-\set csvfile :data_path '/WDDSEModelSummaryGUIDE051926.csv'
-\copy stage_cmmi FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+\copy stage_cmmi FROM 'WDDSEModelSummaryGUIDE051926.csv' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 
 
 -- ============================================================
