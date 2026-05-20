@@ -20,6 +20,7 @@ scripts=(
   "v2_confidence_layer.sql"
   "v2_equipment_age.sql"
   "v2_opportunity_rls.sql"
+  "seed_freshness.sql"
 )
 
 for s in "${scripts[@]}"; do

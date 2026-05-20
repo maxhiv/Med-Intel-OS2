@@ -420,3 +420,42 @@ export const nationalIngestRuns = pgTable(
 );
 
 export type NationalIngestRun = typeof nationalIngestRuns.$inferSelect;
+
+/**
+ * source_seed_runs — one row per bulk-seed download/import attempt.
+ *
+ * Different lifecycle from `national_ingest_runs`:
+ *   - `national_ingest_runs` tracks the *delta refresh* orchestrator (per-job
+ *     fan-out across all live API ingestors).
+ *   - `source_seed_runs` tracks one source's *bulk file* import — the full
+ *     CSV/JSON download that establishes or rebuilds a source's universe.
+ *
+ * Idempotency: re-running with the same `file_sha256` is skipped unless
+ * `--force` is passed to the seed script. This lets the orchestrator be
+ * re-invoked without re-downloading 10+ GB.
+ */
+export const sourceSeedRuns = pgTable(
+  "source_seed_runs",
+  {
+    id: uuid("id").primaryKey().default(sql`uuid_generate_v4()`),
+    sourceName: text("source_name").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    durationMs: integer("duration_ms"),
+    status: text("status").notNull(), // "running" | "ok" | "failed" | "skipped"
+    fileUrl: text("file_url"),
+    fileSha256: text("file_sha256"),
+    fileBytes: bigint("file_bytes", { mode: "number" }),
+    rowsStaged: integer("rows_staged").notNull().default(0),
+    rowsUpserted: integer("rows_upserted").notNull().default(0),
+    signalsInserted: integer("signals_inserted").notNull().default(0),
+    errorMessage: text("error_message"),
+    meta: jsonb("meta").notNull().default(sql`'{}'::jsonb`),
+  },
+  (t) => [
+    index("idx_source_seed_runs_source_started").on(t.sourceName, t.startedAt),
+    index("idx_source_seed_runs_sha").on(t.sourceName, t.fileSha256),
+  ],
+);
+
+export type SourceSeedRun = typeof sourceSeedRuns.$inferSelect;

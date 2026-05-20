@@ -12,7 +12,16 @@
     "bulk-ingest": "tsx src/scripts/continuousBulkIngest.ts",
     "import-990": "tsx src/scripts/import990.ts",
     "backfill-eins": "tsx src/scripts/backfillEins.ts",
-    "import-eo-bmf": "tsx src/scripts/importEoBmf.ts"
+    "import-eo-bmf": "tsx src/scripts/importEoBmf.ts",
+    "seed:all": "tsx src/scripts/seed/all.ts",
+    "seed:hcris": "tsx src/scripts/seed/hcris.ts",
+    "seed:fda": "tsx src/scripts/seed/fda-bulk.ts",
+    "seed:clinical-trials": "tsx src/scripts/seed/clinical-trials.ts",
+    "seed:nih-grants": "tsx src/scripts/seed/nih-grants.ts",
+    "seed:usa-spending": "tsx src/scripts/seed/usa-spending.ts",
+    "seed:cms-provider": "tsx src/scripts/seed/cms-provider-data.ts",
+    "seed:sec-edgar": "tsx src/scripts/seed/sec-edgar.ts",
+    "seed:medicare-util": "tsx src/scripts/seed/medicare-utilization.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
