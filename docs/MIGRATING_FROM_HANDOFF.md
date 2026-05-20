@@ -201,7 +201,65 @@ deferred.
   the wrong paths/stack. The phased plan in this file is the canonical
   one; see the table above.
 
-### Phase B — Confidence + citation foundation · _pending_
+### Phase B — Confidence + citation foundation · 2026-05-20
+
+#### Added (Drizzle schema in `lib/db/src/schema/confidence.ts`)
+- `source_weights` (TEXT PK, NUMERIC weight, description, notes)
+- `intelligence_claims` (BIGSERIAL id, entity_table TEXT, entity_id UUID,
+  claim_field, claim_value, source_type, source_url, source_weight,
+  observed_at, contradicted_by FK self-ref)
+- `manufacturer_eol_catalog` (id, manufacturer, modality, model,
+  generation, market_release_year, service/parts/software end dates,
+  successor_model, source_url)
+- `equipment_source_citations` (id, equipment_record_id UUID, source_type,
+  observed_install_year, weight)
+
+#### Added (extensions to existing `equipment_records` in
+`lib/db/src/schema/intelligence.ts`)
+- `confidence_score`, `source_count`, `first_seen_at`, `last_verified_at`,
+  `contradicted`, `state_registry_id`, `fda_listing_number`,
+  `manufacturer_eol_date`, `manufacturer_support_ended`
+- New indexes on `(facility_id, modality)`, `install_year`,
+  `manufacturer_eol_date`
+
+#### Added (services in `artifacts/api-server/src/services/confidence/`)
+- `claimRegistry.ts` — record / recordBatch / getConfidence /
+  getClaimsForField with a 5-minute in-memory weight cache and a
+  0.40 fallback for unknown source types.
+- `confidenceScorer.ts` — `assess()` returns `{ bestValue, status,
+  confidence, sourceCount, sources, competing[] }` where status is
+  `verified | provisional | contradicted | unknown` per the two-source +
+  0.6 weight rule from the strategic plan §5.
+- `contradictionDetector.ts` — nightly sweep flagging losing claim
+  values (≥0.3 weight, beaten by a winner ≥1.5x) with
+  `contradicted_by`; ambiguous tuples logged at WARN for human review.
+
+#### Added (cron)
+- 02:30 America/Chicago daily — `detectContradictions` runs ahead of the
+  02:45 medintel scan and the 03:00 composite score recompute.
+
+#### Added (one-time SQL companion script)
+- `lib/db/src/scripts/v2_confidence_layer.sql` — idempotent installer for
+  `compute_claim_confidence()` PL/pgSQL function (180-day half-life),
+  the equipment_source_citations FK, and the 38-row source_weights +
+  27-row manufacturer_eol_catalog seed data.
+
+#### Added (tests)
+- `artifacts/api-server/tests/confidence-scorer.test.ts` — 9 vitest cases
+  covering the verified / provisional / contradicted / unknown status
+  logic and the half-life override table.
+
+#### Verified
+- `pnpm run typecheck` — clean across all 4 workspaces.
+- `pnpm exec vitest run tests/confidence-scorer.test.ts` — 9/9 pass.
+
+#### Deferred
+- Wiring existing ingestors (NPPES, HRSA, FDA MAUDE, …) to write
+  intelligence_claims rows during their normal runs — that's a Phase E
+  follow-up where the Opportunity Inbox starts consuming
+  ConfidenceScorer.assess() for every claim it surfaces.
+
+### Phase C — Verticals + manufacturer EOL matcher · _pending_
 
 ### Phase C — Verticals + manufacturer EOL matcher · _pending_
 

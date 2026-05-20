@@ -46,6 +46,7 @@ import { ingestMedicareUtil } from "../services/medicareUtilIngestor";
 import { propagateSystemSignals } from "../services/systemSignalPropagator";
 import { startNationalIngest } from "../services/nationalIngest";
 import { scanMedintelSignals } from "../services/medintelSignalScorer";
+import { detectContradictions } from "../services/confidence/contradictionDetector";
 
 let started = false;
 const locks = new Set<string>();
@@ -84,6 +85,18 @@ export function startCron(): void {
     guarded("dailyBatch", async () => {
       const r = await runAllAccounts();
       logger.info(r, "daily batch run complete");
+    }),
+    { timezone: tz },
+  );
+
+  // 02:30 daily — sweep intelligence_claims for contradictions so the
+  // confidence scorer doesn't double-count discredited observations on
+  // the next read. Runs ahead of the medintel scan + composite recompute.
+  cron.schedule(
+    "30 2 * * *",
+    guarded("detectContradictions", async () => {
+      const r = await detectContradictions();
+      logger.info(r, "contradiction sweep complete");
     }),
     { timezone: tz },
   );

@@ -153,6 +153,16 @@ export const equipmentRecords = pgTable(
     registrationExpiry: date("registration_expiry"),
     sourceDocId: uuid("source_doc_id").references(() => financialDocuments.id),
     sourceType: text("source_type"),
+    // ── v2.0 confidence + EOL extensions (handoff migration 007) ──────────
+    confidenceScore: numeric("confidence_score", { precision: 3, scale: 2 }).default("0.00"),
+    sourceCount: integer("source_count").default(1),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).defaultNow(),
+    lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }).defaultNow(),
+    contradicted: boolean("contradicted").default(false),
+    stateRegistryId: text("state_registry_id"),
+    fdaListingNumber: text("fda_listing_number"),
+    manufacturerEolDate: date("manufacturer_eol_date"),
+    manufacturerSupportEnded: boolean("manufacturer_support_ended").default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -160,6 +170,9 @@ export const equipmentRecords = pgTable(
     index("idx_equip_facility").on(t.facilityId),
     index("idx_equip_modality").on(t.modality),
     index("idx_equip_urgency").on(t.urgencyTier),
+    index("idx_equip_facility_modality").on(t.facilityId, t.modality),
+    index("idx_equip_install_year").on(t.installYear),
+    index("idx_equip_eol_date").on(t.manufacturerEolDate),
   ],
 );
 
