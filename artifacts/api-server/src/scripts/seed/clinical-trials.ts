@@ -68,7 +68,14 @@ export async function runClinicalTrialsSeed(opts: {
         url.searchParams.set("format", "json");
         if (pageToken) url.searchParams.set("pageToken", pageToken);
 
-        const res = await fetch(url.toString());
+        // CT.gov rejects requests without a User-Agent (403). Match the
+        // live ingestor's UA so rate-limit accounting is consistent.
+        const res = await fetch(url.toString(), {
+          headers: {
+            Accept: "application/json",
+            "User-Agent": process.env.CT_USER_AGENT ?? "MedIntel/1.0",
+          },
+        });
         if (!res.ok) {
           throw new Error(`CT.gov page fetch ${res.status}: ${res.statusText}`);
         }
@@ -173,35 +180,40 @@ async function transformCt(): Promise<number> {
              ctr.phase,
              ctr.sponsor_name,
              loc->>'facility' AS loc_facility,
-             loc->>'state'    AS loc_state
+             loc->>'state'    AS loc_state,
+             'ctgov:' || ctr.nct_id AS sval
         FROM clinical_trials_raw ctr,
              jsonb_array_elements(COALESCE(ctr.locations, '[]'::jsonb)) AS loc
        WHERE ctr.overall_status IN ('RECRUITING','ACTIVE_NOT_RECRUITING','ENROLLING_BY_INVITATION')
          AND ctr.start_date > now() - interval '24 months'
     )
     INSERT INTO purchase_signals (
-      facility_id, signal_type, signal_value, signal_date,
-      source_name, confidence_score, payload, status
+      facility_id, signal_type, signal_value, confidence, source, metadata, is_active
     )
     SELECT f.id,
            'clinical_trial'::signal_type,
-           'ctgov:' || sl.nct_id,
-           sl.start_date,
-           'clinicaltrials_gov',
+           sl.sval,
            60,
+           'clinicaltrials_gov',
            jsonb_build_object(
              'nct_id', sl.nct_id,
              'status', sl.overall_status,
              'phase',  sl.phase,
              'sponsor', sl.sponsor_name,
-             'location', sl.loc_facility
+             'location', sl.loc_facility,
+             'start_date', sl.start_date
            ),
-           'active'
+           true
       FROM study_loc sl
       JOIN facilities f
         ON (f.state IS NULL OR sl.loc_state IS NULL OR f.state = sl.loc_state)
        AND f.name % sl.loc_facility   -- pg_trgm similarity
-    ON CONFLICT (facility_id, signal_type, signal_value) DO NOTHING
+     WHERE NOT EXISTS (
+       SELECT 1 FROM purchase_signals ps
+        WHERE ps.facility_id = f.id
+          AND ps.signal_type = 'clinical_trial'
+          AND ps.signal_value = sl.sval
+     )
     RETURNING id
   `);
   return res.rows.length;

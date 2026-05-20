@@ -157,33 +157,44 @@ async function flushNihBatch(batch: Array<Record<string, string>>): Promise<numb
 
 async function transformNih(): Promise<number> {
   const res = await db.execute<{ id: string }>(sql`
+    WITH cand AS (
+      SELECT g.appl_id, g.fiscal_year, g.project_num, g.award_amount,
+             g.pi_name, g.project_title, g.org_state, g.org_name,
+             g.award_notice_date, g.project_start_date,
+             'nih:' || g.appl_id::text AS sval
+        FROM nih_grants_raw g
+       WHERE g.award_amount IS NOT NULL
+         AND g.award_amount >= 250000          -- ignore micro-grants
+         AND COALESCE(g.award_notice_date, g.project_start_date) > now() - interval '36 months'
+    )
     INSERT INTO purchase_signals (
-      facility_id, signal_type, signal_value, signal_date,
-      source_name, confidence_score, payload, status
+      facility_id, signal_type, signal_value, confidence, source, metadata, is_active
     )
     SELECT f.id,
            'nih_grant'::signal_type,
-           'nih:' || g.appl_id::text,
-           COALESCE(g.award_notice_date, g.project_start_date),
-           'nih_reporter',
+           c.sval,
            70,
+           'nih_reporter',
            jsonb_build_object(
-             'appl_id', g.appl_id,
-             'fy', g.fiscal_year,
-             'project_num', g.project_num,
-             'award_amount', g.award_amount,
-             'pi_name', g.pi_name,
-             'project_title', g.project_title
+             'appl_id', c.appl_id,
+             'fy', c.fiscal_year,
+             'project_num', c.project_num,
+             'award_amount', c.award_amount,
+             'pi_name', c.pi_name,
+             'project_title', c.project_title,
+             'award_notice_date', c.award_notice_date
            ),
-           'active'
-      FROM nih_grants_raw g
+           true
+      FROM cand c
       JOIN facilities f
-        ON (f.state IS NULL OR g.org_state IS NULL OR f.state = g.org_state)
-       AND f.name % g.org_name
-     WHERE g.award_amount IS NOT NULL
-       AND g.award_amount >= 250000          -- ignore micro-grants
-       AND COALESCE(g.award_notice_date, g.project_start_date) > now() - interval '36 months'
-    ON CONFLICT (facility_id, signal_type, signal_value) DO NOTHING
+        ON (f.state IS NULL OR c.org_state IS NULL OR f.state = c.org_state)
+       AND f.name % c.org_name
+     WHERE NOT EXISTS (
+       SELECT 1 FROM purchase_signals ps
+        WHERE ps.facility_id = f.id
+          AND ps.signal_type = 'nih_grant'
+          AND ps.signal_value = c.sval
+     )
     RETURNING id
   `);
   return res.rows.length;

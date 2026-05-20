@@ -232,37 +232,48 @@ async function transformUsaSpending(): Promise<number> {
   // token-overlaps a facility and the contract is for medical equipment
   // (NAICS 339112 or PSC starting with 65xx).
   const res = await db.execute<{ id: string }>(sql`
+    WITH cand AS (
+      SELECT u.award_id_piid, u.recipient_name, u.recipient_state_code,
+             u.award_amount, u.awarding_agency, u.naics_code,
+             u.product_or_service_code, u.period_of_performance_start_date,
+             'usa_spending:' || u.award_id_piid AS sval
+        FROM usa_spending_raw u
+       WHERE u.award_amount IS NOT NULL
+         AND u.award_amount >= 100000
+         AND (
+           u.naics_code = '339112'
+           OR LEFT(u.product_or_service_code, 2) = '65'
+           OR LEFT(u.naics_code, 3) = '622'
+         )
+    )
     INSERT INTO purchase_signals (
-      facility_id, signal_type, signal_value, signal_date,
-      source_name, confidence_score, payload, status
+      facility_id, signal_type, signal_value, confidence, source, metadata, is_active
     )
     SELECT f.id,
            'aip_infra_spend'::signal_type,
-           'usa_spending:' || u.award_id_piid,
-           u.period_of_performance_start_date,
-           'usa_spending',
+           c.sval,
            60,
+           'usa_spending',
            jsonb_build_object(
-             'award_id', u.award_id_piid,
-             'recipient_name', u.recipient_name,
-             'award_amount', u.award_amount,
-             'awarding_agency', u.awarding_agency,
-             'naics_code', u.naics_code,
-             'psc', u.product_or_service_code
+             'award_id', c.award_id_piid,
+             'recipient_name', c.recipient_name,
+             'award_amount', c.award_amount,
+             'awarding_agency', c.awarding_agency,
+             'naics_code', c.naics_code,
+             'psc', c.product_or_service_code,
+             'pop_start', c.period_of_performance_start_date
            ),
-           'active'
-      FROM usa_spending_raw u
+           true
+      FROM cand c
       JOIN facilities f
-        ON (f.state IS NULL OR u.recipient_state_code IS NULL OR f.state = u.recipient_state_code)
-       AND f.name % u.recipient_name
-     WHERE u.award_amount IS NOT NULL
-       AND u.award_amount >= 100000
-       AND (
-         u.naics_code = '339112'
-         OR LEFT(u.product_or_service_code, 2) = '65'
-         OR LEFT(u.naics_code, 3) = '622'
-       )
-    ON CONFLICT (facility_id, signal_type, signal_value) DO NOTHING
+        ON (f.state IS NULL OR c.recipient_state_code IS NULL OR f.state = c.recipient_state_code)
+       AND f.name % c.recipient_name
+     WHERE NOT EXISTS (
+       SELECT 1 FROM purchase_signals ps
+        WHERE ps.facility_id = f.id
+          AND ps.signal_type = 'aip_infra_spend'
+          AND ps.signal_value = c.sval
+     )
     RETURNING id
   `);
   return res.rows.length;

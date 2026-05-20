@@ -13,6 +13,17 @@
 
 BEGIN;
 
+-- The `app_rls` role is the runtime grantee that the API connects as when
+-- RLS is enforced (see lib/db's withRLS). On a fresh DB the role may not
+-- exist yet — create it idempotently so `pnpm seed:all` / `v2_install.sh`
+-- succeeds on first run. The role is intentionally NOLOGIN — it's only
+-- meant to receive GRANTs that the API role will inherit via SET ROLE.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_rls') THEN
+    CREATE ROLE app_rls NOLOGIN;
+  END IF;
+END $$;
+
 ALTER TABLE opportunities ENABLE ROW LEVEL SECURITY;
 
 DO $$ BEGIN

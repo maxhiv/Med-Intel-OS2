@@ -137,18 +137,22 @@ async function flushCmsBatch(batch: Array<Record<string, string>>, spec: Dataset
 
 async function transformCmsProvider(): Promise<number> {
   // Pull beds + ownership from `hospital_general_info` into facilities.
+  // Note: `ownership` is the `ownership_type` enum with exactly four
+  // values — nonprofit / for_profit / government / unknown. Map the
+  // CMS free-text "Hospital Ownership" field accordingly.
   const res = await db.execute<{ id: string }>(sql`
     UPDATE facilities f
        SET beds = COALESCE(
                     NULLIF(c.raw_json->>'number_of_beds',''),
                     NULLIF(c.raw_json->>'hospital_beds','')
                   )::int,
-           ownership = CASE
-             WHEN c.raw_json->>'hospital_ownership' ILIKE '%government%' THEN 'government_owned'
-             WHEN c.raw_json->>'hospital_ownership' ILIKE '%proprietary%' THEN 'for_profit_corporate'
-             WHEN c.raw_json->>'hospital_ownership' ILIKE '%voluntary%non%profit%' THEN 'non_profit'
-             ELSE f.ownership
-           END
+           ownership = (CASE
+             WHEN c.raw_json->>'hospital_ownership' ILIKE '%government%' THEN 'government'
+             WHEN c.raw_json->>'hospital_ownership' ILIKE '%proprietary%' THEN 'for_profit'
+             WHEN c.raw_json->>'hospital_ownership' ILIKE '%non-profit%' THEN 'nonprofit'
+             WHEN c.raw_json->>'hospital_ownership' ILIKE '%voluntary%' THEN 'nonprofit'
+             ELSE f.ownership::text
+           END)::ownership_type
       FROM cms_provider_raw c
      WHERE c.dataset_id = 'hospital_general_info'
        AND f.cms_id = c.facility_key
