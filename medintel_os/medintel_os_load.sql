@@ -529,10 +529,10 @@ UPDATE stage_pecos_enrollments SET source_vertical = 'FQHC', source_file = 'FQHC
 \copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
 UPDATE stage_pecos_enrollments SET source_vertical = 'RHC', source_file = 'RHC_Enrollments_2026.04.01' WHERE source_vertical IS NULL;
 
--- Hospital Enrollments (NOT IN CURRENT DROP — uncomment when received):
--- \set csvfile :data_path '/Hospital_Enrollments_2026.05.01.csv'
--- \copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
--- UPDATE stage_pecos_enrollments SET source_vertical = 'HOSPITAL', source_file = 'Hospital_Enrollments_2026.05.01' WHERE source_vertical IS NULL;
+-- Hospital Enrollments — now in scope (May 2026 drop).
+\set csvfile :data_path '/Hospital_Enrollments_2026.05.01.csv'
+\copy stage_pecos_enrollments (enrollment_id, enrollment_state, provider_type_code, provider_type_text, npi, multiple_npi_flag, ccn, associate_id, organization_name, doing_business_as_name, incorporation_date, incorporation_state, organization_type_structure, organization_other_type_text, proprietary_nonprofit, address_line1, address_line2, city, state, zip_code, telephone_number) FROM :'csvfile' WITH (FORMAT csv, HEADER true, ENCODING 'WIN1252', NULL '')
+UPDATE stage_pecos_enrollments SET source_vertical = 'HOSPITAL', source_file = 'Hospital_Enrollments_2026.05.01' WHERE source_vertical IS NULL;
 
 
 -- ---- B.2 PECOS All_Owners (WIN1252) ----
