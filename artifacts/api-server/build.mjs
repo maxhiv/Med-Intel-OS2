@@ -30,6 +30,8 @@ async function buildAll() {
     external: [
       "*.node",
       "sharp",
+      "pdf-parse",
+      "pdfjs-dist",
       "better-sqlite3",
       "sqlite3",
       "canvas",

@@ -26,6 +26,18 @@ function formatMoney(value: number | null | undefined): string {
   return `$${Math.round(value).toLocaleString()}`;
 }
 
+/**
+ * Structured fields scraped from the filing PDF. The API returns these ahead of
+ * the generated client type, so they're read through a narrow cast.
+ */
+interface ConFilingScraped {
+  county?: string | null;
+  projectId?: string | null;
+  projectDescription?: string | null;
+  stateFacilityId?: string | null;
+}
+const scraped = (row: object): ConFilingScraped => row as ConFilingScraped;
+
 function StatusBadge({
   normalized,
   raw,
@@ -252,10 +264,26 @@ export default function ConFilingsPage() {
                     return (
                       <tr key={row.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors" data-testid={`row-con-${row.id}`}>
                         <td className="p-4 font-mono text-xs">{row.state}</td>
-                        <td className="p-4">
+                        <td className="p-4 max-w-md">
                           <div className="font-medium text-foreground">{row.applicantName || "Unknown applicant"}</div>
-                          {row.equipmentType && (
-                            <div className="text-xs text-muted-foreground mt-0.5">{row.equipmentType}</div>
+                          {(scraped(row).projectDescription || row.equipmentType) && (
+                            <div className="text-xs text-muted-foreground mt-0.5">
+                              {scraped(row).projectDescription || row.equipmentType}
+                            </div>
+                          )}
+                          {(scraped(row).county || scraped(row).projectId) && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              {scraped(row).county && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                  {scraped(row).county} County
+                                </span>
+                              )}
+                              {scraped(row).projectId && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">
+                                  {scraped(row).projectId}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td className="p-4 text-muted-foreground">{row.modality || "—"}</td>

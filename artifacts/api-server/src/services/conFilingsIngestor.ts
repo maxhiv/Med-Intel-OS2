@@ -25,6 +25,8 @@ import {
 } from "@workspace/db";
 import { logger } from "../lib/logger";
 import { resolveConApplicantToFacility } from "./conFacilityMatcher";
+import { extractConDocument, type ParsedConDocument } from "./conDocumentParser";
+import { DEFAULT_MATCH_THRESHOLD } from "./facilityNameMatch";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -511,9 +513,80 @@ export interface ConFacilityMatch {
 }
 
 
-function toDateOnly(d: Date | undefined): string | undefined {
+function toDateOnly(d: Date | undefined | null): string | undefined {
   if (!d) return undefined;
   return d.toISOString().slice(0, 10);
+}
+
+export interface ConSignalInput {
+  filingId: string;
+  facilityId: string;
+  filingUrl: string;
+  approved: boolean;
+  modality?: string | null;
+  equipmentType?: string | null;
+  approvedAmount?: number | null;
+  requestedAmount?: number | null;
+  county?: string | null;
+  projectId?: string | null;
+  projectDescription?: string | null;
+}
+
+/**
+ * Emit (idempotently) the `purchase_signals` row for a CON filing matched to a
+ * facility. Re-activates an existing signal if a prior review deactivated it.
+ * Returns true when a brand-new signal row was inserted.
+ *
+ * Shared by the ingestor (auto-approved matches) and the admin review queue
+ * (confirm / reassign) so the signal type, confidence, and metadata stay
+ * identical no matter which path surfaced the filing.
+ */
+export async function emitConFilingSignal(input: ConSignalInput): Promise<boolean> {
+  const signalType = input.approved ? "con_approved" : "con_filed";
+  const [exists] = await db
+    .select({ id: purchaseSignals.id })
+    .from(purchaseSignals)
+    .where(
+      and(
+        eq(purchaseSignals.facilityId, input.facilityId),
+        eq(purchaseSignals.signalType, signalType),
+        eq(purchaseSignals.signalValue, input.filingUrl),
+      ),
+    )
+    .limit(1);
+
+  if (exists) {
+    await db
+      .update(purchaseSignals)
+      .set({ isActive: true })
+      .where(eq(purchaseSignals.id, exists.id));
+    return false;
+  }
+
+  await db.insert(purchaseSignals).values({
+    facilityId: input.facilityId,
+    signalType,
+    signalValue: input.filingUrl,
+    confidence: input.approved ? 90 : 75,
+    source: "con_filing",
+    sourceId: input.filingId,
+    isActive: true,
+    metadata: {
+      projectId: input.projectId ?? null,
+      county: input.county ?? null,
+      modality: input.modality ?? null,
+      equipmentType: input.equipmentType ?? null,
+      approvedAmount: input.approvedAmount ?? null,
+      requestedAmount: input.requestedAmount ?? null,
+      projectDescription: input.projectDescription ?? null,
+    },
+  });
+  // Touch facility freshness so downstream scoring notices the update.
+  await db
+    .update(facilities)
+    .set({ updatedAt: new Date() })
+    .where(eq(facilities.id, input.facilityId));
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -572,19 +645,41 @@ export async function ingestConFilings(opts: {
         .limit(1);
       if (existing) continue;
 
+      // Scrape the filing PDF for the structured fields the filename never
+      // carries — county, FID#, capital expenditure, project description.
+      // Fail-soft: a bad document just leaves `doc` null.
+      let doc: ParsedConDocument | null = null;
+      if (/\.pdf(?:$|\?)/i.test(raw.filingUrl)) {
+        doc = await extractConDocument(raw.filingUrl);
+        if (doc) {
+          // The document's own facility name is far cleaner than the name
+          // parsed out of the filename — prefer it for matching.
+          if (doc.facilityName) raw.applicantName = doc.facilityName;
+          raw.equipmentType ??= doc.equipmentType;
+          raw.modality ??= doc.modality;
+          raw.requestedAmount ??= doc.requestedAmount;
+          raw.approvedAmount ??= doc.approvedAmount;
+          raw.decisionDate ??= doc.decisionDate;
+        }
+      }
+
       const facility = await resolveConApplicantToFacility(
         raw.applicantName,
         raw.state,
         raw.npi,
+        { county: doc?.county },
       );
       if (facility) result.facilitiesLinked += 1;
 
-      // Borderline matches (below the configurable review threshold) are
-      // surfaced for human review rather than blindly trusted. NPI hits and
-      // strong fuzzy hits skip review entirely.
+      // Borderline matches are held for human review rather than blindly
+      // trusted. A match is auto-approved when it is an exact NPI hit, a
+      // county-confirmed fuzzy hit (the county gate already verified geo), or
+      // a strong fuzzy hit clearing the configurable review threshold.
       const reviewThreshold = getReviewThreshold();
       const reviewStatus = facility
-        ? facility.score >= reviewThreshold
+        ? facility.matchedField === "npi" ||
+          (facility.countyConfirmed && facility.score >= DEFAULT_MATCH_THRESHOLD) ||
+          facility.score >= reviewThreshold
           ? "auto_approved"
           : "needs_review"
         : null;
@@ -604,6 +699,13 @@ export async function ingestConFilings(opts: {
           applicantName: raw.applicantName,
           filingUrl: raw.filingUrl,
           notes: raw.notes,
+          projectId: doc?.projectId ?? null,
+          county: doc?.county ?? null,
+          stateFacilityId: doc?.stateFacilityId ?? null,
+          projectDescription: doc?.projectDescription ?? null,
+          applicantContact: doc?.applicantContact ?? null,
+          appealDeadline: toDateOnly(doc?.appealDeadline),
+          documentScrapedAt: doc ? new Date() : null,
           matchScore: facility ? facility.score.toFixed(3) : null,
           matchField: facility?.matchedField ?? null,
           reviewStatus,
@@ -612,40 +714,28 @@ export async function ingestConFilings(opts: {
       stateBucket.inserted += 1;
       result.filingsInserted += 1;
 
-      // Signal emission requires a linked facility (the FK is NOT NULL).
-      if (!facility || !inserted) continue;
+      // Only auto-approved matches surface a signal immediately. A borderline
+      // (needs_review) match is held until a reviewer confirms it in the admin
+      // queue — it must not pollute the facility page before anyone checks it.
+      if (!facility || !inserted || reviewStatus !== "auto_approved") continue;
 
-      const signalType = raw.approved ? "con_approved" : "con_filed";
-      const [sigExists] = await db
-        .select({ id: purchaseSignals.id })
-        .from(purchaseSignals)
-        .where(
-          and(
-            eq(purchaseSignals.facilityId, facility.id),
-            eq(purchaseSignals.signalType, signalType),
-            eq(purchaseSignals.signalValue, raw.filingUrl),
-          ),
-        )
-        .limit(1);
-      if (sigExists) continue;
-
-      await db.insert(purchaseSignals).values({
+      const emitted = await emitConFilingSignal({
+        filingId: inserted.id,
         facilityId: facility.id,
-        signalType,
-        signalValue: raw.filingUrl,
-        confidence: raw.approved ? 90 : 75,
-        source: "con_filing",
-        sourceId: inserted.id,
-        isActive: true,
+        filingUrl: raw.filingUrl,
+        approved: Boolean(raw.approved),
+        modality: raw.modality,
+        equipmentType: raw.equipmentType,
+        approvedAmount: raw.approvedAmount,
+        requestedAmount: raw.requestedAmount,
+        county: doc?.county,
+        projectId: doc?.projectId,
+        projectDescription: doc?.projectDescription,
       });
-      stateBucket.signals += 1;
-      result.signalsInserted += 1;
-
-      // Touch facility freshness so downstream scheduling notices the update.
-      await db
-        .update(facilities)
-        .set({ updatedAt: new Date() })
-        .where(eq(facilities.id, facility.id));
+      if (emitted) {
+        stateBucket.signals += 1;
+        result.signalsInserted += 1;
+      }
     }
   }
 

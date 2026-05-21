@@ -30,6 +30,19 @@ import {
 /** Maximum candidate facilities pulled from the DB before fuzzy scoring. */
 const CANDIDATE_POOL_LIMIT = 50;
 
+export interface ConFacilityResolution {
+  id: string;
+  score: number;
+  matchedField: "name" | "dba" | "system" | "npi";
+  /**
+   * True when the match is geographically verified — either an exact NPI hit
+   * or a fuzzy hit drawn from a county-gated candidate pool. A county-confirmed
+   * match can be auto-approved at the lower fuzzy threshold; an unconfirmed one
+   * still needs the higher review threshold.
+   */
+  countyConfirmed: boolean;
+}
+
 /**
  * Try to resolve a tracked facility for a CON filing.
  *
@@ -40,14 +53,21 @@ const CANDIDATE_POOL_LIMIT = 50;
  *      `pickBestFacility`. The applicant string is split on `d/b/a`,
  *      `on behalf of`, etc. so parent-system filings still resolve.
  *
- * Returns `null` (not throws) if no candidate clears the confidence
- * threshold so callers can still persist the filing as "unmatched".
+ * When a `county` is supplied (scraped from the filing document) the candidate
+ * pool is *hard-gated* to facilities in that county. This is the single most
+ * important guard against cross-county false positives — e.g. a Wilkes County
+ * filing fuzzy-matching "Wilson Medical Center". If no facility in the county
+ * resolves, the function returns `null` (filing stays unmatched) rather than
+ * guessing a facility in the wrong county.
+ *
+ * Returns `null` (not throws) if no candidate clears the confidence threshold.
  */
 export async function resolveConApplicantToFacility(
   applicant: string,
   state: string,
   npi?: string,
-): Promise<{ id: string; score: number; matchedField: "name" | "dba" | "system" | "npi" } | null> {
+  opts: { county?: string | null } = {},
+): Promise<ConFacilityResolution | null> {
   // 1. Exact NPI match — strongest signal, no state filter needed.
   if (npi && /^\d{10}$/.test(npi)) {
     const [byNpi] = await db
@@ -55,7 +75,7 @@ export async function resolveConApplicantToFacility(
       .from(facilities)
       .where(eq(facilities.npi, npi))
       .limit(1);
-    if (byNpi) return { id: byNpi.id, score: 1, matchedField: "npi" };
+    if (byNpi) return { id: byNpi.id, score: 1, matchedField: "npi", countyConfirmed: true };
   }
 
   // 2. Build a small candidate pool keyed on shared meaningful tokens across
@@ -73,6 +93,18 @@ export async function resolveConApplicantToFacility(
     ];
   });
 
+  const county = opts.county?.trim().replace(/\s+county$/i, "") || null;
+  const where = [eq(facilities.state, state), or(...tokenConds)];
+  if (county) {
+    // Hard county gate — the right facility is in the filing's county or the
+    // filing simply stays unmatched. No cross-county fallback.
+    const c = or(
+      ilike(facilities.county, county),
+      ilike(facilities.county, `${county} County`),
+    );
+    if (c) where.push(c);
+  }
+
   const rows = await db
     .select({
       id: facilities.id,
@@ -81,7 +113,7 @@ export async function resolveConApplicantToFacility(
       systemName: facilities.systemName,
     })
     .from(facilities)
-    .where(and(eq(facilities.state, state), or(...tokenConds)))
+    .where(and(...where))
     .limit(CANDIDATE_POOL_LIMIT);
 
   if (rows.length === 0) return null;
@@ -100,6 +132,7 @@ export async function resolveConApplicantToFacility(
     {
       applicant,
       state,
+      county,
       facilityId: best.facility.id,
       score: Number(best.score.toFixed(3)),
       via: best.matchedField,
@@ -107,7 +140,12 @@ export async function resolveConApplicantToFacility(
     },
     "con applicant matched to facility",
   );
-  return { id: best.facility.id, score: best.score, matchedField: best.matchedField };
+  return {
+    id: best.facility.id,
+    score: best.score,
+    matchedField: best.matchedField,
+    countyConfirmed: Boolean(county),
+  };
 }
 
 export interface BackfillResult {
@@ -170,6 +208,7 @@ export async function backfillConFilingFacilities(
         applicantName: conFilings.applicantName,
         filingUrl: conFilings.filingUrl,
         status: conFilings.status,
+        county: conFilings.county,
       })
       .from(conFilings)
       .where(and(...baseConds))
@@ -186,6 +225,8 @@ export async function backfillConFilingFacilities(
         const facility = await resolveConApplicantToFacility(
           row.applicantName,
           row.state,
+          undefined,
+          { county: row.county },
         );
         if (!facility) continue;
 
