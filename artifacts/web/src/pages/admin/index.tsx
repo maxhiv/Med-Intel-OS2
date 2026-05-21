@@ -19,6 +19,7 @@ import { Redirect } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConReviewQueue } from "./ConReviewQueue";
+import { PaidSourcesAdmin } from "./paid-sources";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -864,6 +865,7 @@ export default function AdminPage() {
           <TabsTrigger value="encryption-key">Encryption Key</TabsTrigger>
           <TabsTrigger value="con-review" data-testid="tab-con-review">CON Review</TabsTrigger>
           <TabsTrigger value="ingest" data-testid="tab-ingest">National Ingest</TabsTrigger>
+          <TabsTrigger value="paid-sources" data-testid="tab-paid-sources">Paid Sources</TabsTrigger>
         </TabsList>
 
         <TabsContent value="sources" className="mt-4">
@@ -1114,6 +1116,10 @@ export default function AdminPage() {
 
         <TabsContent value="con-review" className="mt-4">
           <ConReviewQueue />
+        </TabsContent>
+
+        <TabsContent value="paid-sources" className="mt-4">
+          <PaidSourcesAdmin />
         </TabsContent>
 
         <TabsContent value="sub-accounts" className="mt-4">

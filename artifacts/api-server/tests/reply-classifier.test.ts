@@ -23,7 +23,7 @@ vi.mock("../src/lib/anthropic", () => ({
   ANTHROPIC_MAX_TOKENS: 64,
 }));
 
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, or, ilike } from "drizzle-orm";
 import { db, replyEvents } from "@workspace/db";
 import { classifyPendingReplies } from "../src/services/replyClassifier";
 import { seedWorld, teardownWorld, type SeededWorld } from "./helpers/seed";
@@ -44,12 +44,21 @@ afterAll(async () => {
 
 describe("classifyPendingReplies", () => {
   it("classifies the reply even when many newer non-reply events are pending", async () => {
-    // seedWorld() creates one `reply_received` event per seeded tenant for
-    // unrelated test coverage. classifyPendingReplies scans every account's
-    // reply-shaped events, so those baseline rows would otherwise inflate
-    // `result.examined`. Clear them up front so the assertions below only
-    // count this test's inserts.
-    await db.delete(replyEvents).where(eq(replyEvents.eventType, "reply_received"));
+    // classifyPendingReplies scans EVERY account's reply-shaped events
+    // globally. seedWorld() creates `reply_received` rows, and other suites
+    // (e.g. background-jobs-rls) leave `InboundMessage` rows behind — any of
+    // which would inflate `result.examined`. Clear every reply-shaped event
+    // up front (same filter the classifier uses) so the assertions below
+    // count only this test's own inserts.
+    await db
+      .delete(replyEvents)
+      .where(
+        or(
+          ilike(replyEvents.eventType, "%reply%"),
+          ilike(replyEvents.eventType, "%inboundmessage%"),
+          ilike(replyEvents.eventType, "%inbound_message%"),
+        ),
+      );
 
     // 50 newer non-reply rows (opens/bounces/task-completes/errors) all with
     // null classification. A naive "ORDER BY received_at DESC LIMIT N" query
