@@ -62,7 +62,8 @@ function ownerFlagBadges(entry: MedintelOwnershipEntry): ReactElement[] {
   ));
 }
 
-function CostReportPanel({ cr, history }: { cr: MedintelCostReport | null; history: MedintelCostReport[] }) {
+function CostReportPanel({ cr, history }: { cr: MedintelCostReport | null; history?: MedintelCostReport[] }) {
+  const safeHistory = history ?? [];
   if (!cr) {
     return (
       <Card>
@@ -104,9 +105,9 @@ function CostReportPanel({ cr, history }: { cr: MedintelCostReport | null; histo
             </div>
           ))}
         </div>
-        {history.length > 1 ? (
+        {safeHistory.length > 1 ? (
           <div className="mt-4 text-xs text-muted-foreground">
-            {history.length} cost reports on file, oldest fiscal year ending {formatDate(history[history.length - 1].fiscalYearEndDate)}.
+            {safeHistory.length} cost reports on file, oldest fiscal year ending {formatDate(safeHistory[safeHistory.length - 1].fiscalYearEndDate)}.
           </div>
         ) : null}
       </CardContent>
@@ -114,8 +115,9 @@ function CostReportPanel({ cr, history }: { cr: MedintelCostReport | null; histo
   );
 }
 
-function OwnershipPanel({ entries }: { entries: MedintelOwnershipEntry[] }) {
-  if (entries.length === 0) {
+function OwnershipPanel({ entries }: { entries?: MedintelOwnershipEntry[] }) {
+  const safeEntries = (entries ?? []).filter((e) => e && e.ownership);
+  if (safeEntries.length === 0) {
     return (
       <Card>
         <CardHeader>
@@ -129,11 +131,11 @@ function OwnershipPanel({ entries }: { entries: MedintelOwnershipEntry[] }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><Network className="h-4 w-4" /> Ownership</CardTitle>
-        <CardDescription>{entries.length} ownership records from PECOS, sorted by stake.</CardDescription>
+        <CardDescription>{safeEntries.length} ownership records from PECOS, sorted by stake.</CardDescription>
       </CardHeader>
       <CardContent>
         <ul className="divide-y divide-border">
-          {entries.slice(0, 25).map((entry, idx) => (
+          {safeEntries.slice(0, 25).map((entry, idx) => (
             <li key={`${entry.ownership.enrollmentId}-${entry.ownership.associateIdOwner}-${entry.ownership.roleCode}-${idx}`} className="py-3 flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="font-medium truncate">{ownerDisplayName(entry)}</div>
@@ -150,16 +152,17 @@ function OwnershipPanel({ entries }: { entries: MedintelOwnershipEntry[] }) {
             </li>
           ))}
         </ul>
-        {entries.length > 25 ? (
-          <div className="mt-3 text-xs text-muted-foreground">Showing top 25 of {entries.length}.</div>
+        {safeEntries.length > 25 ? (
+          <div className="mt-3 text-xs text-muted-foreground">Showing top 25 of {safeEntries.length}.</div>
         ) : null}
       </CardContent>
     </Card>
   );
 }
 
-function ChowPanel({ recent, history }: { recent: MedintelChowEvent | null; history: MedintelChowEvent[] }) {
-  if (!recent && history.length === 0) {
+function ChowPanel({ recent, history }: { recent: MedintelChowEvent | null; history?: MedintelChowEvent[] }) {
+  const safeHistory = history ?? [];
+  if (!recent && safeHistory.length === 0) {
     return (
       <Card>
         <CardHeader>
@@ -174,13 +177,13 @@ function ChowPanel({ recent, history }: { recent: MedintelChowEvent | null; hist
       <CardHeader>
         <CardTitle className="flex items-center gap-2"><ArrowLeftRight className="h-4 w-4" /> Change of Ownership</CardTitle>
         <CardDescription>
-          {history.length} CHOW transaction{history.length === 1 ? "" : "s"} touching this facility.
+          {safeHistory.length} CHOW transaction{safeHistory.length === 1 ? "" : "s"} touching this facility.
           {recent ? <> Most recent: <span className="font-medium">{formatDate(recent.effectiveDate)}</span></> : null}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <ul className="divide-y divide-border">
-          {history.slice(0, 10).map((c) => (
+          {safeHistory.slice(0, 10).map((c) => (
             <li key={c.chowPk} className="py-3">
               <div className="flex items-center gap-2 text-sm font-medium">
                 <Badge variant="outline">{c.chowTypeText ?? c.chowTypeCode ?? "CHOW"}</Badge>
@@ -200,9 +203,10 @@ function ChowPanel({ recent, history }: { recent: MedintelChowEvent | null; hist
   );
 }
 
-function ServiceAreaPanel({ rows }: { rows: import("@/hooks/use-facility-intelligence").MedintelServiceAreaRow[] }) {
-  if (rows.length === 0) return null;
-  const top = rows.slice(0, 10);
+function ServiceAreaPanel({ rows }: { rows?: import("@/hooks/use-facility-intelligence").MedintelServiceAreaRow[] }) {
+  const safeRows = rows ?? [];
+  if (safeRows.length === 0) return null;
+  const top = safeRows.slice(0, 10);
   return (
     <Card>
       <CardHeader>
@@ -237,8 +241,9 @@ function ServiceAreaPanel({ rows }: { rows: import("@/hooks/use-facility-intelli
   );
 }
 
-function AcoPanel({ rows }: { rows: MedintelAcoEntry[] }) {
-  if (rows.length === 0) return null;
+function AcoPanel({ rows }: { rows?: MedintelAcoEntry[] }) {
+  const safeRows = (rows ?? []).filter((r) => r && r.aco);
+  if (safeRows.length === 0) return null;
   return (
     <Card>
       <CardHeader>
@@ -246,8 +251,9 @@ function AcoPanel({ rows }: { rows: MedintelAcoEntry[] }) {
         <CardDescription>Medicare Shared Savings Program participation.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {rows.map((r) => {
-          const totalProjected = r.aipSpending.reduce(
+        {safeRows.map((r) => {
+          const aipSpending = r.aipSpending ?? [];
+          const totalProjected = aipSpending.reduce(
             (sum, a) =>
               sum +
               (Number(a.projectedSpending2024) || 0) +
@@ -255,7 +261,7 @@ function AcoPanel({ rows }: { rows: MedintelAcoEntry[] }) {
               (Number(a.projectedSpending2026) || 0),
             0,
           );
-          const totalActual = r.aipSpending.reduce(
+          const totalActual = aipSpending.reduce(
             (sum, a) =>
               sum +
               (Number(a.actualSpending2024) || 0) +
@@ -282,9 +288,9 @@ function AcoPanel({ rows }: { rows: MedintelAcoEntry[] }) {
                   <div><span className="text-muted-foreground">Year:</span> {r.performance.performanceYear}</div>
                 </div>
               ) : null}
-              {r.aipSpending.length > 0 ? (
+              {aipSpending.length > 0 ? (
                 <div className="mt-2 text-xs">
-                  <span className="text-muted-foreground">AIP Spend ({r.aipSpending.length} lines):</span>{" "}
+                  <span className="text-muted-foreground">AIP Spend ({aipSpending.length} lines):</span>{" "}
                   Projected {formatMoney(totalProjected.toString())} · Actual {formatMoney(totalActual.toString())}
                 </div>
               ) : null}
@@ -306,18 +312,19 @@ function ChainPanel({ summary }: { summary: import("@/hooks/use-facility-intelli
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-          <div><div className="text-xs text-muted-foreground">Facilities owned</div><div className="text-lg font-semibold">{summary.facilitiesOwned}</div></div>
-          <div><div className="text-xs text-muted-foreground">States</div><div className="text-sm">{summary.statesPresent.join(", ") || "—"}</div></div>
-          <div><div className="text-xs text-muted-foreground">Verticals</div><div className="text-sm">{summary.verticals.join(", ") || "—"}</div></div>
+          <div><div className="text-xs text-muted-foreground">Facilities owned</div><div className="text-lg font-semibold">{summary.facilitiesOwned ?? "—"}</div></div>
+          <div><div className="text-xs text-muted-foreground">States</div><div className="text-sm">{(summary.statesPresent ?? []).join(", ") || "—"}</div></div>
+          <div><div className="text-xs text-muted-foreground">Verticals</div><div className="text-sm">{(summary.verticals ?? []).join(", ") || "—"}</div></div>
         </div>
       </CardContent>
     </Card>
   );
 }
 
-function CmmiPanel({ rows }: { rows: import("@/hooks/use-facility-intelligence").MedintelCmmiModel[] }) {
-  if (rows.length === 0) return null;
-  const display = rows.slice(0, 8);
+function CmmiPanel({ rows }: { rows?: import("@/hooks/use-facility-intelligence").MedintelCmmiModel[] }) {
+  const safeRows = rows ?? [];
+  if (safeRows.length === 0) return null;
+  const display = safeRows.slice(0, 8);
   return (
     <Card>
       <CardHeader>
@@ -343,17 +350,18 @@ function CmmiPanel({ rows }: { rows: import("@/hooks/use-facility-intelligence")
             </li>
           ))}
         </ul>
-        {rows.length > display.length ? (
-          <div className="mt-2 text-xs text-muted-foreground">Showing {display.length} of {rows.length}.</div>
+        {safeRows.length > display.length ? (
+          <div className="mt-2 text-xs text-muted-foreground">Showing {display.length} of {safeRows.length}.</div>
         ) : null}
       </CardContent>
     </Card>
   );
 }
 
-function Psi11Panel({ rows }: { rows: import("@/hooks/use-facility-intelligence").MedintelPsi11Row[] }) {
-  if (rows.length === 0) return null;
-  const latest = rows[0];
+function Psi11Panel({ rows }: { rows?: import("@/hooks/use-facility-intelligence").MedintelPsi11Row[] }) {
+  const safeRows = rows ?? [];
+  if (safeRows.length === 0) return null;
+  const latest = safeRows[0];
   const rate = Number(latest.rate ?? 0);
   return (
     <Card>
@@ -422,7 +430,17 @@ export function FacilityIntelligenceTab({ facilityId }: { facilityId: string }) 
     );
   }
 
-  const { identity, ownershipFlags } = data;
+  const identity = data.identity ?? null;
+  // ownershipFlags can be absent on partial API responses — default every
+  // flag so the badge row below never dereferences undefined.
+  const ownershipFlags = data.ownershipFlags ?? {
+    anyPrivateEquity: false,
+    anyReit: false,
+    anyHoldingCompany: false,
+    anyChainHomeOffice: false,
+    anyMgmtServices: false,
+    forProfit: null,
+  };
 
   return (
     <div className="space-y-4">
