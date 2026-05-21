@@ -5,12 +5,12 @@
  *  - TypeScript; uses the repo's shared `anthropic` client + Drizzle `db`.
  *  - The chat route establishes the RLS scope (withRLS), so every db call
  *    here is already account-isolated — no per-call tenant context needed.
- *  - Sub-agents are deferred to PR E; the constructor takes no invoker and
- *    the tool registry has three categories (MCP / proprietary / database).
+ *  - PR E adds a fourth tool category: the Tier-A sub-agents, surfaced as
+ *    `consult_*` tools that route through SubAgentInvoker.
  *
  * Streaming: the agent calls Anthropic non-streaming in a tool loop and
  * surfaces progress through callbacks (onToken / onToolCall / onToolResult /
- * onProspect / onUsage). The chat route turns those callbacks into SSE.
+ * onProspect / onSubAgent / onUsage). The chat route turns those into SSE.
  */
 import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic } from "@workspace/integrations-anthropic-ai";
@@ -22,7 +22,8 @@ import { agentRateLimiter } from "./agentRateLimiter";
 import { buildOpenInformaticsTools } from "./tools/openInformaticsTools";
 import { buildMedIntelTools } from "./tools/medintelTools";
 import { buildDatabaseAndActionTools } from "./tools/databaseAndActionTools";
-import type { AgentToolDefinition, ToolExecutor } from "./tools/types";
+import { buildSubAgentTools } from "./tools/subAgentTools";
+import type { AgentToolDefinition, SubAgentConsultation, ToolExecutor } from "./tools/types";
 
 /** $ per 1M tokens. cachedIn = prompt-cache read rate. */
 const PRICING: Record<string, { in: number; out: number; cachedIn: number }> = {
@@ -37,6 +38,7 @@ export interface AgentCallbacks {
   onToolCall?: (e: { id: string; tool: string; args: unknown }) => void;
   onToolResult?: (e: { id: string; tool: string; latencyMs: number; isError: boolean }) => void;
   onProspect?: (e: { opportunityId: string; summary: string }) => void;
+  onSubAgent?: (e: SubAgentConsultation) => void;
   onUsage?: (e: { inputTokens: number; outputTokens: number; costUsd: number }) => void;
   onError?: (err: Error) => void;
 }
@@ -47,6 +49,7 @@ export interface AgentTurnResult {
   outputTokens: number;
   cachedTokens: number;
   toolCalls: number;
+  subAgentCalls: number;
   costUsd: number;
   latencyMs: number;
 }
@@ -64,11 +67,16 @@ export class ProspectingAgent {
     process.env.ANTHROPIC_AGENT_MAX_TOOL_CALLS_PER_TURN ?? "25",
     10,
   );
+  private maxSubAgentCallsPerTurn = parseInt(
+    process.env.ANTHROPIC_AGENT_MAX_SUB_AGENT_CALLS_PER_TURN ?? "3",
+    10,
+  );
   private promptCaching = (process.env.ANTHROPIC_PROMPT_CACHING_ENABLED ?? "true") === "true";
 
   private systemPrompt = "";
   private toolDefs: AgentToolDefinition[] = [];
   private executors = new Map<string, ToolExecutor>();
+  private subAgentToolNames = new Set<string>();
   private messages: AnthropicMessageParam[] = [];
   private initialized = false;
 
@@ -84,18 +92,35 @@ export class ProspectingAgent {
     this.systemPrompt = await buildSystemPrompt(this.accountId, this.userId);
 
     const ctx = { accountId: this.accountId, userId: this.userId, sessionId: this.sessionId };
-    const [mcp, medintel, dbTools] = await Promise.all([
+    const [mcp, medintel, dbTools, subAgents] = await Promise.all([
       buildOpenInformaticsTools(ctx),
       Promise.resolve(buildMedIntelTools()),
       Promise.resolve(buildDatabaseAndActionTools(ctx)),
+      buildSubAgentTools(ctx),
     ]);
-    this.toolDefs = [...mcp.definitions, ...medintel.definitions, ...dbTools.definitions];
-    this.executors = new Map([...mcp.executors, ...medintel.executors, ...dbTools.executors]);
+    this.toolDefs = [
+      ...mcp.definitions,
+      ...medintel.definitions,
+      ...dbTools.definitions,
+      ...subAgents.definitions,
+    ];
+    this.executors = new Map([
+      ...mcp.executors,
+      ...medintel.executors,
+      ...dbTools.executors,
+      ...subAgents.executors,
+    ]);
+    this.subAgentToolNames = new Set(subAgents.definitions.map((d) => d.name));
 
     this.messages = await this.loadHistory();
     this.initialized = true;
     logger.info(
-      { sessionId: this.sessionId, tools: this.toolDefs.length, historyLen: this.messages.length },
+      {
+        sessionId: this.sessionId,
+        tools: this.toolDefs.length,
+        subAgents: this.subAgentToolNames.size,
+        historyLen: this.messages.length,
+      },
       "agent: initialized",
     );
   }
@@ -122,6 +147,8 @@ export class ProspectingAgent {
     let cachedTokens = 0;
     let costUsd = 0;
     let toolCalls = 0;
+    let subAgentCalls = 0;
+    let subAgentCost = 0;
     let stopReason: string | null = null;
 
     for (let iter = 0; iter <= this.maxToolCallsPerTurn; iter++) {
@@ -184,6 +211,20 @@ export class ProspectingAgent {
           });
           continue;
         }
+        if (
+          this.subAgentToolNames.has(tu.name) &&
+          subAgentCalls >= this.maxSubAgentCallsPerTurn
+        ) {
+          cb.onToolCall?.({ id: tu.id, tool: tu.name, args: tu.input });
+          cb.onToolResult?.({ id: tu.id, tool: tu.name, latencyMs: 0, isError: true });
+          results.push({
+            type: "tool_result",
+            tool_use_id: tu.id,
+            content: `Sub-agent consultation cap reached (${this.maxSubAgentCallsPerTurn} per turn). Synthesize your answer from the consultations you already have.`,
+            is_error: true,
+          });
+          continue;
+        }
         toolCalls++;
         cb.onToolCall?.({ id: tu.id, tool: tu.name, args: tu.input });
         const t0 = Date.now();
@@ -199,6 +240,11 @@ export class ProspectingAgent {
             resultContent = r.content;
             isError = r.isError === true;
             if (r.prospectSurfaced) cb.onProspect?.(r.prospectSurfaced);
+            if (r.subAgent) {
+              cb.onSubAgent?.(r.subAgent);
+              subAgentCalls++;
+              subAgentCost += r.subAgent.costUsd;
+            }
             if (typeof r.costUsd === "number") costUsd += r.costUsd;
           } catch (err) {
             resultContent = { error: err instanceof Error ? err.message : String(err) };
@@ -221,6 +267,8 @@ export class ProspectingAgent {
       accountId: this.accountId,
       userId: this.userId,
       anthropicCostUsd: costUsd,
+      subAgentCalls,
+      subAgentCostUsd: subAgentCost,
     });
     await this.updateSessionTotals(inputTokens, outputTokens, costUsd);
 
@@ -230,6 +278,7 @@ export class ProspectingAgent {
       outputTokens,
       cachedTokens,
       toolCalls,
+      subAgentCalls,
       costUsd,
       latencyMs: Date.now() - started,
     };

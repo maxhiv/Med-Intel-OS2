@@ -4,14 +4,16 @@
  * Adapted from the handoff's buildSystemPrompt.js. Two adaptations:
  *  - Account context is read with Drizzle from the real tables (the chat
  *    route already holds an RLS scope, so `db` is account-isolated).
- *  - The sub-agent consultation guide is OMITTED in PR C — sub-agents land
- *    in PR E. When PR E wires SubAgentInvoker in, it appends that section.
+ *  - PR E appends the sub-agent consultation guide — the Tier-A roster the
+ *    agent can consult via its `consult_*` tools.
  *
  * The persona block is stable across sessions → good for Anthropic prompt
  * caching; only the per-tenant account-context block varies.
  */
 import { eq, and } from "drizzle-orm";
-import { db, accounts, users, paidSourceApprovals } from "@workspace/db";
+import { db, accounts, users, paidSourceApprovals, subAgentRegistry } from "@workspace/db";
+import { logger } from "../../lib/logger";
+import { consultToolName } from "./tools/subAgentTools";
 
 const CORE_PERSONA = `You are MedIntel, a chat-first prospecting agent for medical capital equipment sales representatives. You help reps find, qualify, and prioritize target facilities likely to need their equipment within the next 6–18 months.
 
@@ -86,17 +88,78 @@ function formatAccountContext(ctx: AccountContext): string {
   return lines.join("\n");
 }
 
-export async function buildSystemPrompt(accountId: string, userId: string): Promise<string> {
-  const ctx = await loadAccountContext(accountId, userId);
+/**
+ * Build the expert sub-agent consultation guide from the Tier-A registry.
+ * Returns "" when no Tier-A agents are registered so the prompt stays clean.
+ */
+async function buildSubAgentGuide(): Promise<string> {
+  let rows: { agentName: string; displayName: string; description: string; emoji: string | null }[];
+  try {
+    rows = await db
+      .select({
+        agentName: subAgentRegistry.agentName,
+        displayName: subAgentRegistry.displayName,
+        description: subAgentRegistry.description,
+        emoji: subAgentRegistry.emoji,
+      })
+      .from(subAgentRegistry)
+      .where(and(eq(subAgentRegistry.tier, "A"), eq(subAgentRegistry.enabled, true)));
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "agent: sub-agent registry unavailable — system prompt omits the consultation guide",
+    );
+    return "";
+  }
+
+  if (rows.length === 0) return "";
+
+  const roster = rows
+    .map(
+      (r) =>
+        `- \`${consultToolName(r.agentName)}\` ${r.emoji ?? ""} ${r.displayName} — ${r.description}`,
+    )
+    .join("\n");
+
   return [
+    "## Expert sub-agents",
+    "",
+    "You can consult specialist sub-agents for domain depth beyond core prospecting. Each is a `consult_*` tool. Sub-agents reason only — they have no tools — so gather the relevant facts first (facility profile, financials, ownership, trigger details) and pass them as `context`.",
+    "",
+    "When to consult:",
+    "- A prospect's qualification hinges on expert judgment you cannot derive from raw data — financial readiness, accreditation timing, Epic-integration realities, 340B economics, procurement mechanics.",
+    "- The rep asks something a named specialist below clearly owns.",
+    "",
+    "How to consult well:",
+    "- Prefer the single best-fit specialist; consult at most 3 per turn.",
+    "- Evaluate each response before integrating it — if it misses, fall back to your own reasoning rather than re-consulting blindly.",
+    "- Attribute insights explicitly (\"Per the Revenue Cycle Finance specialist, …\").",
+    "",
+    "Available specialists:",
+    roster,
+  ].join("\n");
+}
+
+export async function buildSystemPrompt(accountId: string, userId: string): Promise<string> {
+  const [ctx, subAgentGuide] = await Promise.all([
+    loadAccountContext(accountId, userId),
+    buildSubAgentGuide(),
+  ]);
+  const sections = [
     CORE_PERSONA,
     "",
     "## Account context",
     "",
     formatAccountContext(ctx),
+  ];
+  if (subAgentGuide) {
+    sections.push("", subAgentGuide);
+  }
+  sections.push(
     "",
     "## Response format",
     "",
     "Lead with the answer. Use Markdown sparingly. When you surface a prospect, do it inline with a one-line justification — the chat UI renders the prospect card from the db_persist_opportunity tool result automatically.",
-  ].join("\n");
+  );
+  return sections.join("\n");
 }

@@ -17,6 +17,7 @@ import {
   chatApi,
   type ChatSessionSummary,
   type ChatMessageRow,
+  type ChatSubAgent,
 } from "@/lib/chat-sse";
 import { AlertTriangle } from "lucide-react";
 
@@ -37,6 +38,7 @@ type Action =
   | { t: "toolCall"; id: string; tool: string }
   | { t: "toolResult"; id: string; latencyMs: number; isError: boolean }
   | { t: "prospect"; opportunityId: string; summary: string }
+  | { t: "subAgent"; consult: ChatSubAgent }
   | { t: "addCost"; usd: number }
   | { t: "commit" }
   | { t: "error"; message: string };
@@ -57,7 +59,11 @@ function reducer(s: State, a: Action): State {
         error: null,
       };
     case "startTurn":
-      return { ...s, inflight: { text: "", ticker: [], prospects: [] }, streaming: true };
+      return {
+        ...s,
+        inflight: { text: "", ticker: [], prospects: [], subAgents: [] },
+        streaming: true,
+      };
     case "token":
       if (!s.inflight) return s;
       return { ...s, inflight: { ...s.inflight, text: s.inflight.text + a.text } };
@@ -93,6 +99,13 @@ function reducer(s: State, a: Action): State {
         },
       };
     }
+    case "subAgent": {
+      if (!s.inflight) return s;
+      return {
+        ...s,
+        inflight: { ...s.inflight, subAgents: [...s.inflight.subAgents, a.consult] },
+      };
+    }
     case "addCost":
       return { ...s, costUsd: s.costUsd + a.usd };
     case "commit": {
@@ -103,6 +116,7 @@ function reducer(s: State, a: Action): State {
         text: s.inflight.text || "(no text response)",
         ticker: s.inflight.ticker,
         prospects: s.inflight.prospects,
+        subAgents: s.inflight.subAgents,
       };
       return { ...s, messages: [...s.messages, assistant], inflight: null, streaming: false };
     }
@@ -207,6 +221,7 @@ export default function ChatProspectingPage() {
           dispatch({ t: "toolResult", id: e.id, latencyMs: e.latencyMs, isError: e.isError }),
         onProspect: (e) =>
           dispatch({ t: "prospect", opportunityId: e.opportunityId, summary: e.summary }),
+        onSubAgent: (e) => dispatch({ t: "subAgent", consult: e }),
         onUsage: (e) => dispatch({ t: "addCost", usd: e.costUsd }),
         onError: (msg) => dispatch({ t: "error", message: msg }),
         onDone: () => {
