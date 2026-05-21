@@ -22,6 +22,7 @@ import {
   Compass,
   Inbox,
   Menu,
+  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
@@ -62,6 +63,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     String(import.meta.env.VITE_MEDINTEL_OS_MODE ?? "").toLowerCase() === "true";
 
   const topItems: NavItem[] = [
+    { name: "Prospecting Chat", href: "/chat", icon: MessageSquare },
     { name: "Opportunities", href: "/opportunities", icon: Inbox },
     { name: "Lead Cards", href: "/leads", icon: Crosshair },
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },

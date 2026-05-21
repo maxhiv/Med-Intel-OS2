@@ -17,6 +17,7 @@ import SignUpPage from "@/pages/auth/sign-up";
 import DashboardPage from "@/pages/dashboard";
 import FacilitiesPage from "@/pages/facilities/index";
 import FacilityDetailPage from "@/pages/facilities/detail";
+import ChatProspectingPage from "@/pages/chat/index";
 import TerritoriesPage from "@/pages/territories/index";
 import TerritoryDetailPage from "@/pages/territories/detail";
 import OpportunityInboxPage from "@/pages/opportunities/index";
@@ -142,6 +143,8 @@ function Router() {
           <AppLayout>
             <RouteErrorBoundary>
               <Switch>
+                <Route path="/chat" component={ChatProspectingPage} />
+                <Route path="/chat/:sessionId" component={ChatProspectingPage} />
                 <Route path="/leads" component={LeadsPage} />
                 <Route path="/dashboard" component={DashboardPage} />
                 <Route path="/facilities" component={FacilitiesPage} />
