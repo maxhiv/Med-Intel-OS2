@@ -236,6 +236,18 @@ export const conFilings = pgTable(
     applicantName: text("applicant_name"),
     filingUrl: text("filing_url"),
     notes: text("notes"),
+    /**
+     * Structured fields scraped from the filing PDF (NC DHSR decision/review
+     * documents). `documentScrapedAt` is null until the PDF has been parsed.
+     */
+    projectId: text("project_id"),
+    county: text("county"),
+    /** State facility identifier from the document (NC DHSR "FID #"). */
+    stateFacilityId: text("state_facility_id"),
+    projectDescription: text("project_description"),
+    applicantContact: text("applicant_contact"),
+    appealDeadline: date("appeal_deadline"),
+    documentScrapedAt: timestamp("document_scraped_at", { withTimezone: true }),
     /** Confidence in [0,1] from the fuzzy facility matcher; 1 for exact NPI matches, null when unmatched. */
     matchScore: numeric("match_score", { precision: 4, scale: 3 }),
     /** Which facility column carried the match: name | dba | system | npi. Null when unmatched. */
@@ -261,6 +273,8 @@ export const conFilings = pgTable(
     index("idx_con_filings_facility").on(t.facilityId),
     // Lets the admin review queue scan only borderline rows cheaply.
     index("idx_con_filings_review_status").on(t.reviewStatus),
+    // Supports future deterministic crosswalk on the state facility id.
+    index("idx_con_filings_state_facility_id").on(t.stateFacilityId),
   ],
 );
 

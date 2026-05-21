@@ -20,7 +20,7 @@ import {
   FREE_ENRICHMENT_SOURCES,
   PAID_ENRICHMENT_SOURCES,
 } from "@workspace/db";
-import { getReviewThreshold } from "../services/conFilingsIngestor";
+import { getReviewThreshold, emitConFilingSignal } from "../services/conFilingsIngestor";
 import { recomputeAllScores } from "../services/signalScorer";
 import { seedParentSystems } from "@workspace/db";
 import { propagateSystemSignals } from "../services/systemSignalPropagator";
@@ -1148,6 +1148,23 @@ router.post(
         })
         .where(eq(conFilings.id, id))
         .returning();
+      // The ingestor holds the signal for needs_review filings — confirming
+      // the match is what surfaces it on the facility page.
+      if (updated?.facilityId && updated.filingUrl) {
+        await emitConFilingSignal({
+          filingId: updated.id,
+          facilityId: updated.facilityId,
+          filingUrl: updated.filingUrl,
+          approved: !!updated.status && /approv|grant(ed)?|issued/i.test(updated.status),
+          modality: updated.modality,
+          equipmentType: updated.equipmentType,
+          approvedAmount: updated.approvedAmount,
+          requestedAmount: updated.requestedAmount,
+          county: updated.county,
+          projectId: updated.projectId,
+          projectDescription: updated.projectDescription,
+        });
+      }
       res.json(updated);
       return;
     }
@@ -1199,36 +1216,23 @@ router.post(
       .set({ isActive: false })
       .where(eq(purchaseSignals.sourceId, filing.id));
 
-    // Emit a fresh signal against the new facility, mirroring the ingestor's
-    // logic. Re-derive the type from raw status text so an "approved" filing
-    // still surfaces as `con_approved` after reassignment.
-    const isApproved = !!filing.status && /approv|grant(ed)?|issued/i.test(filing.status);
-    const signalType = isApproved ? "con_approved" : "con_filed";
-    const [sigExists] = await db
-      .select({ id: purchaseSignals.id })
-      .from(purchaseSignals)
-      .where(
-        sql`${purchaseSignals.facilityId} = ${target.id}
-            AND ${purchaseSignals.signalType} = ${signalType}
-            AND ${purchaseSignals.signalValue} = ${filing.filingUrl}`,
-      )
-      .limit(1);
-    if (!sigExists) {
-      await db.insert(purchaseSignals).values({
+    // Emit (or re-activate) the signal against the new facility. The shared
+    // helper keeps the signal type, confidence, and metadata identical to the
+    // ingestor's own emission path.
+    if (filing.filingUrl) {
+      await emitConFilingSignal({
+        filingId: filing.id,
         facilityId: target.id,
-        signalType,
-        signalValue: filing.filingUrl,
-        confidence: isApproved ? 90 : 75,
-        source: "con_filing",
-        sourceId: filing.id,
-        isActive: true,
+        filingUrl: filing.filingUrl,
+        approved: !!filing.status && /approv|grant(ed)?|issued/i.test(filing.status),
+        modality: filing.modality,
+        equipmentType: filing.equipmentType,
+        approvedAmount: filing.approvedAmount,
+        requestedAmount: filing.requestedAmount,
+        county: filing.county,
+        projectId: filing.projectId,
+        projectDescription: filing.projectDescription,
       });
-    } else {
-      // Re-activate in case it was previously deactivated by an earlier review.
-      await db
-        .update(purchaseSignals)
-        .set({ isActive: true })
-        .where(eq(purchaseSignals.id, sigExists.id));
     }
 
     const [updated] = await db

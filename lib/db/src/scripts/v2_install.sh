@@ -20,6 +20,7 @@ scripts=(
   "v2_confidence_layer.sql"
   "v2_equipment_age.sql"
   "v2_opportunity_rls.sql"
+  "v2b_con_documents.sql"
   "seed_freshness.sql"
   "v2a_chat_tables.sql"
   "v2a_chat_layer.sql"
