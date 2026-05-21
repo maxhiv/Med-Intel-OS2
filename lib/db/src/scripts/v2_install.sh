@@ -21,6 +21,10 @@ scripts=(
   "v2_equipment_age.sql"
   "v2_opportunity_rls.sql"
   "seed_freshness.sql"
+  "v2a_chat_tables.sql"
+  "v2a_chat_layer.sql"
+  "v2a_seed_paid_sources.sql"
+  "v2a_seed_sub_agents.sql"
 )
 
 for s in "${scripts[@]}"; do
