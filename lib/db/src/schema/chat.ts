@@ -303,3 +303,47 @@ export const userRoleChanges = pgTable(
   (t) => [index("idx_user_role_changes_user").on(t.userId, t.changedAt)],
 );
 export type UserRoleChange = typeof userRoleChanges.$inferSelect;
+
+// ─── MCP result cache ───────────────────────────────────────────────────────
+//
+// Durable, cross-process cache for healthcare-data-mcp gateway tool calls.
+// McpLiveGatewayClient previously cached results only in an in-process Map, so
+// every MCP tool result was lost on restart and was never queryable. This
+// table persists every gateway call keyed by (tool_name, args_hash) with its
+// category TTL, latency, and full argument set, so MCP-sourced data actually
+// accumulates in the database instead of evaporating between sessions.
+
+export const mcpResultCache = pgTable(
+  "mcp_result_cache",
+  {
+    id: uuid("id").primaryKey().default(sql`uuid_generate_v4()`),
+    /** MCP tool name, e.g. "cms-facility.get_facility". */
+    toolName: text("tool_name").notNull(),
+    /** TTL bucket: claims | quality | finance | news | facility | default. */
+    category: text("category").notNull(),
+    /** SHA-256 of the canonicalised argument object — the cache key beside tool_name. */
+    argsHash: text("args_hash").notNull(),
+    /** Raw arguments the tool was invoked with, kept for audit and queryability. */
+    args: jsonb("args").notNull(),
+    /** Tool result payload (already size-capped by the gateway client). */
+    result: jsonb("result").notNull(),
+    /** True when the gateway client truncated an oversized result to a shape summary. */
+    truncated: boolean("truncated").notNull().default(false),
+    /** Gateway round-trip latency of the originating live call, in milliseconds. */
+    latencyMs: integer("latency_ms"),
+    /** Times this row has been served from cache — best-effort read telemetry. */
+    hitCount: integer("hit_count").notNull().default(0),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+    lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    // The cache key: one row per (tool, args). Upserts target this index.
+    uniqueIndex("uniq_mcp_result_cache_key").on(t.toolName, t.argsHash),
+    // Freshness scans and the expired-row purge.
+    index("idx_mcp_result_cache_expires").on(t.expiresAt),
+    // Per-tool coverage queries ("how much of tool X have we stored").
+    index("idx_mcp_result_cache_tool").on(t.toolName),
+  ],
+);
+export type McpResultCacheRow = typeof mcpResultCache.$inferSelect;

@@ -11,6 +11,11 @@
  * the agent picks the tools up on the next session with no code change.
  */
 import { logger } from "../../lib/logger";
+import {
+  hashMcpArgs,
+  readMcpResultCache,
+  writeMcpResultCache,
+} from "./mcpResultCache";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -73,7 +78,13 @@ export class McpLiveGatewayClient {
     return resp.tools ?? [];
   }
 
-  /** Invoke an MCP tool. Results cached per (tool,args) for the category TTL. */
+  /**
+   * Invoke an MCP tool. Results are cached per (tool,args) for the category
+   * TTL in two tiers: an in-process Map (L1, fast) backed by a durable
+   * Postgres table (L2, survives restarts and is shared across processes).
+   * Every live gateway result is persisted to L2 so MCP-sourced data
+   * accumulates in the database rather than evaporating between sessions.
+   */
   async callTool(
     toolName: string,
     args: Record<string, unknown>,
@@ -82,10 +93,19 @@ export class McpLiveGatewayClient {
     if (!this.configured) {
       return { error: "MCP gateway not configured", _unavailable: true };
     }
-    const key = `${toolName}:${stableStringify(args)}`;
+    const category = inferCategory(toolName);
+    const argsHash = hashMcpArgs(args);
+    const memKey = `${toolName}:${argsHash}`;
+
     if (!opts.bypassCache) {
-      const hit = this.cache.get(key);
+      const hit = this.cache.get(memKey);
       if (hit && hit.expiresAt > Date.now()) return { ...hit.value, _cached: true };
+      // L2: durable Postgres cache. Fail-soft — returns null on any DB error.
+      const persisted = await readMcpResultCache(toolName, argsHash);
+      if (persisted) {
+        this.cache.set(memKey, { value: persisted.value, expiresAt: persisted.expiresAt });
+        return { ...persisted.value, _cached: true };
+      }
     }
 
     const started = Date.now();
@@ -93,9 +113,23 @@ export class McpLiveGatewayClient {
     const latencyMs = Date.now() - started;
     const sized = this.enforceSizeLimit(raw);
 
-    const ttl = CATEGORY_TTL_MS[inferCategory(toolName)] ?? CATEGORY_TTL_MS.default;
-    this.cache.set(key, { value: { ...sized, _latencyMs: latencyMs }, expiresAt: Date.now() + ttl });
-    return { ...sized, _latencyMs: latencyMs };
+    const ttl = CATEGORY_TTL_MS[category] ?? CATEGORY_TTL_MS.default;
+    const expiresAt = Date.now() + ttl;
+    const value: McpCallResult = { ...sized, _latencyMs: latencyMs };
+
+    this.cache.set(memKey, { value, expiresAt });
+    // Durable persistence — fail-soft inside writeMcpResultCache.
+    await writeMcpResultCache({
+      toolName,
+      category,
+      argsHash,
+      args,
+      result: sized,
+      truncated: sized._truncated === true,
+      latencyMs,
+      expiresAt: new Date(expiresAt),
+    });
+    return value;
   }
 
   private async request(path: string, body: unknown): Promise<unknown> {
@@ -145,14 +179,6 @@ function inferCategory(toolName: string): string {
   if (t.startsWith("web-intelligence")) return "news";
   if (t.startsWith("cms-facility") || t.startsWith("health-system-profiler")) return "facility";
   return "default";
-}
-
-function stableStringify(obj: unknown): string {
-  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
-  const keys = Object.keys(obj as Record<string, unknown>).sort();
-  const ordered: Record<string, unknown> = {};
-  for (const k of keys) ordered[k] = (obj as Record<string, unknown>)[k];
-  return JSON.stringify(ordered);
 }
 
 function summarizeShape(obj: unknown, depth = 0): unknown {
