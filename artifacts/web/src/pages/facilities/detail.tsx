@@ -9,6 +9,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FacilityIntelligenceTab } from "./intelligence-tab";
+import { RouteErrorBoundary } from "@/components/route-error-boundary";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -408,9 +409,13 @@ export default function FacilityDetailPage() {
               <TabsTrigger value="equipment">Equipment</TabsTrigger>
             </TabsList>
 
-            {/* Intelligence (medintel warehouse) tab */}
+            {/* Intelligence (medintel warehouse) tab — wrapped so a crash in
+                any warehouse panel degrades to an error card instead of
+                taking down the whole facility page. */}
             <TabsContent value="intelligence" className="mt-4">
-              <FacilityIntelligenceTab facilityId={id} />
+              <RouteErrorBoundary>
+                <FacilityIntelligenceTab facilityId={id} />
+              </RouteErrorBoundary>
             </TabsContent>
 
             {/* Signals tab */}
