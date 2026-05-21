@@ -107,10 +107,14 @@ export class AgentRateLimiter {
     userId: string;
     anthropicCostUsd?: number;
     paidSourceCostUsd?: number;
+    subAgentCalls?: number;
+    subAgentCostUsd?: number;
   }): Promise<void> {
     const anthropic = input.anthropicCostUsd ?? 0;
     const paid = input.paidSourceCostUsd ?? 0;
     const total = anthropic + paid;
+    const subCalls = input.subAgentCalls ?? 0;
+    const subCost = input.subAgentCostUsd ?? 0;
     const today = new Date().toISOString().slice(0, 10);
 
     await db
@@ -123,6 +127,8 @@ export class AgentRateLimiter {
         anthropicCostUsd: String(anthropic),
         paidSourceCostUsd: String(paid),
         totalCostUsd: String(total),
+        subAgentCallCount: subCalls,
+        subAgentCostUsd: String(subCost),
       })
       .onConflictDoUpdate({
         target: [agentUsageDaily.accountId, agentUsageDaily.day, agentUsageDaily.userId],
@@ -131,6 +137,8 @@ export class AgentRateLimiter {
           anthropicCostUsd: sql`${agentUsageDaily.anthropicCostUsd} + ${anthropic}`,
           paidSourceCostUsd: sql`${agentUsageDaily.paidSourceCostUsd} + ${paid}`,
           totalCostUsd: sql`${agentUsageDaily.totalCostUsd} + ${total}`,
+          subAgentCallCount: sql`${agentUsageDaily.subAgentCallCount} + ${subCalls}`,
+          subAgentCostUsd: sql`${agentUsageDaily.subAgentCostUsd} + ${subCost}`,
         },
       });
   }

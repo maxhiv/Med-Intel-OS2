@@ -1,8 +1,8 @@
 # MedIntel Chat Agent (v2.0) — Operator Notes
 
-The `ProspectingAgent` is the chat-first prospecting surface. PR C ships the
-agent core, its tool registry, and the chat API. The React chat UI is PR D;
-sub-agents are PR E.
+The `ProspectingAgent` is the chat-first prospecting surface: the agent core,
+tool registry, and chat API (PR C), the React chat UI (PR D), and the expert
+sub-agent layer (PR E).
 
 ## Environment variables
 
@@ -13,6 +13,7 @@ sub-agents are PR E.
 | `ANTHROPIC_AGENT_MODEL` | no | Agent model; default `claude-sonnet-4-6` |
 | `ANTHROPIC_AGENT_MAX_TOKENS` | no | Max output tokens/turn; default `4096` |
 | `ANTHROPIC_AGENT_MAX_TOOL_CALLS_PER_TURN` | no | Tool-loop cap; default `25` |
+| `ANTHROPIC_AGENT_MAX_SUB_AGENT_CALLS_PER_TURN` | no | Sub-agent consultations per turn; default `3` |
 | `ANTHROPIC_PROMPT_CACHING_ENABLED` | no | Prompt-cache the system prompt; default `true` |
 | `MCP_GATEWAY_URL` | no | healthcare-data-mcp live-gateway URL, e.g. `https://medintel-mcp.replit.app/mcp` |
 | `MCP_LIVE_GATEWAY_TOKEN` | no | Bearer token for the gateway |
@@ -53,7 +54,8 @@ All routes are RLS-scoped per account.
 - `GET    /api/chat/sessions` — list the rep's sessions
 - `GET    /api/chat/sessions/:id` — session detail + message history
 - `POST   /api/chat/sessions/:id/messages` — send a message; **SSE stream** of
-  `token` / `tool_call` / `tool_result` / `prospect` / `usage` / `done` events
+  `token` / `tool_call` / `tool_result` / `prospect` / `sub_agent` / `usage` /
+  `done` events
 - `DELETE /api/chat/sessions/:id` — archive
 - `GET    /api/chat/sessions/:id/prospects` — opportunities surfaced in-session
 
@@ -64,6 +66,28 @@ All routes are RLS-scoped per account.
 | Database + action | 7 | live — reads facilities/signals/equipment/contacts, persists opportunities, drafts outreach (pending only) |
 | Proprietary (medintel_*) | 9 | stubs — return `not_implemented`; Phases 2–6 fill them in |
 | Open-Informatics MCP | ~138 | live only when the gateway is configured |
+| Sub-agents (`consult_*`) | 15 | live — Tier-A specialist personas, consulted one-shot |
+
+## Expert sub-agents
+
+The agent can consult 15 Tier-A specialist personas — financial readiness,
+accreditation timing, Epic integration, 340B economics, procurement mechanics,
+and more. Each is exposed to the agent as a `consult_<name>` tool.
+
+- **Personas** are vendored markdown at `vendor/sub-agents/<name>.md`. The
+  `sub_agent_registry` table (seeded by `v2a_seed_sub_agents.sql`) maps each
+  registered agent to its persona file, model, and Tier.
+- **One-shot, no tools.** A sub-agent reasons only — it has no tool access. The
+  main agent gathers data with its own tools and passes it in as `context`.
+- **Auditable.** Every consultation is logged to `sub_agent_invocations` with
+  cost, latency, and the model used.
+- **Cost.** Sub-agent spend folds into the turn's Anthropic cost, so the
+  per-account daily/monthly cost ceilings already bound it. A per-turn cap
+  (`ANTHROPIC_AGENT_MAX_SUB_AGENT_CALLS_PER_TURN`, default 3) limits runaway
+  consultation within a single turn.
+- **Operator controls.** Disable one agent with
+  `UPDATE sub_agent_registry SET enabled = FALSE WHERE agent_name = '…'`; it
+  drops out of the tool catalog on the next session.
 
 ## Guardrails
 

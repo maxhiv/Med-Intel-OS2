@@ -6,8 +6,8 @@
  *   - fetch streaming gives us abort control
  * Auth rides on the same-origin Clerk session cookie (credentials: "include").
  *
- * The PR C chat route emits these event types:
- *   token | tool_call | tool_result | prospect | usage | error | done
+ * The chat route emits these event types:
+ *   token | tool_call | tool_result | prospect | sub_agent | usage | error | done
  */
 
 export interface ChatToolCall {
@@ -24,6 +24,17 @@ export interface ChatToolResult {
 export interface ChatProspect {
   opportunityId: string;
   summary: string;
+}
+export interface ChatSubAgent {
+  agentName: string;
+  displayName: string;
+  emoji: string | null;
+  category: string;
+  question: string;
+  response: string;
+  status: "success" | "error" | "disabled";
+  costUsd: number;
+  latencyMs: number;
 }
 export interface ChatUsage {
   inputTokens: number;
@@ -42,6 +53,7 @@ export interface ChatStreamHandlers {
   onToolCall?: (e: ChatToolCall) => void;
   onToolResult?: (e: ChatToolResult) => void;
   onProspect?: (e: ChatProspect) => void;
+  onSubAgent?: (e: ChatSubAgent) => void;
   onUsage?: (e: ChatUsage) => void;
   onError?: (message: string, code?: string) => void;
   onDone?: (e: ChatDone) => void;
@@ -136,6 +148,9 @@ function dispatch(rawEvent: string, h: ChatStreamHandlers): void {
       break;
     case "prospect":
       h.onProspect?.(data as unknown as ChatProspect);
+      break;
+    case "sub_agent":
+      h.onSubAgent?.(data as unknown as ChatSubAgent);
       break;
     case "usage":
       h.onUsage?.(data as unknown as ChatUsage);

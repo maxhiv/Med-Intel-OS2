@@ -17,12 +17,27 @@ export interface AgentToolDefinition {
   };
 }
 
+/** A specialist sub-agent consultation surfaced by a `consult_*` tool. */
+export interface SubAgentConsultation {
+  agentName: string;
+  displayName: string;
+  emoji: string | null;
+  category: string;
+  question: string;
+  response: string;
+  status: "success" | "error" | "disabled";
+  costUsd: number;
+  latencyMs: number;
+}
+
 /** Result of executing a tool. `content` is fed back to the model. */
 export interface ToolExecutionResult {
   content: unknown;
   isError?: boolean;
   /** When set, the agent emits an onProspect SSE event. */
   prospectSurfaced?: { opportunityId: string; summary: string };
+  /** When set, the agent emits an onSubAgent SSE event. */
+  subAgent?: SubAgentConsultation;
   /** Per-call cost to fold into the turn total (e.g. paid MCP tools). */
   costUsd?: number;
 }

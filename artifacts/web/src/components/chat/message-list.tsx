@@ -9,6 +9,7 @@ import { useEffect, useRef } from "react";
 import { Activity } from "lucide-react";
 import { ToolTicker } from "./tool-ticker";
 import { ChatProspectCard } from "./prospect-card";
+import { SubAgentChip } from "./sub-agent-chip";
 import type { UiMessage, InflightTurn } from "./chat-types";
 
 const SUGGESTIONS = [
@@ -85,6 +86,13 @@ export function ChatMessageList({
                 <ToolTicker entries={inflight.ticker} />
               </div>
             )}
+            {inflight.subAgents.length > 0 && (
+              <div className="mb-3 space-y-2">
+                {inflight.subAgents.map((c, i) => (
+                  <SubAgentChip key={`${c.agentName}-${i}`} consult={c} />
+                ))}
+              </div>
+            )}
             {inflight.text ? (
               <div className="prose prose-sm max-w-none whitespace-pre-wrap text-sm">
                 {inflight.text}
@@ -121,6 +129,13 @@ function MessageBubble({ message }: { message: UiMessage }) {
       {message.ticker && message.ticker.length > 0 && (
         <div className="mb-3">
           <ToolTicker entries={message.ticker} />
+        </div>
+      )}
+      {message.subAgents && message.subAgents.length > 0 && (
+        <div className="mb-3 space-y-2">
+          {message.subAgents.map((c, i) => (
+            <SubAgentChip key={`${c.agentName}-${i}`} consult={c} />
+          ))}
         </div>
       )}
       {message.text && (

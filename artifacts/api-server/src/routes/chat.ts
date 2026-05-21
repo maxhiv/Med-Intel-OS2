@@ -172,6 +172,7 @@ router.post("/chat/sessions/:id/messages", requireAccount, async (req, res) => {
       onToolCall: (e) => send("tool_call", e),
       onToolResult: (e) => send("tool_result", e),
       onProspect: (e) => send("prospect", e),
+      onSubAgent: (e) => send("sub_agent", e),
       onUsage: (e) => send("usage", e),
       onError: (err) =>
         send("error", { message: err.message, code: (err as { code?: string }).code }),
