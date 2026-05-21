@@ -21,6 +21,7 @@ import territoriesRouter from "./territories";
 import equipmentLinesRouter from "./equipmentLines";
 import opportunitiesRouter from "./opportunities";
 import adminPaidSourcesRouter from "./adminPaidSources";
+import chatRouter from "./chat";
 
 const router: IRouter = Router();
 
@@ -59,6 +60,7 @@ router.use(territoriesRouter);
 router.use(equipmentLinesRouter);
 router.use(opportunitiesRouter);
 router.use(adminPaidSourcesRouter);
+router.use(chatRouter);
 router.use(adminRouter);
 router.use(oauthRouter);
 
