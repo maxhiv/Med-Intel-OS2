@@ -25,6 +25,7 @@ scripts=(
   "v2a_chat_layer.sql"
   "v2a_seed_paid_sources.sql"
   "v2a_seed_sub_agents.sql"
+  "v2c_mcp_cache.sql"
 )
 
 for s in "${scripts[@]}"; do

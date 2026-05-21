@@ -53,6 +53,7 @@ import { runInference } from "../services/equipmentAge/equipmentAgeInferenceOrch
 import { ingestStateRadiationRegistry } from "../services/equipmentAge/stateRegistries/stateRegistryRadiationAdapter";
 import { watchAccreditationExpiries } from "../services/triggers/accreditationExpiryWatcher";
 import { generateOpportunities } from "../services/opportunity/opportunityGenerator";
+import { purgeMcpResultCache } from "../services/agent/mcpResultCache";
 
 let started = false;
 const locks = new Set<string>();
@@ -344,6 +345,18 @@ export function startCron(): void {
       const r = await classifyPendingReplies(25);
       if (r.examined > 0) logger.info(r, "reply classification batch complete");
     }),
+  );
+
+  // 03:30 daily — drop MCP gateway cache rows that expired over 30 days ago.
+  // Live results are kept long after their TTL (they are the persisted data),
+  // but rows never re-queried in a month are stale enough to evict.
+  cron.schedule(
+    "30 3 * * *",
+    guarded("purgeMcpResultCache", async () => {
+      const removed = await purgeMcpResultCache(30);
+      if (removed > 0) logger.info({ removed }, "mcp result cache purge complete");
+    }),
+    { timezone: tz },
   );
 
   logger.info(
